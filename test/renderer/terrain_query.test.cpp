@@ -79,6 +79,28 @@ std::string plateauTile() {
     return encodePNG(image);
 }
 
+// A 1000 m plateau cut by a north-south valley floored at sea level, valleyHalfWidth degrees either
+// side of the centre's longitude.
+constexpr double valleyHalfWidth = 0.004;
+
+std::string valleyTile(const CanonicalTileID& id) {
+    // Terrain-RGB: RGB(1, 134, 160) is 0 m, RGB(1, 173, 176) 1000 m.
+    PremultipliedImage image({256, 256});
+    const double tiles = std::pow(2.0, id.z);
+    for (uint32_t y = 0; y < 256; ++y) {
+        for (uint32_t x = 0; x < 256; ++x) {
+            const double lng = (id.x + (x + 0.5) / 256.0) / tiles * 360.0 - 180.0;
+            const bool valley = std::abs(lng - center.longitude()) < valleyHalfWidth;
+            uint8_t* px = image.data.get() + (static_cast<size_t>(y) * 256 + x) * 4;
+            px[0] = 1;
+            px[1] = valley ? 134 : 173;
+            px[2] = valley ? 160 : 176;
+            px[3] = 255;
+        }
+    }
+    return encodePNG(image);
+}
+
 // Map::pixelForLatLng (screen pixels, y down - what queryRenderedFeatures takes), but for a point
 // `meters` above sea level instead of on it.
 ScreenCoordinate project(const TransformState& state, const LatLng& latLng, double meters) {
@@ -130,10 +152,16 @@ struct TerrainQueryScene {
     ScreenCoordinate elevated;
     ScreenCoordinate seaLevel;
 
-    explicit TerrainQueryScene(double exaggeration = 1.0) {
-        fileSource->tileResponse = [this](const Resource&) {
+    explicit TerrainQueryScene(double exaggeration = 1.0, bool valley = false) {
+        fileSource->tileResponse = [this, valley](const Resource& resource) {
             Response res;
-            res.data = std::make_shared<std::string>(tile);
+            if (valley && resource.tileData) {
+                const auto& t = *resource.tileData;
+                res.data = std::make_shared<std::string>(
+                    valleyTile({static_cast<uint8_t>(t.z), static_cast<uint32_t>(t.x), static_cast<uint32_t>(t.y)}));
+            } else {
+                res.data = std::make_shared<std::string>(tile);
+            }
             return res;
         };
         map.getStyle().loadJSON(queryStyle(exaggeration));
@@ -176,12 +204,15 @@ struct TerrainQueryScene {
         return frontend.getRenderer()->queryRenderedFeatures(point, options).size();
     }
 
-    // A box query of the `radius` px square around `point`.
-    size_t queryBox(const ScreenCoordinate& point, double radius) {
+    size_t queryBox(const ScreenBox& box) {
         RenderedQueryOptions options;
         options.layerIDs = std::vector<std::string>{"trail"};
-        const ScreenBox box{{point.x - radius, point.y - radius}, {point.x + radius, point.y + radius}};
         return frontend.getRenderer()->queryRenderedFeatures(box, options).size();
+    }
+
+    // A box query of the `radius` px square around `point`.
+    size_t queryBox(const ScreenCoordinate& point, double radius) {
+        return queryBox({{point.x - radius, point.y - radius}, {point.x + radius, point.y + radius}});
     }
 };
 
@@ -214,4 +245,36 @@ TEST(TerrainQuery, ExaggerationZeroQueriesAtSeaLevel) {
     ASSERT_GT(redAround(scene.image, scene.seaLevel), 10) << "the line is not drawn at its sea-level projection";
     EXPECT_EQ(scene.query(scene.seaLevel), 1u) << "a tap on the line misses it";
     EXPECT_EQ(scene.queryBox(scene.seaLevel, 10.0), 1u) << "a box around the line misses it";
+}
+
+// A box's edges run straight on screen, but over relief they do not run straight across the ground
+// the sources match against: the terrain under an edge's middle can sit far lower than under its
+// corners. Here the box's top edge crosses a valley (0 m) between corners on the plateau (1000 m),
+// with the line on the valley floor just inside the edge. Resolving only the corners on the terrain
+// moves the whole edge as far as the plateau's relief (~50 px) and drops the line.
+TEST(TerrainQuery, BoxEdgeOverReliefKeepsFeatureJustInside) {
+    TerrainQueryScene scene(1.0, true);
+    const auto state = scene.frontend.getTransformState();
+    ASSERT_TRUE(state);
+    // The line crosses the valley floor, so it is drawn at its sea-level projection.
+    const ScreenCoordinate line = scene.seaLevel;
+    ASSERT_GT(redAround(scene.image, line), 10) << "the line is not drawn on the valley floor";
+    const auto floor = scene.frontend.getRenderer()->queryTerrainElevation(onLine);
+    ASSERT_TRUE(floor);
+    ASSERT_NEAR(*floor, 0.0, 1.0);
+
+    // The box's top corners sit on the plateau, well clear of the valley: the plateau's edges are
+    // drawn inside the box.
+    const double halfWidth = 150.0;
+    const ScreenBox inside{{line.x - halfWidth, line.y - 12.0}, {line.x + halfWidth, line.y + 100.0}};
+    for (const double side : {-1.0, 1.0}) {
+        const auto plateauEdge = project(
+            *state, {onLine.latitude(), center.longitude() + side * 2 * valleyHalfWidth}, plateauMeters);
+        ASSERT_GT(plateauEdge.x, inside.min.x) << "the box's top corners are not clear of the valley";
+        ASSERT_LT(plateauEdge.x, inside.max.x) << "the box's top corners are not clear of the valley";
+    }
+
+    EXPECT_EQ(scene.queryBox(inside), 1u) << "a box whose top edge runs 12 px above the line misses it";
+    const ScreenBox below{{line.x - halfWidth, line.y + 12.0}, {line.x + halfWidth, line.y + 100.0}};
+    EXPECT_EQ(scene.queryBox(below), 0u) << "a box whose top edge runs 12 px below the line hits it";
 }

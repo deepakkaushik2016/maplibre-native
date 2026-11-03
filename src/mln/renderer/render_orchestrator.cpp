@@ -33,6 +33,7 @@
 #include <mln/util/logging.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 
 namespace mln {
@@ -769,10 +770,37 @@ ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineStri
         // No DEM loaded yet: the surface is drawn at sea level.
         return geometry;
     }
+
+    // An edge of a box or polygon query runs straight on screen, but over relief the ground under
+    // it does not run straight between the ground under its ends (a valley under the middle of an
+    // edge whose ends sit on a ridge, say), so resolve points along each edge as well: at most
+    // maxSegmentPixels apart, up to maxSegmentsPerEdge per edge.
+    constexpr double maxSegmentPixels = 32.0;
+    constexpr int maxSegmentsPerEdge = 8;
+    ScreenLineString points;
+    if (geometry.size() < 2) {
+        points = geometry;
+    } else {
+        points.reserve((geometry.size() - 1) * maxSegmentsPerEdge + 1);
+        for (size_t i = 0; i + 1 < geometry.size(); ++i) {
+            const ScreenCoordinate& a = geometry[i];
+            const ScreenCoordinate& b = geometry[i + 1];
+            const int segments = std::clamp(
+                static_cast<int>(std::ceil(std::hypot(b.x - a.x, b.y - a.y) / maxSegmentPixels)),
+                1,
+                maxSegmentsPerEdge);
+            for (int j = 0; j < segments; ++j) {
+                const double t = static_cast<double>(j) / segments;
+                points.emplace_back(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            }
+        }
+        points.push_back(geometry.back());
+    }
+
     const double height = transformState.getSize().height;
     ScreenLineString result;
-    result.reserve(geometry.size());
-    for (const auto& point : geometry) {
+    result.reserve(points.size());
+    for (const auto& point : points) {
         // Query geometry is y-down; TransformState works y-up.
         const auto hit = renderTerrain->raycast(*setup, {point.x, height - point.y});
         if (!hit) {
