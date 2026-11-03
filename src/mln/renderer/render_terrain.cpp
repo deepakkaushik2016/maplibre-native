@@ -87,6 +87,22 @@ DEMSubTileOffset demSubTileOffset(const CanonicalTileID& child, const CanonicalT
             .dy = static_cast<float>(child.y - (ancestor.y << dz))};
 }
 
+// The DEM data a render tile holds, or null when it has none to sample yet. A render tile
+// outlives the frame that built it: its tile can be reloaded meanwhile (with no content, say),
+// which drops the bucket until the next frame drops the render tile.
+const DEMData* demDataOf(const RenderTile& renderTile) {
+    const auto& tile = renderTile.getTile();
+    if (tile.kind != Tile::Kind::RasterDEM) {
+        return nullptr;
+    }
+    const auto* bucket = static_cast<const RasterDEMTile&>(tile).getBucket();
+    if (!bucket) {
+        return nullptr;
+    }
+    const auto& demData = bucket->getDEMData();
+    return demData.getImagePtr() && demData.dim > 0 ? &demData : nullptr;
+}
+
 } // namespace
 
 RenderTerrain::RenderTerrain(Immutable<style::Terrain::Impl> impl_)
@@ -802,9 +818,11 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID_, float x, float
     const auto renderTiles = demSource->getRawRenderTiles();
     const RenderTile* demRenderTile = nullptr;
     int bestZoom = -1;
+    // Tiles with no DEM data are skipped, so a covering ancestor that has some answers instead.
     for (const auto& renderTile : *renderTiles) {
         const UnwrappedTileID& candidate = renderTile.id;
-        if ((candidate == tileID || tileID.isChildOf(candidate)) && std::cmp_greater(candidate.canonical.z, bestZoom)) {
+        if ((candidate == tileID || tileID.isChildOf(candidate)) && std::cmp_greater(candidate.canonical.z, bestZoom) &&
+            demDataOf(renderTile)) {
             bestZoom = candidate.canonical.z;
             demRenderTile = &renderTile;
         }
@@ -813,19 +831,7 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID_, float x, float
         return 0.0f;
     }
 
-    const auto& tile = demRenderTile->getTile();
-    if (tile.kind != Tile::Kind::RasterDEM) {
-        return 0.0f;
-    }
-    auto* demTile = const_cast<RasterDEMTile*>(static_cast<const RasterDEMTile*>(&tile));
-    auto* bucket = demTile->getBucket();
-    if (!bucket) {
-        return 0.0f;
-    }
-    const auto& demData = bucket->getDEMData();
-    if (!demData.getImagePtr() || demData.dim <= 0) {
-        return 0.0f;
-    }
+    const DEMData& demData = *demDataOf(*demRenderTile);
 
     // Map the tile-local coordinate into the (possibly ancestor) DEM tile
     const UnwrappedTileID& demTileID = demRenderTile->id;
@@ -864,7 +870,7 @@ double RenderTerrain::getElevationForLatLng(const LatLng& latLng) const {
     int sampleZoom = -1;
     const auto renderTiles = demSource->getRawRenderTiles();
     for (const auto& renderTile : *renderTiles) {
-        if (renderTile.getTile().kind == Tile::Kind::RasterDEM) {
+        if (demDataOf(renderTile)) {
             sampleZoom = std::max(sampleZoom, static_cast<int>(renderTile.id.canonical.z));
         }
     }
@@ -897,7 +903,7 @@ std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng
     int sampleZoom = -1;
     const auto renderTiles = demSource->getRawRenderTiles();
     for (const auto& renderTile : *renderTiles) {
-        if (renderTile.getTile().kind == Tile::Kind::RasterDEM) {
+        if (demDataOf(renderTile)) {
             sampleZoom = std::max(sampleZoom, static_cast<int>(renderTile.id.canonical.z));
         }
     }
@@ -923,8 +929,7 @@ std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng
         return std::nullopt;
     }
     const bool found = std::any_of(renderTiles->begin(), renderTiles->end(), [&](const RenderTile& renderTile) {
-        return renderTile.getTile().kind == Tile::Kind::RasterDEM &&
-               (renderTile.id == covered || covered.isChildOf(renderTile.id));
+        return demDataOf(renderTile) && (renderTile.id == covered || covered.isChildOf(renderTile.id));
     });
     if (!found) {
         return std::nullopt;

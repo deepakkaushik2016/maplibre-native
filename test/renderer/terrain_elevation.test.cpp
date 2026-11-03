@@ -13,9 +13,11 @@
 #include <mln/util/image.hpp>
 #include <mln/util/run_loop.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
+#include <thread>
 
 using namespace mln;
 
@@ -265,4 +267,78 @@ TEST(TerrainElevation, RendererQueryNulloptBeforeDEMLoads) {
 TEST(TerrainElevation, RendererQueryNulloptWhenTerrainOff) {
     ElevationScene scene("");
     EXPECT_EQ(scene.query(), std::nullopt);
+}
+
+TEST(TerrainElevation, RendererQueryNulloptWhenTileHasNoData) {
+    // The frame's DEM render tile covers the point, but its tile has since been reloaded with no
+    // content, which drops its DEM data. Until the next frame rebuilds the render tiles, that
+    // render tile is still there with no data behind it: the point has no elevation, not 0 m.
+    //
+    // A loaded tile is fetched again when it goes from optional back to required: zooming out
+    // past the DEM's maxzoom (with the z9 parent held back) keeps the z10 tile as an optional
+    // fill-in, and zooming back in makes it required again.
+    enum class Phase { Deliver, Hold, Wipe };
+    Phase phase = Phase::Deliver;
+    int wipes = 0;
+
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    const std::string tile = gradientTile();
+    fileSource->tileResponse = [&](const Resource&) -> std::optional<Response> {
+        if (phase == Phase::Hold) {
+            return std::nullopt;
+        }
+        Response res;
+        if (phase == Phase::Deliver) {
+            res.data = std::make_shared<std::string>(tile);
+        } else {
+            res.noContent = true;
+            ++wipes;
+        }
+        return res;
+    };
+    // Frames are drawn only when asked, so the reload can land between two of them.
+    HeadlessFrontend frontend{{256, 256},
+                              1,
+                              gfx::HeadlessBackend::SwapBehaviour::NoFlush,
+                              gfx::ContextMode::Unique,
+                              std::nullopt,
+                              /*invalidateOnUpdate=*/false};
+    MapAdapter map{frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
+    const auto pump = [&](bool draw) {
+        for (int i = 0; i < 100; ++i) {
+            loop.runOnce();
+            if (draw) {
+                frontend.renderFrame();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    };
+    const auto query = [&] { return frontend.getRenderer()->queryTerrainElevation(knownPoint()); };
+
+    map.getStyle().loadJSON(demStyle(R"("terrain": {"source": "dem", "exaggeration": 1},)"));
+    map.jumpTo(CameraOptions().withCenter(knownPoint()).withZoom(12.0));
+    pump(true);
+    ASSERT_TRUE(query()) << "the DEM never loaded";
+    ASSERT_NEAR(*query(), knownMeters, 0.5);
+
+    phase = Phase::Hold;
+    map.jumpTo(CameraOptions().withZoom(9.0));
+    pump(true);
+    ASSERT_TRUE(query()) << "the z10 DEM tile was not kept while its parent loads";
+
+    // Back in: the z10 tile is required again and refetched; it answers with no content, but
+    // no frame is drawn after that, so the render tile stays.
+    phase = Phase::Wipe;
+    map.jumpTo(CameraOptions().withZoom(12.0));
+    loop.runOnce();
+    frontend.renderFrame();
+    pump(false);
+    phase = Phase::Hold;
+    ASSERT_GT(wipes, 0) << "the z10 tile was never refetched";
+
+    EXPECT_EQ(query(), std::nullopt);
 }
