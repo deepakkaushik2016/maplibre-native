@@ -781,7 +781,8 @@ ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineStri
     // An edge of a box or polygon query runs straight on screen, but over relief the ground under
     // it does not run straight between the ground under its ends (a valley under the middle of an
     // edge whose ends sit on a ridge, say), so resolve points along each edge as well: at most
-    // maxSegmentPixels apart, up to maxSegmentsPerEdge per edge.
+    // maxSegmentPixels apart, but no more than maxSegmentsPerEdge segments per edge, so on an edge
+    // longer than maxSegmentPixels * maxSegmentsPerEdge (256 px) they spread further apart.
     constexpr double maxSegmentPixels = 32.0;
     constexpr int maxSegmentsPerEdge = 8;
     ScreenLineString points;
