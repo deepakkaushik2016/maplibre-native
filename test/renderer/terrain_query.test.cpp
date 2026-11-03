@@ -36,7 +36,8 @@ const LatLng center{46.0, 10.0};
 // A point on the east-west line, north of the centre so it is not on the screen's centre row.
 const LatLng onLine{46.01, 10.0};
 
-const char* const style = R"STYLE({
+std::string queryStyle(double exaggeration) {
+    return R"STYLE({
   "version": 8,
   "sources": {
     "dem": {
@@ -55,13 +56,15 @@ const char* const style = R"STYLE({
       }
     }
   },
-  "terrain": {"source": "dem", "exaggeration": 1},
+  "terrain": {"source": "dem", "exaggeration": )STYLE" +
+           std::to_string(exaggeration) + R"STYLE(},
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "white"}},
     {"id": "trail", "type": "line", "source": "trail",
      "paint": {"line-color": "#d00", "line-width": 6}}
   ]
 })STYLE";
+}
 
 std::string plateauTile() {
     // Terrain-RGB: -10000 + (R * 65536 + G * 256 + B) * 0.1 = 1000 m for RGB(1, 173, 176).
@@ -127,13 +130,13 @@ struct TerrainQueryScene {
     ScreenCoordinate elevated;
     ScreenCoordinate seaLevel;
 
-    TerrainQueryScene() {
+    explicit TerrainQueryScene(double exaggeration = 1.0) {
         fileSource->tileResponse = [this](const Resource&) {
             Response res;
             res.data = std::make_shared<std::string>(tile);
             return res;
         };
-        map.getStyle().loadJSON(style);
+        map.getStyle().loadJSON(queryStyle(exaggeration));
         map.jumpTo(CameraOptions().withCenter(center).withZoom(13.0).withPitch(50.0).withCenterAltitude(plateauMeters));
         for (int i = 0; i < 4; ++i) {
             loop.runOnce();
@@ -142,7 +145,7 @@ struct TerrainQueryScene {
         const auto state = frontend.getTransformState();
         EXPECT_TRUE(state);
         if (state) {
-            elevated = project(*state, onLine, plateauMeters);
+            elevated = project(*state, onLine, plateauMeters * exaggeration);
             seaLevel = project(*state, onLine, 0.0);
         }
     }
@@ -172,6 +175,14 @@ struct TerrainQueryScene {
         options.layerIDs = std::vector<std::string>{"trail"};
         return frontend.getRenderer()->queryRenderedFeatures(point, options).size();
     }
+
+    // A box query of the `radius` px square around `point`.
+    size_t queryBox(const ScreenCoordinate& point, double radius) {
+        RenderedQueryOptions options;
+        options.layerIDs = std::vector<std::string>{"trail"};
+        const ScreenBox box{{point.x - radius, point.y - radius}, {point.x + radius, point.y + radius}};
+        return frontend.getRenderer()->queryRenderedFeatures(box, options).size();
+    }
 };
 
 } // namespace
@@ -187,4 +198,20 @@ TEST(TerrainQuery, SeaLevelPointMisses) {
     scene.expectRenderedScene();
     EXPECT_EQ(scene.query(scene.seaLevel), 0u)
         << "a tap where the line would sit at sea level (nothing is drawn there) hits it";
+}
+
+TEST(TerrainQuery, BoxAroundDrapedLine) {
+    TerrainQueryScene scene;
+    scene.expectRenderedScene();
+    EXPECT_EQ(scene.queryBox(scene.elevated, 10.0), 1u) << "a box around the draped line misses it";
+    EXPECT_EQ(scene.queryBox(scene.seaLevel, 10.0), 0u)
+        << "a box around where the line would sit at sea level (nothing is drawn there) hits it";
+}
+
+// At exaggeration 0 the surface is drawn flat at sea level, so the line is where the 2D map puts it.
+TEST(TerrainQuery, ExaggerationZeroQueriesAtSeaLevel) {
+    TerrainQueryScene scene(0.0);
+    ASSERT_GT(redAround(scene.image, scene.seaLevel), 10) << "the line is not drawn at its sea-level projection";
+    EXPECT_EQ(scene.query(scene.seaLevel), 1u) << "a tap on the line misses it";
+    EXPECT_EQ(scene.queryBox(scene.seaLevel, 10.0), 1u) << "a box around the line misses it";
 }
