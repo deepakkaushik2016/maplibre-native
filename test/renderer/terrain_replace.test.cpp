@@ -5,7 +5,9 @@
 #include <mln/gfx/headless_frontend.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
+#include <mln/renderer/layer_group.hpp>
 #include <mln/renderer/renderer.hpp>
+#include <mln/renderer/renderer_impl.hpp>
 #include <mln/style/style.hpp>
 #include <mln/style/terrain.hpp>
 #include <mln/util/image.hpp>
@@ -17,6 +19,22 @@
 #include <string>
 
 using namespace mln;
+
+namespace mln {
+
+// Renderer and Renderer::Impl befriend this, so the test can count the layer groups the
+// orchestrator draws without public API for it.
+class RendererTestAccess {
+public:
+    static size_t layerGroupCount(Renderer& renderer, const std::string& name) {
+        size_t count = 0;
+        renderer.impl->orchestrator.visitLayerGroups(
+            [&](LayerGroupBase& group) { count += group.getName() == name ? 1 : 0; });
+        return count;
+    }
+};
+
+} // namespace mln
 
 // Replacing the terrain at runtime (an exaggeration slider, a 3D toggle) drops the RenderTerrain
 // and builds a new one. The old mesh layer group must be unregistered from the orchestrator on
@@ -102,7 +120,7 @@ struct ReplaceScene {
     // One still frame: waits for every tile it needs, so each call is a complete, settled frame.
     int render() { return frontend.render(map).stats.numDrawCalls; }
 
-    size_t terrainGroups() { return frontend.getRenderer()->getLayerGroupCountForTests(terrainGroup); }
+    size_t terrainGroups() { return RendererTestAccess::layerGroupCount(*frontend.getRenderer(), terrainGroup); }
 
     std::optional<double> elevation() { return frontend.getRenderer()->queryTerrainElevation(center); }
 };

@@ -40,6 +40,7 @@ public:
 
 private:
     friend class Renderer;
+    friend class RendererTestAccess;
 
     void setObserver(RendererObserver*);
 

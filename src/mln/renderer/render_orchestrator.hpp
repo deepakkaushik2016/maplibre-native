@@ -21,7 +21,6 @@
 #include <memory>
 #include <ranges>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -110,8 +109,6 @@ public:
     bool addLayerGroup(LayerGroupBasePtr);
     bool removeLayerGroup(const LayerGroupBasePtr&);
     size_t numLayerGroups() const noexcept;
-    /// Test only: how many registered layer groups carry `name` (e.g. "terrain", the mesh group).
-    size_t numLayerGroupsNamedForTests(std::string_view name) const;
     void updateLayerIndex(LayerGroupBasePtr, int32_t newIndex);
 
     template <typename Func /* void(LayerGroupBase&) */>

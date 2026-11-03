@@ -1155,11 +1155,6 @@ size_t RenderOrchestrator::numLayerGroups() const noexcept {
     return layerGroupsByLayerIndex.size();
 }
 
-size_t RenderOrchestrator::numLayerGroupsNamedForTests(std::string_view name) const {
-    return static_cast<size_t>(std::ranges::count_if(
-        layerGroupsByLayerIndex, [&](const auto& pair) { return pair.second && pair.second->getName() == name; }));
-}
-
 void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
                                       gfx::Context& context,
                                       const TransformState& state,
