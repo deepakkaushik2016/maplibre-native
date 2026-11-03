@@ -27,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 using namespace mln;
@@ -129,7 +130,7 @@ bool inNorthEastQuadrant(const CanonicalTileID& id) {
     if (shift < 0) return false;
     const int64_t x0 = static_cast<int64_t>(id.x) << shift;
     const int64_t y1 = (static_cast<int64_t>(id.y) + 1) << shift;
-    return x0 >= neTile.x && y1 <= neTile.y + 1;
+    return std::cmp_greater_equal(x0, neTile.x) && std::cmp_less_equal(y1, neTile.y + 1);
 }
 
 Response dataResponse(const std::string& data) {

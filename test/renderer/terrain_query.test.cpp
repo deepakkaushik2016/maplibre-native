@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <utility>
 
 using namespace mln;
 
@@ -105,7 +106,7 @@ int redAround(const PremultipliedImage& image, const ScreenCoordinate& p, int ra
         for (int dx = -radius; dx <= radius; ++dx) {
             const int x = static_cast<int>(std::lround(p.x)) + dx;
             const int y = static_cast<int>(std::lround(p.y)) + dy;
-            if (x >= 0 && y >= 0 && x < int(image.size.width) && y < int(image.size.height)) {
+            if (x >= 0 && y >= 0 && std::cmp_less(x, image.size.width) && std::cmp_less(y, image.size.height)) {
                 count += isRed(image, x, y) ? 1 : 0;
             }
         }
