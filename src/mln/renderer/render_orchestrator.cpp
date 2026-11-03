@@ -603,6 +603,10 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     assert((updateParameters->mode == MapMode::Tile) || !placedSymbolDataCollected);
     // Placement collides symbols where they are drawn, lifted onto the terrain, so it reads the
     // DEM. Bind the DEM source first: a still render places only once, before the renderer would.
+    // A DEM tile that arrives, or an exaggeration that changes, after a placement is not reflected
+    // until the next one: in continuous mode, the next placement tick (at most the placement period
+    // later, while frames are drawn) heals it; a still render places only once everything, the DEM
+    // included, has loaded.
     const RenderTerrain* placementTerrain = nullptr;
     if (renderTerrain && renderTerrain->isEnabled()) {
         renderTerrain->prepareSource(*this);

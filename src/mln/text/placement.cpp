@@ -1454,6 +1454,8 @@ private:
 };
 
 void TilePlacement::placeLayers(const RenderLayerReferences& layers, const RenderTerrain* /*terrain*/) {
+    // Tile mode's symbols must agree across the borders of tiles stitched together, whatever the
+    // camera; a camera-dependent terrain lift would break that, so they collide at sea level.
     placedSymbolsData.clear();
     seenCrossTileIDs.clear();
     intersections.clear();
