@@ -760,7 +760,13 @@ void RenderOrchestrator::queryRenderedSymbols(std::unordered_map<std::string, st
 }
 
 ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineString& geometry) const {
-    if (!renderTerrain || !renderTerrain->isEnabled()) {
+    // At exaggeration 0 the surface is drawn flat at sea level, where the sources match anyway.
+    if (!renderTerrain || !renderTerrain->isEnabled() || renderTerrain->getExaggeration() <= 0.0f) {
+        return geometry;
+    }
+    const auto setup = renderTerrain->prepareRaycast(transformState);
+    if (!setup) {
+        // No DEM loaded yet: the surface is drawn at sea level.
         return geometry;
     }
     const double height = transformState.getSize().height;
@@ -768,9 +774,9 @@ ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineStri
     result.reserve(geometry.size());
     for (const auto& point : geometry) {
         // Query geometry is y-down; TransformState works y-up.
-        const auto hit = renderTerrain->raycast(transformState, {point.x, height - point.y});
+        const auto hit = renderTerrain->raycast(*setup, {point.x, height - point.y});
         if (!hit) {
-            // No terrain under the point (above the horizon, or no DEM yet): sea level it is.
+            // No terrain under the point (above the horizon, or off the loaded DEM): sea level it is.
             result.push_back(point);
             continue;
         }
@@ -810,8 +816,13 @@ std::vector<Feature> RenderOrchestrator::queryRenderedFeatures(
     // pixel where the terrain point under it would sit at sea level, so the sea-level matching
     // lands on the draped feature the point shows (gl-js #8158 resolves its query geometry on
     // the terrain the same way). Symbols are placed and collided in plain screen space, so they
-    // keep the original geometry.
-    const ScreenLineString sourceGeometry = queryGeometryOnTerrain(geometry);
+    // keep the original geometry; when only symbol layers are queried, the sources match nothing
+    // against the geometry (symbol features are not in their feature index) and the raycast is
+    // skipped.
+    const bool matchesTileFeatures = std::ranges::any_of(filteredLayers, [](const auto& pair) {
+        return pair.second->baseImpl->getTypeInfo()->crossTileIndex != style::LayerTypeInfo::CrossTileIndex::Required;
+    });
+    const ScreenLineString sourceGeometry = matchesTileFeatures ? queryGeometryOnTerrain(geometry) : geometry;
 
     std::unordered_map<std::string, std::vector<Feature>> resultsByLayer;
     for (const auto& sourceID : sourceIDs) {

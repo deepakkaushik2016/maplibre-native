@@ -11,6 +11,7 @@
 #include <mln/renderer/terrain_cache_policy.hpp>
 #include <mln/renderer/texture_pool.hpp>
 #include <mln/util/mat4.hpp>
+#include <mln/util/size.hpp>
 
 #include <algorithm>
 #include <array>
@@ -220,6 +221,29 @@ public:
     /// As getElevationForLatLng, but empty where no loaded DEM tile covers the point (rather than 0).
     std::optional<double> findElevationForLatLng(const LatLng& latLng) const;
 
+    /// What every raycast through one transform shares, over the DEM loaded at the time.
+    struct RaycastSetup {
+        /// Inverse of the transform's projection matrix (world pixels, z in metres -> clip)
+        mat4 inverseProjection;
+        Size size;
+        double scale;
+        /// The loaded DEM's exaggerated elevation range, which always spans sea level
+        double minElevation;
+        double maxElevation;
+        /// The zoom elevations are sampled at: the finest DEM tile loaded
+        int sampleZoom;
+    };
+
+    /**
+     * @brief The part of a raycast that depends only on the transform and the loaded DEM
+     *
+     * Compute it once per query, then raycast each of the query's points with it.
+     *
+     * @param state the transform the frame was drawn with
+     * @return empty when no ray can hit the terrain (no DEM loaded, or an empty viewport)
+     */
+    std::optional<RaycastSetup> prepareRaycast(const TransformState& state) const;
+
     /**
      * @brief Where the ray through a screen point first enters the terrain surface
      *
@@ -228,13 +252,13 @@ public:
      * near to the far clipping plane is clipped to the loaded DEM's elevation range,
      * marched in steps of about 4 world pixels and the first crossing bisected.
      *
-     * @param state the transform the frame was drawn with
+     * @param setup prepareRaycast for the transform the frame was drawn with
      * @param point the screen point in TransformState's y-up pixels (as
      *              TransformState::screenCoordinateToTileCoordinate takes it)
-     * @return the surface point, empty when the ray misses the terrain (no DEM loaded, or
-     *         the ray never comes down to the terrain, as above the horizon)
+     * @return the surface point, empty when the ray misses the terrain (the ray never
+     *         comes down to the terrain, as above the horizon)
      */
-    std::optional<LatLng> raycast(const TransformState& state, const ScreenCoordinate& point) const;
+    std::optional<LatLng> raycast(const RaycastSetup& setup, const ScreenCoordinate& point) const;
 
     /**
      * @brief Get the terrain exaggeration multiplier
@@ -371,6 +395,14 @@ public:
     Immutable<style::Terrain::Impl> impl;
 
 private:
+    /// The zoom of the finest loaded DEM tile that has data, or -1 when there is none.
+    int finestDEMZoom() const;
+    /// The DEM height (not exaggerated) at a tile coordinate, as getElevation reads it, but
+    /// empty where no loaded DEM tile covers the coordinate (rather than 0).
+    std::optional<float> findElevation(const UnwrappedTileID& tileID, float x, float y) const;
+    /// findElevationForLatLng, sampled at `sampleZoom` (finestDEMZoom).
+    std::optional<double> findElevationForLatLng(const LatLng& latLng, int sampleZoom) const;
+
     /**
      * @brief Generate terrain mesh geometry
      *

@@ -810,14 +810,18 @@ bool RenderTerrain::normalizeTileCoordinates(UnwrappedTileID& tileID, float& x, 
     return true;
 }
 
-float RenderTerrain::getElevation(const UnwrappedTileID& tileID_, float x, float y) const {
+float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float y) const {
+    return findElevation(tileID, x, y).value_or(0.0f);
+}
+
+std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_, float x, float y) const {
     if (!demSource) {
-        return 0.0f;
+        return std::nullopt;
     }
 
     UnwrappedTileID tileID = tileID_;
     if (!normalizeTileCoordinates(tileID, x, y)) {
-        return 0.0f;
+        return std::nullopt;
     }
 
     // Find the DEM tile matching the requested tile, or its closest available ancestor
@@ -834,7 +838,7 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID_, float x, float
         }
     }
     if (!demRenderTile) {
-        return 0.0f;
+        return std::nullopt;
     }
 
     const DEMData& demData = *demDataOf(*demRenderTile);
@@ -873,13 +877,7 @@ double RenderTerrain::getElevationForLatLng(const LatLng& latLng) const {
 
     // Sample as deep as the finest DEM tile loaded: getElevation walks up to the closest
     // covering ancestor, but never down, so sampling shallower than the DEM reads nothing.
-    int sampleZoom = -1;
-    const auto renderTiles = demSource->getRawRenderTiles();
-    for (const auto& renderTile : *renderTiles) {
-        if (demDataOf(renderTile)) {
-            sampleZoom = std::max(sampleZoom, static_cast<int>(renderTile.id.canonical.z));
-        }
-    }
+    const int sampleZoom = finestDEMZoom();
     if (sampleZoom < 0) {
         return 0.0;
     }
@@ -902,17 +900,24 @@ double RenderTerrain::getElevationForLatLng(const LatLng& latLng) const {
     return getElevationWithExaggeration(sampleTile, localX, localY);
 }
 
-std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng) const {
+int RenderTerrain::finestDEMZoom() const {
     if (!demSource) {
-        return std::nullopt;
+        return -1;
     }
-    int sampleZoom = -1;
-    const auto renderTiles = demSource->getRawRenderTiles();
-    for (const auto& renderTile : *renderTiles) {
+    int zoom = -1;
+    for (const auto& renderTile : *demSource->getRawRenderTiles()) {
         if (demDataOf(renderTile)) {
-            sampleZoom = std::max(sampleZoom, static_cast<int>(renderTile.id.canonical.z));
+            zoom = std::max(zoom, static_cast<int>(renderTile.id.canonical.z));
         }
     }
+    return zoom;
+}
+
+std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng) const {
+    return findElevationForLatLng(latLng, finestDEMZoom());
+}
+
+std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng, int sampleZoom) const {
     if (sampleZoom < 0) {
         return std::nullopt;
     }
@@ -926,24 +931,14 @@ std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng
     const UnwrappedTileID sampleTile(static_cast<uint8_t>(sampleZoom), tx, ty);
     const auto localX = static_cast<float>((point.x - static_cast<double>(tx)) * util::EXTENT);
     const auto localY = static_cast<float>((point.y - static_cast<double>(ty)) * util::EXTENT);
-
-    // A DEM tile has to cover the point: getElevation answers 0 where none does.
-    UnwrappedTileID covered = sampleTile;
-    float coveredX = localX;
-    float coveredY = localY;
-    if (!normalizeTileCoordinates(covered, coveredX, coveredY)) {
+    const auto elevation = findElevation(sampleTile, localX, localY);
+    if (!elevation) {
         return std::nullopt;
     }
-    const bool found = std::any_of(renderTiles->begin(), renderTiles->end(), [&](const RenderTile& renderTile) {
-        return demDataOf(renderTile) && (renderTile.id == covered || covered.isChildOf(renderTile.id));
-    });
-    if (!found) {
-        return std::nullopt;
-    }
-    return getElevationWithExaggeration(sampleTile, localX, localY);
+    return *elevation * getExaggeration();
 }
 
-std::optional<LatLng> RenderTerrain::raycast(const TransformState& state, const ScreenCoordinate& point) const {
+std::optional<RenderTerrain::RaycastSetup> RenderTerrain::prepareRaycast(const TransformState& state) const {
     if (!demSource) {
         return std::nullopt;
     }
@@ -971,21 +966,35 @@ std::optional<LatLng> RenderTerrain::raycast(const TransformState& state, const 
         minElevation = std::min(minElevation, bucket->getDEMData().getMinElevation() * exaggeration);
         maxElevation = std::max(maxElevation, bucket->getDEMData().getMaxElevation() * exaggeration);
     }
-    if (!anyDEM) {
+    // No DEM tile to sample: no ray can come down below the surface.
+    const int sampleZoom = finestDEMZoom();
+    if (!anyDEM || sampleZoom < 0) {
         return std::nullopt;
     }
 
-    // The ray from the near (clip z -1) to the far (clip z 1) plane, in world pixels with z in
-    // metres - the space TransformState's projection matrix maps from.
     mat4 inverse;
     if (matrix::invert(inverse, state.getProjectionMatrix())) {
         return std::nullopt;
     }
-    const double ndcX = point.x / size.width * 2.0 - 1.0;
-    const double ndcY = point.y / size.height * 2.0 - 1.0;
+    return RaycastSetup{.inverseProjection = inverse,
+                        .size = size,
+                        .scale = state.getScale(),
+                        .minElevation = minElevation,
+                        .maxElevation = maxElevation,
+                        .sampleZoom = sampleZoom};
+}
+
+std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const ScreenCoordinate& point) const {
+    const double minElevation = setup.minElevation;
+    const double maxElevation = setup.maxElevation;
+
+    // The ray from the near (clip z -1) to the far (clip z 1) plane, in world pixels with z in
+    // metres - the space TransformState's projection matrix maps from.
+    const double ndcX = point.x / setup.size.width * 2.0 - 1.0;
+    const double ndcY = point.y / setup.size.height * 2.0 - 1.0;
     const auto unproject = [&](double ndcZ) {
         vec4 out;
-        matrix::transformMat4(out, vec4{{ndcX, ndcY, ndcZ, 1.0}}, inverse);
+        matrix::transformMat4(out, vec4{{ndcX, ndcY, ndcZ, 1.0}}, setup.inverseProjection);
         return vec3{{out[0] / out[3], out[1] / out[3], out[2] / out[3]}};
     };
     const vec3 near = unproject(-1.0);
@@ -994,14 +1003,13 @@ std::optional<LatLng> RenderTerrain::raycast(const TransformState& state, const 
     const double dy = far[1] - near[1];
     const double dz = far[2] - near[2];
 
-    const double scale = state.getScale();
     const auto at = [&](double t) {
-        return Projection::unproject({near[0] + t * dx, near[1] + t * dy}, scale, LatLng::Unwrapped);
+        return Projection::unproject({near[0] + t * dx, near[1] + t * dy}, setup.scale, LatLng::Unwrapped);
     };
     // As gl-js `isBelowTerrainSample`: ground no loaded DEM covers is never hit.
     constexpr double hitEpsilonMeters = 1e-6;
     const auto belowTerrain = [&](double t) {
-        const auto elevation = findElevationForLatLng(at(t));
+        const auto elevation = findElevationForLatLng(at(t), setup.sampleZoom);
         return elevation && near[2] + t * dz <= *elevation + hitEpsilonMeters;
     };
 
