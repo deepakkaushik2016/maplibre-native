@@ -6,6 +6,7 @@
 #include <mln/util/geojson.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,18 @@ public:
     AnnotationIDs queryPointAnnotations(const ScreenBox& box) const;
     AnnotationIDs queryShapeAnnotations(const ScreenBox& box) const;
     AnnotationIDs getAnnotationIDs(const std::vector<Feature>&) const;
+
+    /**
+     * @brief The terrain elevation at `point`, as drawn.
+     *
+     * Metres above sea level with the style's terrain exaggeration applied, i.e. the height the
+     * terrain surface is rendered at (a 1000 m peak under exaggeration 2 reads 2000). Sampled
+     * bilinearly from the finest DEM tile currently loaded, or its closest loaded ancestor.
+     *
+     * @return std::nullopt when the style has no terrain, or no loaded DEM tile covers the point
+     * (for instance before the first DEM tile arrives).
+     */
+    std::optional<double> queryTerrainElevation(const LatLng& point) const;
 
     /// Feature extension query
     FeatureExtensionValue queryFeatureExtensions(
