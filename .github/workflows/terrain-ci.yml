@@ -1,0 +1,83 @@
+# 3D-terrain baseline for the pinned PR #4190 branch.
+# Both jobs run scripts/terrain-ci.sh, which is the single source of truth
+# for what is built, which tests run, and which failures are known
+# (metrics/ignores/terrain-known.json). Run the same script locally.
+name: terrain-ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - terrain-3d
+  pull_request:
+    branches:
+      - terrain-3d
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-gl-terrain:
+    name: Linux OpenGL terrain
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/install-linux-deps
+          sudo apt-get install -y ninja-build xvfb
+
+      - name: Build and run terrain baseline
+        env:
+          # The preset defaults to a ccache launcher; this job does not set one up.
+          CMAKE_CONFIGURE_ARGS: -DCMAKE_CXX_COMPILER_LAUNCHER= -DCMAKE_C_COMPILER_LAUNCHER=
+        run: scripts/terrain-ci.sh opengl
+
+      - name: Upload render report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-gl-terrain-render-report
+          path: metrics/linux-opengl-terrain.html
+          if-no-files-found: ignore
+
+  macos-metal-terrain:
+    name: macOS Metal terrain
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+        run: brew install cmake ninja
+
+      - name: Build and run terrain baseline
+        env:
+          # Same configuration as the local reference build (no ccache, no libuv, no GLFW).
+          CMAKE_CONFIGURE_ARGS: >-
+            -DCMAKE_CXX_COMPILER_LAUNCHER= -DCMAKE_C_COMPILER_LAUNCHER=
+            -DCMAKE_BUILD_TYPE=Release -DMLN_DARWIN_USE_LIBUV=OFF -DMLN_WITH_GLFW=OFF
+        run: scripts/terrain-ci.sh metal
+
+      - name: Upload render report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-metal-terrain-render-report
+          path: metrics/macos-metal-terrain.html
+          if-no-files-found: ignore

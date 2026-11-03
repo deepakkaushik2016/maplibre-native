@@ -1,0 +1,8 @@
+{
+    "render-tests/terrain/default": "known at pin 68f204fc: graded against maplibre-gl-js (byte-identical gl-js baseline, the long-standing oracle - never rebaseline); native terrain does not match yet (macOS Metal diff 0.945)",
+    "render-tests/terrain/fill-extrusion": "known at pin 68f204fc: gl-js-generated baseline; native terrain + fill-extrusion elevation does not match gl-js yet (macOS Metal diff 0.365)",
+    "render-tests/terrain/occlusion-debug": "known at pin 68f204fc: gl-js-generated baseline; native terrain does not match gl-js yet (macOS Metal diff 0.897)",
+    "render-tests/terrain/pitched-world": "known at pin 68f204fc: graded against maplibre-gl-js; native terrain does not match yet (macOS Metal diff 0.0155)",
+    "render-tests/terrain/skirts-auto": "known at pin 68f204fc: graded against maplibre-gl-js; native terrain sits ~13 px lower (single-scalar elevation offset, TERRAIN.md Testing) and requests tiles gl-js does not (macOS Metal diff 0.168)",
+    "render-tests/terrain/skirts-none": "known at pin 68f204fc: graded against maplibre-gl-js; native terrain sits ~13 px lower (single-scalar elevation offset, TERRAIN.md Testing) and requests tiles gl-js does not (macOS Metal diff 0.125)"
+}

@@ -1,0 +1,16 @@
+{
+    "_comment": "Terrain baseline (scripts/terrain-ci.sh). platform-all.json is deliberately NOT listed: it blanket-ignores the six terrain oracles, and the only terrain ignores here must be the named known-failure list. Use only with --filter 'terrain/'.",
+    "base_test_path": "integration",
+    "cache_path": "cache-style.db",
+    "expectation_paths": [
+        "expectations/platform-linux"
+    ],
+    "ignore_paths": [
+        "ignores/platform-linux.json",
+        "ignores/terrain-known.json"
+    ],
+    "metric_path": "linux-opengl-terrain",
+    "probes": [
+        "probeNetwork"
+    ]
+}
