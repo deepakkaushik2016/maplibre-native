@@ -5,6 +5,7 @@
 #include <mln/util/immutable.hpp>
 #include <mln/tile/tile_id.hpp>
 #include <mln/util/constants.hpp>
+#include <mln/util/geo.hpp>
 #include <mln/gfx/vertex_buffer.hpp>
 #include <mln/gfx/index_buffer.hpp>
 #include <mln/renderer/terrain_cache_policy.hpp>
@@ -218,6 +219,22 @@ public:
     double getElevationForLatLng(const LatLng& latLng) const;
     /// As getElevationForLatLng, but empty where no loaded DEM tile covers the point (rather than 0).
     std::optional<double> findElevationForLatLng(const LatLng& latLng) const;
+
+    /**
+     * @brief Where the ray through a screen point first enters the terrain surface
+     *
+     * A CPU raycast against the same exaggerated elevation getElevationForLatLng reads,
+     * after maplibre-gl-js `MercatorTransform._raycastTerrain` (#8158): the ray from the
+     * near to the far clipping plane is clipped to the loaded DEM's elevation range,
+     * marched in steps of about 4 world pixels and the first crossing bisected.
+     *
+     * @param state the transform the frame was drawn with
+     * @param point the screen point in TransformState's y-up pixels (as
+     *              TransformState::screenCoordinateToTileCoordinate takes it)
+     * @return the surface point, empty when the ray misses the terrain (no DEM loaded, or
+     *         the ray never comes down to the terrain, as above the horizon)
+     */
+    std::optional<LatLng> raycast(const TransformState& state, const ScreenCoordinate& point) const;
 
     /**
      * @brief Get the terrain exaggeration multiplier

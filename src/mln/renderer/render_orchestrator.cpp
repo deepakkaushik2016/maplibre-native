@@ -759,6 +759,33 @@ void RenderOrchestrator::queryRenderedSymbols(std::unordered_map<std::string, st
     }
 }
 
+ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineString& geometry) const {
+    if (!renderTerrain || !renderTerrain->isEnabled()) {
+        return geometry;
+    }
+    const double height = transformState.getSize().height;
+    ScreenLineString result;
+    result.reserve(geometry.size());
+    for (const auto& point : geometry) {
+        // Query geometry is y-down; TransformState works y-up.
+        const auto hit = renderTerrain->raycast(transformState, {point.x, height - point.y});
+        if (!hit) {
+            // No terrain under the point (above the horizon, or no DEM yet): sea level it is.
+            result.push_back(point);
+            continue;
+        }
+        vec4 clip;
+        const ScreenCoordinate seaLevel = transformState.latLngToScreenCoordinate(*hit, clip);
+        if (clip[3] <= 0) {
+            // Behind the camera at sea level (terrain below sea level near the horizon).
+            result.push_back(point);
+            continue;
+        }
+        result.emplace_back(seaLevel.x, height - seaLevel.y);
+    }
+    return result;
+}
+
 std::vector<Feature> RenderOrchestrator::queryRenderedFeatures(
     const ScreenLineString& geometry,
     const RenderedQueryOptions& options,
@@ -778,11 +805,19 @@ std::vector<Feature> RenderOrchestrator::queryRenderedFeatures(
     mat4 projMatrix;
     transformState.getProjMatrix(projMatrix);
 
+    // With terrain on, tile features are draped on the elevated surface, while the sources match
+    // a screen point against them where its ray meets sea level. Hand them, for each point, the
+    // pixel where the terrain point under it would sit at sea level, so the sea-level matching
+    // lands on the draped feature the point shows (gl-js #8158 resolves its query geometry on
+    // the terrain the same way). Symbols are placed and collided in plain screen space, so they
+    // keep the original geometry.
+    const ScreenLineString sourceGeometry = queryGeometryOnTerrain(geometry);
+
     std::unordered_map<std::string, std::vector<Feature>> resultsByLayer;
     for (const auto& sourceID : sourceIDs) {
         if (RenderSource* renderSource = getRenderSource(sourceID)) {
             auto sourceResults = renderSource->queryRenderedFeatures(
-                geometry, transformState, filteredLayers, options, globalState.get(), projMatrix);
+                sourceGeometry, transformState, filteredLayers, options, globalState.get(), projMatrix);
             std::ranges::move(sourceResults, std::inserter(resultsByLayer, resultsByLayer.begin()));
         }
     }

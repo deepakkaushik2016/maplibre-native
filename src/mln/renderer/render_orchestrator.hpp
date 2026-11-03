@@ -195,6 +195,10 @@ private:
                                                const RenderedQueryOptions&,
                                                const std::unordered_map<std::string, const RenderLayer*>&) const;
 
+    /// The query geometry the sources should match against tile features: with terrain on, each
+    /// point moved to where the terrain point under it would sit at sea level.
+    ScreenLineString queryGeometryOnTerrain(const ScreenLineString&) const;
+
     // GlyphManagerObserver implementation.
     void onGlyphsLoaded(const FontStack&, const GlyphRange&) override;
     void onGlyphsError(const FontStack&, const GlyphRange&, std::exception_ptr) override;

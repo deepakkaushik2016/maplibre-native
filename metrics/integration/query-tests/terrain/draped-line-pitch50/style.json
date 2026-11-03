@@ -1,0 +1,85 @@
+{
+  "version": 8,
+  "metadata": {
+    "test": {
+      "description": "A trail draped on terrain at pitch 50: the query point is where the line is drawn on the ~970 m surface (the screen centre, as the camera centre sits on the terrain at the line), not where it would sit at sea level.",
+      "width": 512,
+      "height": 512,
+      "queryGeometry": [
+        256,
+        256
+      ],
+      "queryOptions": {
+        "layers": [
+          "trail"
+        ]
+      },
+      "operations": [
+        [
+          "wait"
+        ]
+      ]
+    }
+  },
+  "center": [
+    11.5673,
+    47.3255
+  ],
+  "centerAltitude": 967,
+  "zoom": 13,
+  "pitch": 50,
+  "sources": {
+    "terrain": {
+      "type": "raster-dem",
+      "tiles": [
+        "local://tiles/terrain-shading/{z}-{x}-{y}.terrain.png"
+      ],
+      "maxzoom": 12,
+      "tileSize": 256
+    },
+    "trail": {
+      "type": "geojson",
+      "data": {
+        "type": "Feature",
+        "properties": {
+          "name": "trail"
+        },
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [
+              11.54,
+              47.3255
+            ],
+            [
+              11.6,
+              47.3255
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "white"
+      }
+    },
+    {
+      "id": "trail",
+      "type": "line",
+      "source": "trail",
+      "paint": {
+        "line-color": "#d00",
+        "line-width": 6
+      }
+    }
+  ],
+  "terrain": {
+    "source": "terrain",
+    "exaggeration": 1
+  }
+}

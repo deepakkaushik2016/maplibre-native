@@ -1,0 +1,23 @@
+[
+  {
+    "geometry": {
+      "type": "LineString",
+      "coordinates": [
+        [
+          11.546630859375,
+          47.32550142273894
+        ],
+        [
+          11.600001454353333,
+          47.32550142273894
+        ]
+      ]
+    },
+    "type": "Feature",
+    "properties": {
+      "name": "trail"
+    },
+    "source": "trail",
+    "state": {}
+  }
+]

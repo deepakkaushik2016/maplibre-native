@@ -932,6 +932,118 @@ std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng
     return getElevationWithExaggeration(sampleTile, localX, localY);
 }
 
+std::optional<LatLng> RenderTerrain::raycast(const TransformState& state, const ScreenCoordinate& point) const {
+    if (!demSource) {
+        return std::nullopt;
+    }
+    const Size size = state.getSize();
+    if (size.isEmpty()) {
+        return std::nullopt;
+    }
+
+    // The elevation range of the loaded DEM (exaggerated), which the surface cannot leave. It
+    // always spans sea level, as getElevationForLatLng reads 0 where no DEM covers the point.
+    const double exaggeration = getExaggeration();
+    double minElevation = 0.0;
+    double maxElevation = 0.0;
+    bool anyDEM = false;
+    for (const auto& renderTile : *demSource->getRawRenderTiles()) {
+        const auto& tile = renderTile.getTile();
+        if (tile.kind != Tile::Kind::RasterDEM) {
+            continue;
+        }
+        const auto* bucket = static_cast<const RasterDEMTile&>(tile).getBucket();
+        if (!bucket || !bucket->getDEMData().getImagePtr()) {
+            continue;
+        }
+        anyDEM = true;
+        minElevation = std::min(minElevation, bucket->getDEMData().getMinElevation() * exaggeration);
+        maxElevation = std::max(maxElevation, bucket->getDEMData().getMaxElevation() * exaggeration);
+    }
+    if (!anyDEM) {
+        return std::nullopt;
+    }
+
+    // The ray from the near (clip z -1) to the far (clip z 1) plane, in world pixels with z in
+    // metres - the space TransformState's projection matrix maps from.
+    mat4 inverse;
+    if (matrix::invert(inverse, state.getProjectionMatrix())) {
+        return std::nullopt;
+    }
+    const double ndcX = point.x / size.width * 2.0 - 1.0;
+    const double ndcY = point.y / size.height * 2.0 - 1.0;
+    const auto unproject = [&](double ndcZ) {
+        vec4 out;
+        matrix::transformMat4(out, vec4{{ndcX, ndcY, ndcZ, 1.0}}, inverse);
+        return vec3{{out[0] / out[3], out[1] / out[3], out[2] / out[3]}};
+    };
+    const vec3 near = unproject(-1.0);
+    const vec3 far = unproject(1.0);
+    const double dx = far[0] - near[0];
+    const double dy = far[1] - near[1];
+    const double dz = far[2] - near[2];
+
+    const double scale = state.getScale();
+    const auto at = [&](double t) {
+        return Projection::unproject({near[0] + t * dx, near[1] + t * dy}, scale, LatLng::Unwrapped);
+    };
+    // As gl-js `isBelowTerrainSample`: ground no loaded DEM covers is never hit.
+    constexpr double hitEpsilonMeters = 1e-6;
+    const auto belowTerrain = [&](double t) {
+        const auto elevation = findElevationForLatLng(at(t));
+        return elevation && near[2] + t * dz <= *elevation + hitEpsilonMeters;
+    };
+
+    // Clip the segment to the slab between the lowest and highest terrain.
+    double tStart = 0.0;
+    double tEnd = 1.0;
+    if (dz == 0.0) {
+        if (near[2] > maxElevation || near[2] < minElevation) {
+            return std::nullopt;
+        }
+    } else {
+        const double tHigh = (maxElevation - near[2]) / dz;
+        const double tLow = (minElevation - near[2]) / dz;
+        tStart = std::max(tStart, std::min(tHigh, tLow));
+        tEnd = std::min(tEnd, std::max(tHigh, tLow));
+        if (tStart > tEnd) {
+            return std::nullopt;
+        }
+    }
+
+    constexpr double targetStepWorldPixels = 4.0;
+    constexpr int maxSamples = 512;
+    constexpr double bisectEpsilonWorldPixels = 1e-3;
+    const double horizontalLength = std::hypot(dx, dy);
+    const int samples = std::clamp(
+        static_cast<int>(std::ceil(horizontalLength * (tEnd - tStart) / targetStepWorldPixels)), 1, maxSamples);
+
+    // Only a crossing from above the surface counts: a ray that starts inside the terrain
+    // (camera below the surface) hits where it next comes out on top and back down. The start
+    // state is read at the near plane, not at the clipped start, which can sit exactly on the
+    // highest terrain.
+    constexpr int maxBisections = 40;
+    bool aboveTerrain = !belowTerrain(0.0);
+    double previousT = 0.0;
+    for (int i = 0; i <= samples; ++i) {
+        const double t = tStart + (tEnd - tStart) * i / samples;
+        if (!aboveTerrain) {
+            aboveTerrain = !belowTerrain(t);
+        } else if (belowTerrain(t)) {
+            double lo = previousT;
+            double hi = t;
+            const double tolerance = horizontalLength > 0.0 ? bisectEpsilonWorldPixels / horizontalLength : 0.0;
+            for (int j = 0; j < maxBisections && hi - lo > tolerance; ++j) {
+                const double mid = (lo + hi) / 2.0;
+                (belowTerrain(mid) ? hi : lo) = mid;
+            }
+            return at(hi);
+        }
+        previousT = t;
+    }
+    return std::nullopt;
+}
+
 std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const UnwrappedTileID& tileID) const {
     // Find the DEM texture matching the requested tile, or its closest available ancestor
     const UnwrappedTileID* demTileID = nullptr;
