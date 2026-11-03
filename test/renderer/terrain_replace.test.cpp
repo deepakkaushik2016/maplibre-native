@@ -117,8 +117,24 @@ struct ReplaceScene {
         map.jumpTo(CameraOptions().withCenter(center).withZoom(10.0));
     }
 
+    struct Frame {
+        int drawCalls;
+        // Pixels other than the white background: the area polygon covers the whole view, so a
+        // frame that draws it has ink everywhere.
+        int inked;
+    };
+
     // One still frame: waits for every tile it needs, so each call is a complete, settled frame.
-    int render() { return frontend.render(map).stats.numDrawCalls; }
+    Frame render() {
+        const auto result = frontend.render(map);
+        int inked = 0;
+        const PremultipliedImage& image = result.image;
+        for (size_t i = 0; i < image.bytes(); i += 4) {
+            const uint8_t* px = image.data.get() + i;
+            inked += px[0] != 255 || px[1] != 255 || px[2] != 255 ? 1 : 0;
+        }
+        return {.drawCalls = result.stats.numDrawCalls, .inked = inked};
+    }
 
     size_t terrainGroups() { return RendererTestAccess::layerGroupCount(*frontend.getRenderer(), terrainGroup); }
 
@@ -129,7 +145,9 @@ struct ReplaceScene {
 
 TEST(TerrainReplace, ExaggerationSweepKeepsOneTerrainGroup) {
     ReplaceScene scene(R"("terrain": {"source": "dem", "exaggeration": 1},)");
-    const int first = scene.render();
+    const auto firstFrame = scene.render();
+    ASSERT_GT(firstFrame.inked, 0) << "the first frame is blank";
+    const int first = firstFrame.drawCalls;
     ASSERT_EQ(scene.terrainGroups(), 1u);
     ASSERT_GT(first, 0);
     const auto firstElevation = scene.elevation();
@@ -140,7 +158,9 @@ TEST(TerrainReplace, ExaggerationSweepKeepsOneTerrainGroup) {
     for (int i = 0; i < iterations; ++i) {
         const float exaggeration = i % 2 == 0 ? 2.0f : 0.5f;
         scene.map.getStyle().getTerrain()->setExaggeration(exaggeration);
-        const int calls = scene.render();
+        const auto frame = scene.render();
+        ASSERT_GT(frame.inked, 0) << "iteration " << i << " (exaggeration " << exaggeration << "): blank frame";
+        const int calls = frame.drawCalls;
 
         ASSERT_EQ(scene.terrainGroups(), 1u) << "iteration " << i << " (exaggeration " << exaggeration
                                              << "): a replaced terrain left its mesh group behind";
@@ -155,7 +175,9 @@ TEST(TerrainReplace, ExaggerationSweepKeepsOneTerrainGroup) {
 
 TEST(TerrainReplace, ToggleOnOffReturnsToBaseline) {
     ReplaceScene scene("");
-    const int baseline = scene.render();
+    const auto baselineFrame = scene.render();
+    ASSERT_GT(baselineFrame.inked, 0) << "the frame without terrain is blank";
+    const int baseline = baselineFrame.drawCalls;
     ASSERT_EQ(scene.terrainGroups(), 0u);
     ASSERT_EQ(scene.elevation(), std::nullopt);
 
@@ -163,7 +185,9 @@ TEST(TerrainReplace, ToggleOnOffReturnsToBaseline) {
     int lastOff = -1;
     for (int i = 0; i < iterations; ++i) {
         scene.map.getStyle().setTerrain(std::make_unique<style::Terrain>("dem", 1.25f));
-        const int on = scene.render();
+        const auto onFrame = scene.render();
+        ASSERT_GT(onFrame.inked, 0) << "cycle " << i << " (on): blank frame";
+        const int on = onFrame.drawCalls;
         ASSERT_EQ(scene.terrainGroups(), 1u) << "cycle " << i << " (on)";
         const auto elevation = scene.elevation();
         ASSERT_TRUE(elevation) << "cycle " << i << ": terrain on but no elevation";
@@ -175,7 +199,9 @@ TEST(TerrainReplace, ToggleOnOffReturnsToBaseline) {
         ASSERT_EQ(on, *firstOn) << "cycle " << i << " (on): draw calls grew";
 
         scene.map.getStyle().setTerrain(nullptr);
-        lastOff = scene.render();
+        const auto offFrame = scene.render();
+        ASSERT_GT(offFrame.inked, 0) << "cycle " << i << " (off): blank frame";
+        lastOff = offFrame.drawCalls;
         ASSERT_EQ(scene.terrainGroups(), 0u) << "cycle " << i << " (off): a terrain mesh group is still drawn";
         ASSERT_EQ(lastOff, baseline) << "cycle " << i << " (off)";
     }
