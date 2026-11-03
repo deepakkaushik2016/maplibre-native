@@ -564,6 +564,11 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         }
     }
 
+    // The placeholder encodes 0 m for the DEM encoding in use; when that changes (the first DEM
+    // tile of a Terrarium source arrives), drawables built on the old placeholder would sink
+    // (Terrarium decodes the Mapbox zero texel to about -32 km) and are rebuilt below.
+    const bool placeholderStale = placeholderDEMTexture && placeholderDEMUnpack != demUnpackVector;
+
     // Create terrain drawables for each mesh tile
     for (const auto& unwrapped : meshTiles) {
         const OverscaledTileID tileID(unwrapped.canonical.z, unwrapped.wrap, unwrapped.canonical);
@@ -638,7 +643,8 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             .tier = demTier,
             .demZoom = static_cast<int8_t>(demTileUsed ? static_cast<int>(demTileUsed->canonical.z) : -1)};
         if (const auto existing = tilesWithDrawables.find(tileID); existing != tilesWithDrawables.end()) {
-            if (!terrain::shouldRebind(existing->second, binding)) {
+            if (!terrain::shouldRebind(existing->second, binding) &&
+                !(placeholderStale && existing->second.tier == 0)) {
                 continue;
             }
             lg->removeDrawablesIf(
@@ -1077,9 +1083,22 @@ std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const Un
 }
 
 const std::shared_ptr<gfx::Texture2D>& RenderTerrain::getPlaceholderDEMTexture(gfx::Context& context) {
-    if (!placeholderDEMTexture) {
+    if (!placeholderDEMTexture || placeholderDEMUnpack != demUnpackVector) {
+        // One texel at 0 m in the current encoding: the shader decodes dot(rgb * 255, unpack.xyz)
+        // - unpack.w, so an all-zero texel is -unpack.w (-10 km for Mapbox, -32 km for
+        // Terrarium) and a tile without DEM sank out of view, leaving its drape undrawn. Split
+        // unpack.w into the R, G, B digits (Mapbox: 1, 134, 160; Terrarium: 128, 0, 0).
         auto image = std::make_shared<PremultipliedImage>(Size{1, 1});
-        std::memset(image->data.get(), 0, image->bytes());
+        uint8_t* texel = image->data.get();
+        double rest = demUnpackVector[3];
+        for (int i = 0; i < 3; ++i) {
+            const double digit = rest / demUnpackVector[i];
+            const double value = std::clamp(i < 2 ? std::floor(digit) : std::round(digit), 0.0, 255.0);
+            texel[i] = static_cast<uint8_t>(value);
+            rest -= value * demUnpackVector[i];
+        }
+        texel[3] = 255;
+        placeholderDEMUnpack = demUnpackVector;
         placeholderDEMTexture = context.createTexture2D();
         placeholderDEMTexture->setImage(image);
         placeholderDEMTexture->setSamplerConfiguration({.filter = gfx::TextureFilterType::Nearest,
