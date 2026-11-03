@@ -1189,3 +1189,114 @@ TEST(TerrainCamera, AFlightEasesTheCenterHeightToTheGroundItIsHeadedFor) {
     EXPECT_NEAR(*camera.zoom, 14.0, 0.05) << "at the zoom asked for";
     EXPECT_NEAR(*camera.centerAltitude, 0.0, 30.0) << "with the center on the ground there";
 }
+
+namespace {
+
+// Lowland at 100 m north of the northern edge of the z9 DEM tiles in row 180, and a 1,600 m plateau
+// south of it, under a green fill the terrain drapes over a white background.
+constexpr double stepLatitude = 47.04018214480666;
+constexpr int32_t stepRow = 180;
+constexpr int32_t stepZoom = 9;
+constexpr double lowlandMeters = 100.0;
+constexpr double trailheadPlateauMeters = 1600.0;
+
+const char* stepStyle = R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 12,
+      "tileSize": 256
+    },
+    "ground": {
+      "type": "geojson",
+      "data": {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {"type": "Polygon", "coordinates": [[[10, 46], [13, 46], [13, 48], [10, 48], [10, 46]]]}
+      }
+    }
+  },
+  "terrain": {"source": "dem", "exaggeration": 1.0},
+  "layers": [
+    {"id": "bg", "type": "background", "paint": {"background-color": "#ffffff"}},
+    {"id": "ground", "type": "fill", "source": "ground", "paint": {"fill-color": "#00ff00"}}
+  ]
+})STYLE";
+
+// The share of the frame the draped green fill covers.
+double greenShare(const PremultipliedImage& image) {
+    size_t green = 0;
+    const size_t pixels = image.size.width * image.size.height;
+    for (size_t i = 0; i < pixels; ++i) {
+        const uint8_t* px = image.data.get() + i * 4;
+        if (px[1] > 128 && px[0] < 96 && px[2] < 96) {
+            ++green;
+        }
+    }
+    return pixels ? static_cast<double>(green) / static_cast<double>(pixels) : 0.0;
+}
+
+} // namespace
+
+// The app's "jump to trailhead": a clamped centre on the lowland jumps onto a plateau higher than
+// the eye. The app's trail view on a 390 by 844 phone is z14.5 at pitch 60, so the eye sits about
+// 1,460 m above the centre: at 100 m it lands at about 1,560 m, inside the 1,600 m plateau. The
+// renderer kept no DEM tile under the centre, so the clamp never learned of the ground there, the
+// centre stayed at the lowland's height, and the frame stayed blank under the ground.
+TEST(TerrainCamera, AJumpOntoGroundAboveTheEyeLandsOnIt) {
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    const std::string lowland = makeDEMTile(lowlandMeters);
+    const std::string plateau = makeDEMTile(trailheadPlateauMeters);
+    fileSource->tileResponse = [&](const Resource& resource) {
+        Response res;
+        const auto& tile = resource.tileData;
+        const bool south = tile && tile->z >= stepZoom && tile->y >= (stepRow << (tile->z - stepZoom));
+        res.data = std::make_shared<std::string>(south ? plateau : lowland);
+        return res;
+    };
+    HeadlessFrontend frontend{{390, 844}, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize()));
+    map.setCenterClampedToGround(true);
+    map.getStyle().loadJSON(stepStyle);
+    const auto centerAltitude = [&] {
+        return map.getCameraOptions().centerAltitude.value_or(0.0);
+    };
+    const auto eyeAltitude = [&] {
+        const auto location = map.getFreeCameraOptions().getLocation();
+        EXPECT_TRUE(location.has_value());
+        return location ? location->altitude : 0.0;
+    };
+    // Frames until `done`, with no sleeps: each frame takes whatever the workers have finished.
+    const auto renderUntil = [&](const std::function<bool()>& done) {
+        const auto deadline = Clock::now() + Seconds(10);
+        while (Clock::now() < deadline && !done()) {
+            loop.runOnce();
+            frontend.renderFrame();
+        }
+        return done();
+    };
+
+    map.jumpTo(CameraOptions().withCenter(LatLng{stepLatitude + 0.05, 11.39}).withZoom(14.5).withPitch(60.0));
+    ASSERT_TRUE(renderUntil([&] { return std::abs(centerAltitude() - lowlandMeters) < 1.0; }))
+        << "the center never met the lowland";
+
+    map.jumpTo(CameraOptions().withCenter(LatLng{stepLatitude - 0.03, 11.39}));
+    ASSERT_LT(eyeAltitude(), trailheadPlateauMeters) << "the jump puts the eye inside the plateau";
+
+    renderUntil([&] { return std::abs(centerAltitude() - trailheadPlateauMeters) < 1.0; });
+    // A few frames more, so a centre that only passed through the plateau's height is caught.
+    for (int i = 0; i < 10; ++i) {
+        loop.runOnce();
+        frontend.renderFrame();
+    }
+    EXPECT_NEAR(centerAltitude(), trailheadPlateauMeters, 1.0) << "the center landed on the plateau";
+    EXPECT_GT(eyeAltitude(), trailheadPlateauMeters + 10.0) << "the eye is above the ground under it";
+    EXPECT_GT(greenShare(frontend.readStillImage()), 0.5) << "the frame shows the ground";
+}
