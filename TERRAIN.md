@@ -300,7 +300,8 @@ Implemented:
   fallback and bilinear interpolation
 - Line antialiasing gamma handled per drawable (1.0 when draped into a terrain
   render target, perspective ratio otherwise) for every line variant (plain,
-  gradient, pattern, SDF, gradient-SDF)
+  gradient, pattern, SDF, gradient-SDF; the non-plain variants are run on Metal
+  only and compile-validated on GL/Vulkan/WebGPU, see Cleanup before merging)
 - Mesh skirts on all four backends: each tile edge is extruded into a curtain
   that hangs below the surface by `u_elevation_offset` (gl-js `u_ele_delta`),
   hiding the cracks/stitches between neighbouring tiles at different zoom
@@ -1340,14 +1341,23 @@ terrain during placement sees the previous frame's state - the same first-frame 
   is now a single `demSubTileOffset` helper. The remaining logs in
   render_terrain.cpp are one-time warning/error logs; terrain_layer_tweaker.cpp
   has no per-frame logging.
-- **(done)** Extend the draped-flag gamma handling to the line gradient/pattern/SDF variants:
-  `LineLayerTweaker` sets the draped flag (`pad1`) for every line variant, and the gradient,
-  pattern, SDF and gradient-SDF vertex shaders on all four backends use gamma 1.0 when it is set.
-  The gradient-SDF variant's missing `apply_drape_transform` was fixed upstream by #4894
-  (`TerrainDrape.ADashedGradientLineLandsWhereItIs`). Proven on
-  Metal by `TerrainLineDrape.EveryLineVariantDrapesLikeTheSolidLine` (terrain at exaggeration 0
-  vs terrain off); the gl-js oracles `terrain/line-{solid,dasharray,gradient}` are known
-  failures until the camera is anchored to the terrain (native renders them blank).
+- **(done on Metal; GL/Vulkan/WebGPU compile-validated only)** Extend the draped-flag gamma
+  handling to the line gradient/pattern/SDF variants: `LineLayerTweaker` sets the draped flag
+  (`pad1`) for every line variant, and the gradient, pattern, SDF and gradient-SDF vertex shaders
+  use gamma 1.0 when it is set. The gradient-SDF variant (line-gradient + line-dasharray) also
+  lacked `apply_drape_transform` on every backend, so it was drawn unplaced into the drape
+  targets; it now has it. Validation, precisely:
+  - **Metal - run.** `TerrainLineDrape.EveryLineVariantDrapesLikeTheSolidLine` (terrain at
+    exaggeration 0 vs terrain off, with a positive control that the drape path engaged) fails
+    without the change and passes with it.
+  - **GL (GLSL ES 3.00), Vulkan (GLSL 450 -> SPIR-V) and WebGPU (WGSL) - compiled, never run.**
+    Every line program's source, assembled the way the engine assembles it (prelude, defines,
+    `HAS_UNIFORM_u_*` none/all, Vulkan surface transform on/off, WGSL through the engine's own
+    preprocessor), compiles with glslang 16.6.0 (GL linked vert+frag; Vulkan with Vulkan rules)
+    and validates with naga 30.0.1. Nothing about their rendering output is verified; Android
+    Vulkan and the GLES fallback still need a device/CI run of the gtest.
+  - The gl-js oracles `terrain/line-{solid,dasharray,gradient}` are known failures until the
+    camera is anchored to the terrain (native renders them blank, the control included).
 - **(done)** Heatmap is elevated, not draped, as in gl-js (which does not drape it): each
   kernel is lifted to the DEM height at its centre in the kernel vertex shader, and the
   colour-ramp composite stays a screen-space pass.

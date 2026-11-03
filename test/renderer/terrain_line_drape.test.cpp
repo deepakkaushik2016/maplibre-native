@@ -280,6 +280,12 @@ void expectLikeTheSolidLine(const Diff& solid, const Diff& variant, const char* 
 TEST(TerrainLineDrape, EveryLineVariantDrapesLikeTheSolidLine) {
     const Diff solid = drapeDiff(R"({"line-color": "#d00", "line-width": 4})");
     ASSERT_GT(solid.inked, 300) << "the solid line did not render";
+    // Positive control: the terrain-on render must really have gone through a drape target. Two
+    // undraped renders of the same style are byte-identical (mean 0), while drawing the line into a
+    // drape target and resampling it through the terrain mesh leaves a little filtering noise (0.013
+    // on macOS Metal). Without this, terrain at exaggeration 0 becoming a no-op, or the DEM failing to
+    // load, would let every comparison below pass vacuously.
+    EXPECT_GT(solid.mean, 0.0) << "terrain-on and terrain-off renders are identical: the drape path never engaged";
     const Diff dashed = drapeDiff(R"({"line-color": "#d00", "line-width": 4, "line-dasharray": [3, 2]})");
     const Diff grad = drapeDiff(std::string(R"({"line-width": 4, )") + gradient + "}", true);
     const Diff gradDashed = drapeDiff(
