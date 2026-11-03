@@ -644,7 +644,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             .demZoom = static_cast<int8_t>(demTileUsed ? static_cast<int>(demTileUsed->canonical.z) : -1)};
         if (const auto existing = tilesWithDrawables.find(tileID); existing != tilesWithDrawables.end()) {
             if (!terrain::shouldRebind(existing->second, binding) &&
-                !(placeholderStale && existing->second.tier == 0)) {
+                (!placeholderStale || existing->second.tier != 0)) {
                 continue;
             }
             lg->removeDrawablesIf(
