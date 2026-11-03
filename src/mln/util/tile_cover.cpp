@@ -288,8 +288,10 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // and the clamp, which reads the height there, never learned of the ground that would lift the
     // camera out of it. Only an elevated node under the centre is kept, so a cover gains at most
     // one tile, and only while the terrain lifts that tile out of view; a culled node costs four
-    // comparisons more.
-    const Point<double> centerOnGround = Projection::project(transform.getLatLng(), static_cast<int32_t>(z));
+    // comparisons more. Without terrain the centre is not projected at all.
+    const Point<double> centerOnGround = state.elevationProvider
+                                             ? Projection::project(transform.getLatLng(), static_cast<int32_t>(z))
+                                             : Point<double>{};
     const auto underCenter = [&](const Node& node) {
         return centerOnGround.x >= node.aabb.min[0] && centerOnGround.x < node.aabb.max[0] &&
                centerOnGround.y >= node.aabb.min[1] && centerOnGround.y < node.aabb.max[1];
