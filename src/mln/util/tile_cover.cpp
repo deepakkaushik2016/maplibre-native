@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <list>
 
 using namespace std::numbers;
@@ -169,7 +170,7 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
         uint32_t x, y;
         int16_t wrap;
         bool fullyVisible;
-        bool keptForCenter = false; // out of view, kept only as the tile under the centre
+        bool keptForCamera = false; // out of view, kept only as a tile under the centre or the eye
     };
 
     struct ResultTile {
@@ -281,20 +282,34 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
         return elevated;
     };
 
-    // With terrain, the tile under the map centre belongs to the cover even out of view. A camera
-    // under the ground around the centre - a jump onto a plateau higher than the eye - has that
-    // ground above it, outside the view, so the frustum culls the tile while lower ground further
-    // off keeps the cover from coming back empty. The DEM source then held no tile under the centre,
-    // and the clamp, which reads the height there, never learned of the ground that would lift the
-    // camera out of it. Only an elevated node under the centre is kept, so a cover gains at most
-    // one tile, and only while the terrain lifts that tile out of view; a culled node costs four
-    // comparisons more. Without terrain the centre is not projected at all.
-    const Point<double> centerOnGround = state.elevationProvider
-                                             ? Projection::project(transform.getLatLng(), static_cast<int32_t>(z))
-                                             : Point<double>{};
-    const auto underCenter = [&](const Node& node) {
-        return centerOnGround.x >= node.aabb.min[0] && centerOnGround.x < node.aabb.max[0] &&
-               centerOnGround.y >= node.aabb.min[1] && centerOnGround.y < node.aabb.max[1];
+    // With terrain, the tiles under the map centre and under an eye inside the ground belong to the
+    // cover even out of view. A camera under the ground around the centre - a jump onto a plateau
+    // higher than the eye - has that ground above it, outside the view, so the frustum culls the
+    // tile while lower ground further off keeps the cover from coming back empty. The DEM source
+    // then held no tile there, and the clamp, which reads the height under the centre and under the
+    // eye, never learned of the ground that would lift the camera out of it. The tile under the eye
+    // is kept only where its ground rises above the eye: in an ordinary pitched view it is behind
+    // the camera and stays out. Only elevated nodes are kept, so a cover gains at most two tiles,
+    // and only while the terrain lifts them out of view. Without terrain none of this is computed;
+    // with it, a cover projects two points once and a culled elevated node costs up to nine
+    // comparisons more.
+    Point<double> centerOnGround;
+    Point<double> eyeOnGround;
+    double eyeFrustumZ = std::numeric_limits<double>::infinity();
+    if (state.elevationProvider) {
+        centerOnGround = Projection::project(transform.getLatLng(), static_cast<int32_t>(z));
+        eyeOnGround = {cameraCoord[0], cameraCoord[1]};
+        if (const auto eye = transform.getFreeCameraOptions().getLocation()) {
+            eyeFrustumZ = eye->altitude * metersToFrustumZ;
+        }
+    }
+    const auto contains = [](const Node& node, const Point<double>& point) {
+        return point.x >= node.aabb.min[0] && point.x < node.aabb.max[0] && point.y >= node.aabb.min[1] &&
+               point.y < node.aabb.max[1];
+    };
+    // `box` is the node's elevated box.
+    const auto underTheCamera = [&](const Node& node, const AABB& box) {
+        return contains(node, centerOnGround) || (box.max[2] > eyeFrustumZ && contains(node, eyeOnGround));
     };
 
     // There should always be a certain number of maximum zoom level tiles
@@ -314,8 +329,8 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // Perform depth-first traversal on tile tree to find visible tiles
     std::vector<Node> stack;
     std::vector<ResultTile> result;
-    // Tiles in `result` that are there only as the tile under the centre.
-    size_t centerOnlyTiles = 0;
+    // Tiles in `result` that are there only as a tile under the centre or the eye.
+    size_t keptOnlyTiles = 0;
     stack.reserve(128);
 
     // With a tile limit the walk is nearest first instead: a heap of nodes, keyed by the nearest a
@@ -383,7 +398,7 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             queue.pop_back();
             if (item.tile) {
                 result.push_back({.id = tileIdOf(item.node), .sqrDist = item.key});
-                centerOnlyTiles += item.node.keptForCenter ? 1 : 0;
+                keptOnlyTiles += item.node.keptForCamera ? 1 : 0;
                 if (result.size() >= state.tileLimit) break;
                 continue;
             }
@@ -404,8 +419,8 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             const IntersectionResult intersection = elevated ? frustum.intersectsElevated(testAABB)
                                                              : frustum.intersects(testAABB);
 
-            node.keptForCenter = intersection == IntersectionResult::Separate;
-            if (node.keptForCenter && !(elevated && underCenter(node))) continue;
+            node.keptForCamera = intersection == IntersectionResult::Separate;
+            if (node.keptForCamera && !(elevated && underTheCamera(node, testAABB))) continue;
 
             node.fullyVisible = intersection == IntersectionResult::Contains;
         }
@@ -473,7 +488,7 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                     std::push_heap(queue.begin(), queue.end(), later);
                 } else {
                     result.push_back({.id = id, .sqrDist = dx * dx + dy * dy});
-                    centerOnlyTiles += node.keptForCenter ? 1 : 0;
+                    keptOnlyTiles += node.keptForCamera ? 1 : 0;
                 }
             }
         } else {
@@ -506,8 +521,9 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // terrain, and an empty cover asks for no tiles at all, the elevation tiles that would lift
     // the camera onto the ground included: the map stayed blank until the view was moved by hand.
     // Fall back to the flat footprint, as the first frame does before any elevation is known. A tile
-    // kept only as the one under the centre does not count: a cover of nothing else is still empty.
-    if (ids.size() == centerOnlyTiles && state.elevationProvider) {
+    // kept only as one under the centre or the eye does not count: a cover of nothing else is still
+    // empty.
+    if (ids.size() == keptOnlyTiles && state.elevationProvider) {
         TileCoverParameters flat = state;
         flat.elevationProvider = nullptr;
         return tileCover(flat, z, zoomRange, overscaledZ);

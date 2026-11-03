@@ -882,6 +882,36 @@ TEST(TileCover, CameraInsideTheGroundStillCoversTheFootprint) {
                      .empty());
 }
 
+// An ordinary pitched view over terrain, the camera above the ground: the cover is only what the
+// view shows. The tile under the eye is behind it and out of view, so it stays out: keeping it is
+// only for an eye under the ground, which this camera is not.
+TEST(TileCover, AnOrdinaryPitchedViewKeepsNoTileOutOfView) {
+    const double plateau = 2000.0;
+    PlateauElevation elevation(plateau);
+    for (const double zoom : {12.5, 13.0, 14.0}) {
+        for (const double pitch : {45.0, 60.0, 68.0}) {
+            Transform transform;
+            transform.resize({393, 852});
+            transform.jumpTo(CameraOptions()
+                                 .withCenter(LatLng{-37.146, 146.447})
+                                 .withZoom(zoom)
+                                 .withBearing(20.0)
+                                 .withPitch(pitch)
+                                 .withCenterAltitude(plateau));
+            util::TileCoverParameters params{transform.getState()};
+            params.elevationProvider = &elevation;
+            const auto z = static_cast<uint8_t>(util::coveringZoomLevel(zoom + 1.0, style::SourceType::RasterDEM, 512));
+            std::set<UnwrappedTileID> cover;
+            for (const auto& id : util::tileCover(params, std::min<uint8_t>(z, 16), Range<uint8_t>{0, 16}, z)) {
+                cover.insert(id.toUnwrapped());
+            }
+            ASSERT_FALSE(cover.empty());
+            EXPECT_EQ(util::frustumCull(params, cover), cover)
+                << "zoom " << zoom << " pitch " << pitch << ": every tile of the cover is in view";
+        }
+    }
+}
+
 // Steeply pitched over high ground with the centre anchored on it (as terrain gestures leave it),
 // the elevation-aware cover must still contain the ground at the bottom of the view; on an iPhone
 // it did not, and the near field drew the map background with skirts hanging into it.

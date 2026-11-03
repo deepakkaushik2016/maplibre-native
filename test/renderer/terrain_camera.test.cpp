@@ -1301,3 +1301,67 @@ TEST(TerrainCamera, AJumpOntoGroundAboveTheEyeLandsOnIt) {
     EXPECT_GT(eyeAltitude(), trailheadPlateauMeters + 10.0) << "the eye is above the ground under it";
     EXPECT_GT(greenShare(frontend.readStillImage()), 0.5) << "the frame shows the ground";
 }
+
+// The same jump with the centre landing low, on the lowland just north of the plateau's edge: the
+// centre's ground is in view and known, but the pitched eye, 2.5 km south of the centre and about
+// 1,460 m above it, sits inside the plateau. The ground under the eye was above the eye and out of
+// view, so no DEM tile under it was kept, the clamp never learned of it, and the eye stayed under
+// the ground.
+TEST(TerrainCamera, AJumpIntoAValleyLiftsTheEyeOutOfTheGroundBehindIt) {
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    const std::string lowland = makeDEMTile(lowlandMeters);
+    const std::string plateau = makeDEMTile(trailheadPlateauMeters);
+    fileSource->tileResponse = [&](const Resource& resource) {
+        Response res;
+        const auto& tile = resource.tileData;
+        const bool south = tile && tile->z >= stepZoom && tile->y >= (stepRow << (tile->z - stepZoom));
+        res.data = std::make_shared<std::string>(south ? plateau : lowland);
+        return res;
+    };
+    HeadlessFrontend frontend{{390, 844}, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize()));
+    map.setCenterClampedToGround(true);
+    map.getStyle().loadJSON(stepStyle);
+    const auto eye = [&] {
+        const auto location = map.getFreeCameraOptions().getLocation();
+        EXPECT_TRUE(location.has_value());
+        return location.value_or(LatLngAltitude{});
+    };
+    const auto groundUnderEye = [&] {
+        return eye().location.latitude() < stepLatitude ? trailheadPlateauMeters : lowlandMeters;
+    };
+    // Frames until `done`, with no sleeps: each frame takes whatever the workers have finished.
+    const auto renderUntil = [&](const std::function<bool()>& done) {
+        const auto deadline = Clock::now() + Seconds(10);
+        while (Clock::now() < deadline && !done()) {
+            loop.runOnce();
+            frontend.renderFrame();
+        }
+        return done();
+    };
+
+    map.jumpTo(CameraOptions().withCenter(LatLng{stepLatitude + 0.05, 11.39}).withZoom(14.5).withPitch(60.0));
+    ASSERT_TRUE(renderUntil([&] {
+        return std::abs(map.getCameraOptions().centerAltitude.value_or(0.0) - lowlandMeters) < 1.0;
+    })) << "the center never met the lowland";
+
+    map.jumpTo(CameraOptions().withCenter(LatLng{stepLatitude + 0.01, 11.39}));
+    ASSERT_EQ(groundUnderEye(), trailheadPlateauMeters) << "the eye is over the plateau";
+    ASSERT_LT(eye().altitude, trailheadPlateauMeters) << "the jump puts the eye inside the plateau";
+
+    const auto eyeClear = [&] {
+        return eye().altitude > groundUnderEye() + 9.5;
+    };
+    ASSERT_TRUE(renderUntil(eyeClear)) << "the eye never left the ground: " << eye().altitude << " m";
+    // A few frames more, so an eye that only passed above the ground is caught.
+    for (int i = 0; i < 10; ++i) {
+        loop.runOnce();
+        frontend.renderFrame();
+    }
+    EXPECT_TRUE(eyeClear()) << "the eye is above the ground under it, by the clearance: " << eye().altitude << " m";
+    EXPECT_GT(greenShare(frontend.readStillImage()), 0.5) << "the frame shows the ground";
+}
