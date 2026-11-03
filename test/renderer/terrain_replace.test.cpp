@@ -11,9 +11,7 @@
 #include <mln/util/image.hpp>
 #include <mln/util/run_loop.hpp>
 
-#include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
@@ -121,28 +119,20 @@ TEST(TerrainReplace, ExaggerationSweepKeepsOneTerrainGroup) {
     ASSERT_NEAR(*firstElevation, plateauMeters, 1.0);
 
     const int tolerance = static_cast<int>(std::ceil(0.05 * first));
-    int minCalls = first;
-    int maxCalls = first;
     for (int i = 0; i < iterations; ++i) {
         const float exaggeration = i % 2 == 0 ? 2.0f : 0.5f;
         scene.map.getStyle().getTerrain()->setExaggeration(exaggeration);
         const int calls = scene.render();
-        minCalls = std::min(minCalls, calls);
-        maxCalls = std::max(maxCalls, calls);
 
         ASSERT_EQ(scene.terrainGroups(), 1u) << "iteration " << i << " (exaggeration " << exaggeration
                                              << "): a replaced terrain left its mesh group behind";
-        ASSERT_NEAR(calls, first, tolerance) << "iteration " << i << " (exaggeration " << exaggeration << ")";
+        ASSERT_NEAR(calls, first, tolerance) << "iteration " << i << " (exaggeration " << exaggeration
+                                             << "): draw calls moved from the first frame's " << first;
         // The replacement really happened: the surface is drawn at the new height.
         const auto elevation = scene.elevation();
         ASSERT_TRUE(elevation) << "iteration " << i;
         ASSERT_NEAR(*elevation, plateauMeters * exaggeration, 1.0) << "iteration " << i;
     }
-    std::printf("exaggeration sweep: first frame %d draw calls, %d sweep frames in [%d, %d]\n",
-                first,
-                iterations,
-                minCalls,
-                maxCalls);
 }
 
 TEST(TerrainReplace, ToggleOnOffReturnsToBaseline) {
@@ -171,9 +161,5 @@ TEST(TerrainReplace, ToggleOnOffReturnsToBaseline) {
         ASSERT_EQ(scene.terrainGroups(), 0u) << "cycle " << i << " (off): a terrain mesh group is still drawn";
         ASSERT_EQ(lastOff, baseline) << "cycle " << i << " (off)";
     }
-    std::printf("toggle: baseline (never had terrain) %d draw calls, on %d, final off %d\n",
-                baseline,
-                firstOn.value_or(-1),
-                lastOff);
     EXPECT_EQ(lastOff, baseline);
 }

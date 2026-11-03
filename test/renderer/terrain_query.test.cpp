@@ -14,7 +14,6 @@
 #include <mln/util/run_loop.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -146,14 +145,6 @@ struct TerrainQueryScene {
             elevated = project(*state, onLine, plateauMeters);
             seaLevel = project(*state, onLine, 0.0);
         }
-        std::printf("elevated (%.1f, %.1f), sea level (%.1f, %.1f), %.1f px apart; red around them %d / %d\n",
-                    elevated.x,
-                    elevated.y,
-                    seaLevel.x,
-                    seaLevel.y,
-                    distance(),
-                    redAround(image, elevated),
-                    redAround(image, seaLevel));
     }
 
     double distance() const { return std::hypot(elevated.x - seaLevel.x, elevated.y - seaLevel.y); }
@@ -161,6 +152,8 @@ struct TerrainQueryScene {
     // The frame really shows the draped line where the elevated projection says, and nothing
     // where the sea-level projection says; without this a query result says nothing.
     void expectRenderedScene() const {
+        SCOPED_TRACE(::testing::Message() << "elevated (" << elevated.x << ", " << elevated.y << "), sea level ("
+                                          << seaLevel.x << ", " << seaLevel.y << "), " << distance() << " px apart");
         ASSERT_EQ(image.size, (Size{viewSize, viewSize}));
         ASSERT_GT(redAround(image, elevated), 10) << "the draped line is not drawn at its 1000 m projection";
         ASSERT_EQ(redAround(image, seaLevel), 0) << "the line is drawn at its sea-level projection";

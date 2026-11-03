@@ -21,10 +21,10 @@
 
 #include <array>
 #include <cmath>
-#include <cstdio>
 #include <list>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -256,16 +256,14 @@ void expectMissingDEMRendersTexturedFlat(const std::string& encoding) {
 
     // The scene is the one intended: some DEM tiles served, others missing, and the terrain is up
     // where the DEM is (so the frame is a terrain frame) and absent elsewhere.
-    std::printf("DEM tiles served %d, missing %d\n", demServed, demMissing);
-    ASSERT_GT(demServed, 0);
-    ASSERT_GT(demMissing, 0);
+    ASSERT_GT(demServed, 0) << demMissing << " DEM tiles missing";
+    ASSERT_GT(demMissing, 0) << demServed << " DEM tiles served";
     const auto neElevation = scene.elevation(inNE);
     ASSERT_TRUE(neElevation) << "the north-east DEM never loaded";
     EXPECT_NEAR(*neElevation, plateauMeters, 1.0);
     const auto swElevation = scene.elevation(inSW);
-    std::printf("elevation NE %.1f m, SW %s\n",
-                *neElevation,
-                swElevation ? std::to_string(*swElevation).c_str() : "none (no DEM)");
+    SCOPED_TRACE("elevation NE " + std::to_string(*neElevation) + " m, SW " +
+                 (swElevation ? std::to_string(*swElevation) + " m" : "none (no DEM)"));
 
     // The 2D frame is textured everywhere (all four basemap colours and the background), so a
     // match against it is a match against drape content, not against an empty frame.
@@ -282,7 +280,8 @@ void expectMissingDEMRendersTexturedFlat(const std::string& encoding) {
                 if (deltaE(px, ora) < 5) ++orange;
             }
         }
-        std::printf("2D frame: background %d, blue %d, green %d, orange %d px\n", background, blue, green, orange);
+        SCOPED_TRACE("2D frame: background " + std::to_string(background) + ", blue " + std::to_string(blue) +
+                     ", green " + std::to_string(green) + ", orange " + std::to_string(orange) + " px");
         ASSERT_GT(background, 1000);
         ASSERT_GT(blue, 1000);
         ASSERT_GT(green, 1000);
@@ -300,8 +299,8 @@ void expectMissingDEMRendersTexturedFlat(const std::string& encoding) {
             }
         }
     }
-    std::printf("pure black pixels: %d in the quadrants without DEM, %d in the frame\n", blackNoDEM, blackAll);
-    EXPECT_EQ(blackNoDEM, 0) << "terrain with a missing DEM tile renders black";
+    EXPECT_EQ(blackNoDEM, 0) << "terrain with a missing DEM tile renders black (" << blackAll
+                             << " pure black px in the whole frame)";
 
     // The drape's colour is present where the DEM is missing, at the place the 2D render puts it:
     // the surface there is flat at sea level, so it projects exactly as the 2D map does. 20
@@ -310,6 +309,7 @@ void expectMissingDEMRendersTexturedFlat(const std::string& encoding) {
     constexpr int samples = 20;
     constexpr uint32_t margin = 32;
     int matches = 0;
+    std::ostringstream mismatches;
     uint32_t state = 12345;
     auto next = [&](uint32_t lo, uint32_t hi) {
         state = state * 1103515245u + 12345u;
@@ -335,20 +335,15 @@ void expectMissingDEMRendersTexturedFlat(const std::string& encoding) {
         const uint8_t* a = pixel(image, x, y);
         const uint8_t* b = pixel(flat, x, y);
         const double dE = deltaE(a, b);
-        matches += dE <= 10.0 ? 1 : 0;
-        std::printf("  sample (%3u, %3u): terrain (%3d,%3d,%3d) 2D (%3d,%3d,%3d) dE %.2f\n",
-                    x,
-                    y,
-                    a[0],
-                    a[1],
-                    a[2],
-                    b[0],
-                    b[1],
-                    b[2],
-                    dE);
+        if (dE <= 10.0) {
+            ++matches;
+        } else {
+            mismatches << "\n  (" << x << ", " << y << "): terrain (" << int(a[0]) << ", " << int(a[1]) << ", "
+                       << int(a[2]) << ") 2D (" << int(b[0]) << ", " << int(b[1]) << ", " << int(b[2]) << ") dE " << dE;
+        }
     }
-    std::printf("samples within dE 10 of the 2D render: %d / %d\n", matches, samples);
-    EXPECT_GE(matches, 18) << "the drape where the DEM is missing does not match the 2D map";
+    EXPECT_GE(matches, 18) << "the drape where the DEM is missing does not match the 2D map; " << samples - matches
+                           << " of " << samples << " samples off by more than dE 10:" << mismatches.str();
 }
 
 } // namespace
@@ -401,9 +396,8 @@ TEST(TerrainOffline, DEMFromOfflineDatabase) {
             ++(resource.tileData->urlTemplate == demURL ? demTiles : baseTiles);
         }
     }
-    std::printf("online frame needed the style, %d DEM tiles, %d basemap tiles\n", demTiles, baseTiles);
-    ASSERT_GT(demTiles, 0);
-    ASSERT_GT(baseTiles, 0);
+    ASSERT_GT(demTiles, 0) << "the online frame requested no DEM tile";
+    ASSERT_GT(baseTiles, 0) << "the online frame requested no basemap tile";
 
     // The offline database: one region for the view's tile range, holding exactly those resources.
     const std::string path = "test/fixtures/offline_database/terrain_offline.db";
@@ -422,11 +416,8 @@ TEST(TerrainOffline, DEMFromOfflineDatabase) {
         ASSERT_TRUE(region);
         OfflineRegionStatus status;
         db.putRegionResources(region->getID(), served, status);
-        std::printf("offline region %lld: %llu resources, %llu bytes\n",
-                    static_cast<long long>(region->getID()),
-                    static_cast<unsigned long long>(status.completedResourceCount),
-                    static_cast<unsigned long long>(status.completedResourceSize));
-        ASSERT_EQ(status.completedResourceCount, served.size());
+        ASSERT_EQ(status.completedResourceCount, served.size())
+            << "offline region " << region->getID() << " holds " << status.completedResourceSize << " bytes";
     }
 
     // Offline: the engine's own loader on that database, with network access disabled. The host
@@ -467,12 +458,8 @@ TEST(TerrainOffline, DEMFromOfflineDatabase) {
         }
     }
     const double fraction = static_cast<double>(differing) / (viewSize * viewSize);
-    std::printf("online frame: %d pure black px; offline vs online: %d px differ (%.4f %%)\n",
-                onlineBlack,
-                differing,
-                fraction * 100.0);
-    ASSERT_EQ(onlineBlack, 0);
-    EXPECT_LE(fraction, 0.01) << "the offline render differs from the online one";
+    ASSERT_EQ(onlineBlack, 0) << "the online frame has pure black pixels";
+    EXPECT_LE(fraction, 0.01) << "the offline render differs from the online one: " << differing << " px";
 
     deleteDatabase();
 }

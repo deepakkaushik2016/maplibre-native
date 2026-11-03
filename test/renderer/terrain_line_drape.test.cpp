@@ -10,7 +10,6 @@
 #include <mln/util/image.hpp>
 #include <mln/util/run_loop.hpp>
 
-#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -291,12 +290,6 @@ TEST(TerrainLineDrape, EveryLineVariantDrapesLikeTheSolidLine) {
     const Diff gradDashed = drapeDiff(std::string(R"({"line-width": 4, "line-dasharray": [3, 2], )") + gradient + "}",
                                       true);
     const Diff pattern = drapeDiff(R"({"line-pattern": "red", "line-width": 4})");
-
-    std::printf("solid       changed %d / %d mean %.3f\n", solid.changed, solid.inked, solid.mean);
-    std::printf("dashed      changed %d / %d mean %.3f\n", dashed.changed, dashed.inked, dashed.mean);
-    std::printf("gradient    changed %d / %d mean %.3f\n", grad.changed, grad.inked, grad.mean);
-    std::printf("grad+dashed changed %d / %d mean %.3f\n", gradDashed.changed, gradDashed.inked, gradDashed.mean);
-    std::printf("pattern     changed %d / %d mean %.3f\n", pattern.changed, pattern.inked, pattern.mean);
 
     expectLikeTheSolidLine(solid, dashed, "line-dasharray (SDF)");
     expectLikeTheSolidLine(solid, grad, "line-gradient");
