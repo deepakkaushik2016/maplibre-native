@@ -1290,7 +1290,8 @@ TEST(TerrainCamera, AJumpOntoGroundAboveTheEyeLandsOnIt) {
     map.jumpTo(CameraOptions().withCenter(LatLng{stepLatitude - 0.03, 11.39}));
     ASSERT_LT(eyeAltitude(), trailheadPlateauMeters) << "the jump puts the eye inside the plateau";
 
-    renderUntil([&] { return std::abs(centerAltitude() - trailheadPlateauMeters) < 1.0; });
+    ASSERT_TRUE(renderUntil([&] { return std::abs(centerAltitude() - trailheadPlateauMeters) < 1.0; }))
+        << "the center never reached the plateau";
     // A few frames more, so a centre that only passed through the plateau's height is caught.
     for (int i = 0; i < 10; ++i) {
         loop.runOnce();
