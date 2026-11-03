@@ -87,6 +87,10 @@ std::optional<double> Renderer::queryTerrainElevation(const LatLng& point) const
     return terrain->findElevationForLatLng(point);
 }
 
+size_t Renderer::getLayerGroupCountForTests(const std::string& name) const {
+    return impl->orchestrator.numLayerGroupsNamedForTests(name);
+}
+
 AnnotationIDs Renderer::queryShapeAnnotations(const ScreenBox& box) const {
     if (!LayerManager::annotationsEnabled) {
         return {};

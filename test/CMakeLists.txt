@@ -30,6 +30,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_camera.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_fill_pattern_drape.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_query.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/renderer/terrain_replace.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_drape_resolution.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_occlusion.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_elevation.test.cpp

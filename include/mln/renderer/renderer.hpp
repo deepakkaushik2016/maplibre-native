@@ -75,6 +75,10 @@ public:
      */
     std::optional<double> queryTerrainElevation(const LatLng& point) const;
 
+    /// Test only: how many layer groups named `name` the renderer currently draws. The terrain
+    /// mesh group is "terrain"; more than one means a replaced terrain left its mesh behind.
+    size_t getLayerGroupCountForTests(const std::string& name) const;
+
     /// Feature extension query
     FeatureExtensionValue queryFeatureExtensions(
         const std::string& sourceID,
