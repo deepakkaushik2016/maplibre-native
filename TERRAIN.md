@@ -301,7 +301,8 @@ Implemented:
 - Line antialiasing gamma handled per drawable (1.0 when draped into a terrain
   render target, perspective ratio otherwise) for every line variant (plain,
   gradient, pattern, SDF, gradient-SDF; the non-plain variants are run on Metal
-  only and compile-validated on GL/Vulkan/WebGPU, see Cleanup before merging)
+  and on Linux OpenGL/Vulkan software rasterizers, and only compile-validated on
+  WebGPU, see Cleanup before merging)
 - Mesh skirts on all four backends: each tile edge is extruded into a curtain
   that hangs below the surface by `u_elevation_offset` (gl-js `u_ele_delta`),
   hiding the cracks/stitches between neighbouring tiles at different zoom
@@ -1341,21 +1342,25 @@ terrain during placement sees the previous frame's state - the same first-frame 
   is now a single `demSubTileOffset` helper. The remaining logs in
   render_terrain.cpp are one-time warning/error logs; terrain_layer_tweaker.cpp
   has no per-frame logging.
-- **(done on Metal; GL/Vulkan/WebGPU compile-validated only)** Extend the draped-flag gamma
-  handling to the line gradient/pattern/SDF variants: `LineLayerTweaker` sets the draped flag
-  (`pad1`) for every line variant, and the gradient, pattern, SDF and gradient-SDF vertex shaders
-  use gamma 1.0 when it is set. The gradient-SDF variant (line-gradient + line-dasharray) also
-  lacked `apply_drape_transform` on every backend, so it was drawn unplaced into the drape
-  targets; it now has it. Validation, precisely:
-  - **Metal - run.** `TerrainLineDrape.EveryLineVariantDrapesLikeTheSolidLine` (terrain at
-    exaggeration 0 vs terrain off, with a positive control that the drape path engaged) fails
-    without the change and passes with it.
-  - **GL (GLSL ES 3.00), Vulkan (GLSL 450 -> SPIR-V) and WebGPU (WGSL) - compiled, never run.**
-    Every line program's source, assembled the way the engine assembles it (prelude, defines,
-    `HAS_UNIFORM_u_*` none/all, Vulkan surface transform on/off, WGSL through the engine's own
-    preprocessor), compiles with glslang 16.6.0 (GL linked vert+frag; Vulkan with Vulkan rules)
-    and validates with naga 30.0.1. Nothing about their rendering output is verified; Android
-    Vulkan and the GLES fallback still need a device/CI run of the gtest.
+- **(done: run on Metal, Linux OpenGL and Linux Vulkan; WebGPU compile-validated only)** Extend
+  the draped-flag gamma handling to the line gradient/pattern/SDF variants: `LineLayerTweaker`
+  sets the draped flag (`pad1`) for every line variant, and the gradient, pattern, SDF and
+  gradient-SDF vertex shaders use gamma 1.0 when it is set. The gradient-SDF variant
+  (line-gradient + line-dasharray) also lacked `apply_drape_transform` on every backend, so it was
+  drawn unplaced into the drape targets; it now has it. Validation, precisely:
+  - **Run:** `TerrainLineDrape.EveryLineVariantDrapesLikeTheSolidLine` (terrain at exaggeration 0
+    vs terrain off, with a positive control that the drape path engaged: solid-line mean diff
+    Metal 0.013, GL 0.059, Vulkan 0.012) passes on **macOS Metal**, and on **Linux OpenGL
+    (Mesa llvmpipe, EGL surfaceless)** and **Linux Vulkan (Mesa lavapipe)** in a local
+    `ubuntu:26.04` arm64 container (`scripts/terrain-linux.Dockerfile`), via
+    `scripts/terrain-ci.sh opengl|vulkan`. It fails without the change on all three: on
+    Metal with the whole change reverted, and on GL and Vulkan with only their line shaders
+    reverted (tweaker kept), so each backend's shader edit is what makes it pass. The terrain
+    render tests fail the same known set on all three backends.
+  - **Not run:** WebGPU (not a backend the app uses) - its WGSL compiles with naga 30.0.1 via
+    `scripts/shadercheck/check_line_shaders.py`, which also compiles the GL/Vulkan sources with
+    glslang. Real GPUs (Android Vulkan, the GLES fallback on devices) are not covered; the
+    Linux runs are Mesa software rasterizers.
   - The gl-js oracles `terrain/line-{solid,dasharray,gradient}` are known failures until the
     camera is anchored to the terrain (native renders them blank, the control included).
 - **(done)** Heatmap is elevated, not draped, as in gl-js (which does not drape it): each

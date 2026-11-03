@@ -9,11 +9,11 @@
 #   5. exit non-zero on any failure that is not named in
 #      metrics/ignores/terrain-known.json.
 #
-# Usage: scripts/terrain-ci.sh [metal|opengl]
+# Usage: scripts/terrain-ci.sh [metal|opengl|vulkan]
 #   default backend: metal on macOS, opengl on Linux.
 #
 # Environment:
-#   BUILD_DIR          build directory (default build-macos-metal / build-linux-opengl)
+#   BUILD_DIR          build directory (default build-macos-metal / build-linux-opengl / build-linux-vulkan)
 #   CMAKE_CONFIGURE_ARGS  extra args for the configure step (only used when configuring)
 #   JOBS               parallel build jobs (default: CPU count)
 #   SKIP_BUILD=1       use the existing binaries as-is
@@ -46,7 +46,17 @@ case "$BACKEND" in
     : "${BUILD_DIR:=build-linux-opengl}"
     if [[ -z "${DISPLAY:-}" ]] && command -v xvfb-run >/dev/null; then WRAP=(xvfb-run -a); else WRAP=(); fi
     ;;
-  *) echo "unknown backend: $BACKEND (expected metal|opengl)" >&2; exit 64 ;;
+  vulkan)
+    PRESET=linux-vulkan
+    MANIFEST=metrics/linux-vulkan-terrain.json
+    : "${BUILD_DIR:=build-linux-vulkan}"
+    # Same driver pinning as linux-ci.yml: lavapipe only (Mesa's gfxstream ICD leaks a pthread key
+    # per vkCreateInstance and exhausts them in the render tests).
+    : "${VK_DRIVER_FILES:=/usr/share/vulkan/icd.d/lvp_icd.json}"
+    export VK_DRIVER_FILES
+    if [[ -z "${DISPLAY:-}" ]] && command -v xvfb-run >/dev/null; then WRAP=(xvfb-run -a); else WRAP=(); fi
+    ;;
+  *) echo "unknown backend: $BACKEND (expected metal|opengl|vulkan)" >&2; exit 64 ;;
 esac
 
 JOBS="${JOBS:-$( (sysctl -n hw.ncpu 2>/dev/null || nproc) )}"
