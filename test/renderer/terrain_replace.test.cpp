@@ -67,7 +67,8 @@ std::string demStyle(const std::string& terrain) {
         "geometry": {"type": "Polygon", "coordinates": [[[9.5, 45.7], [10.5, 45.7], [10.5, 46.3], [9.5, 46.3], [9.5, 45.7]]]}
       }
     }
-  },)STYLE" + terrain +
+  },)STYLE" +
+           terrain +
            R"STYLE(
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "white"}},

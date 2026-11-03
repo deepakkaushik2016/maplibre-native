@@ -224,9 +224,9 @@ PremultipliedImage render(const std::string& paint, bool terrain, bool lineMetri
 }
 
 struct Diff {
-    double mean = 0;   // mean absolute channel difference over the whole image, 0-255
-    int changed = 0;   // pixels with any channel off by more than 48
-    int inked = 0;     // non-white pixels in the terrain-off render (how much line there is)
+    double mean = 0; // mean absolute channel difference over the whole image, 0-255
+    int changed = 0; // pixels with any channel off by more than 48
+    int inked = 0;   // non-white pixels in the terrain-off render (how much line there is)
 };
 
 Diff compare(const PremultipliedImage& off, const PremultipliedImage& on) {
@@ -271,8 +271,8 @@ void expectLikeTheSolidLine(const Diff& solid, const Diff& variant, const char* 
     // 690-2000 (about half their ink), so the bound sits two orders of magnitude below the defect.
     const double solidShare = double(solid.changed) / solid.inked;
     EXPECT_LE(variant.changed, solidShare * variant.inked * 1.5 + 10)
-        << "solid changed " << solid.changed << "/" << solid.inked << ", " << name << " changed "
-        << variant.changed << "/" << variant.inked << " (mean " << variant.mean << " vs " << solid.mean << ")";
+        << "solid changed " << solid.changed << "/" << solid.inked << ", " << name << " changed " << variant.changed
+        << "/" << variant.inked << " (mean " << variant.mean << " vs " << solid.mean << ")";
 }
 
 } // namespace
@@ -288,8 +288,8 @@ TEST(TerrainLineDrape, EveryLineVariantDrapesLikeTheSolidLine) {
     EXPECT_GT(solid.mean, 0.0) << "terrain-on and terrain-off renders are identical: the drape path never engaged";
     const Diff dashed = drapeDiff(R"({"line-color": "#d00", "line-width": 4, "line-dasharray": [3, 2]})");
     const Diff grad = drapeDiff(std::string(R"({"line-width": 4, )") + gradient + "}", true);
-    const Diff gradDashed = drapeDiff(
-        std::string(R"({"line-width": 4, "line-dasharray": [3, 2], )") + gradient + "}", true);
+    const Diff gradDashed = drapeDiff(std::string(R"({"line-width": 4, "line-dasharray": [3, 2], )") + gradient + "}",
+                                      true);
     const Diff pattern = drapeDiff(R"({"line-pattern": "red", "line-width": 4})");
 
     std::printf("solid       changed %d / %d mean %.3f\n", solid.changed, solid.inked, solid.mean);

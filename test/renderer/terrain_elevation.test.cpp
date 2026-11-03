@@ -192,7 +192,8 @@ std::string demStyle(const std::string& terrain) {
       "maxzoom": 10,
       "tileSize": 256
     }
-  },)STYLE" + terrain +
+  },)STYLE" +
+           terrain +
            R"STYLE(
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "white"}}
@@ -277,7 +278,11 @@ TEST(TerrainElevation, RendererQueryNulloptWhenTileHasNoData) {
     // A loaded tile is fetched again when it goes from optional back to required: zooming out
     // past the DEM's maxzoom (with the z9 parent held back) keeps the z10 tile as an optional
     // fill-in, and zooming back in makes it required again.
-    enum class Phase { Deliver, Hold, Wipe };
+    enum class Phase {
+        Deliver,
+        Hold,
+        Wipe
+    };
     Phase phase = Phase::Deliver;
     int wipes = 0;
 
@@ -317,7 +322,9 @@ TEST(TerrainElevation, RendererQueryNulloptWhenTileHasNoData) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     };
-    const auto query = [&] { return frontend.getRenderer()->queryTerrainElevation(knownPoint()); };
+    const auto query = [&] {
+        return frontend.getRenderer()->queryTerrainElevation(knownPoint());
+    };
 
     map.getStyle().loadJSON(demStyle(R"("terrain": {"source": "dem", "exaggeration": 1},)"));
     map.jumpTo(CameraOptions().withCenter(knownPoint()).withZoom(12.0));
