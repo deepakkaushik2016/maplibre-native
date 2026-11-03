@@ -103,6 +103,35 @@ const DEMData* demDataOf(const RenderTile& renderTile) {
     return demData.getImagePtr() && demData.dim > 0 ? &demData : nullptr;
 }
 
+// The DEM height (not exaggerated) at a coordinate local to a tile the DEM tile covers, sampled as
+// the shaders' get_elevation() samples the DEM texture: bilinear between texels, with the texel
+// indices clamped to the data plus its 2-texel border (backfilled from the neighbouring DEM tiles),
+// not to the data alone. Across a DEM tile's last texel the height thus runs on into the
+// neighbour, as maplibre-gl-js Terrain.getDEMElevation reads it.
+float sampleDEM(const DEMData& dem, const DEMSubTileOffset& off, float x, float y) {
+    const float dim = static_cast<float>(dem.dim);
+    const float px = (off.dx * util::EXTENT + x) / off.scale / util::EXTENT * dim;
+    const float py = (off.dy * util::EXTENT + y) / off.scale / util::EXTENT * dim;
+    const float x0 = std::floor(px);
+    const float y0 = std::floor(py);
+    const float fx = px - x0;
+    const float fy = py - y0;
+    const auto texel = [&](float t) {
+        return static_cast<int32_t>(util::clamp(t, -2.0f, dim + 1.0f));
+    };
+    const int32_t xa = texel(x0);
+    const int32_t xb = texel(x0 + 1.0f);
+    const int32_t ya = texel(y0);
+    const int32_t yb = texel(y0 + 1.0f);
+    const auto tl = static_cast<float>(dem.get(xa, ya));
+    const auto tr = static_cast<float>(dem.get(xb, ya));
+    const auto bl = static_cast<float>(dem.get(xa, yb));
+    const auto br = static_cast<float>(dem.get(xb, yb));
+    const float top = tl + (tr - tl) * fx;
+    const float bottom = bl + (br - bl) * fx;
+    return top + (bottom - top) * fy;
+}
+
 } // namespace
 
 RenderTerrain::RenderTerrain(Immutable<style::Terrain::Impl> impl_)
@@ -843,25 +872,7 @@ RenderTerrain::TileElevation::TileElevation(
       exaggeration(exaggeration_) {}
 
 float RenderTerrain::TileElevation::height(float x, float y) const {
-    // Map the tile-local coordinate into the (possibly ancestor) DEM tile
-    const float xInDem = (dx * util::EXTENT + x) / scale;
-    const float yInDem = (dy * util::EXTENT + y) / scale;
-
-    // Bilinear interpolation of the DEM texels, as in maplibre-gl-js Terrain.getDEMElevation
-    const float dim = static_cast<float>(dem->dim);
-    const float px = util::clamp(xInDem / util::EXTENT * dim, 0.0f, dim - 1.0f);
-    const float py = util::clamp(yInDem / util::EXTENT * dim, 0.0f, dim - 1.0f);
-    const auto x0 = static_cast<int32_t>(std::floor(px));
-    const auto y0 = static_cast<int32_t>(std::floor(py));
-    const float fx = px - static_cast<float>(x0);
-    const float fy = py - static_cast<float>(y0);
-    const float tl = static_cast<float>(dem->get(x0, y0));
-    const float tr = static_cast<float>(dem->get(x0 + 1, y0));
-    const float bl = static_cast<float>(dem->get(x0, y0 + 1));
-    const float br = static_cast<float>(dem->get(x0 + 1, y0 + 1));
-    const float top = tl + (tr - tl) * fx;
-    const float bottom = bl + (br - bl) * fx;
-    return top + (bottom - top) * fy;
+    return sampleDEM(*dem, {.scale = scale, .dx = dx, .dy = dy}, x, y);
 }
 
 std::optional<RenderTerrain::TileElevation> RenderTerrain::getTileElevation(const UnwrappedTileID& tileID) const {
@@ -873,6 +884,9 @@ std::optional<RenderTerrain::TileElevation> RenderTerrain::getTileElevation(cons
     if (!demRenderTile) {
         return std::nullopt;
     }
+    // A coordinate outside the tile, which only Tile mode's buffer-zone symbols have, needs no
+    // neighbour lookup: the shaders sample this tile's DEM there too, into its border and then
+    // clamped, and so does sampleDEM.
     const auto off = demSubTileOffset(tileID.canonical, demRenderTile->id.canonical);
     return TileElevation(*demDataOf(*demRenderTile), off.scale, off.dx, off.dy, exaggeration);
 }
@@ -886,8 +900,7 @@ std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_
     if (!demRenderTile) {
         return std::nullopt;
     }
-    const auto off = demSubTileOffset(tileID.canonical, demRenderTile->id.canonical);
-    return TileElevation(*demDataOf(*demRenderTile), off.scale, off.dx, off.dy, 1.0f).height(x, y);
+    return sampleDEM(*demDataOf(*demRenderTile), demSubTileOffset(tileID.canonical, demRenderTile->id.canonical), x, y);
 }
 
 float RenderTerrain::getElevationWithExaggeration(const UnwrappedTileID& tileID, float x, float y) const {
