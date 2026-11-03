@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Also fail when a test on the known-failure list passes, so fixed tests leave the list.
+  STRICT_KNOWN: "1"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
