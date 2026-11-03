@@ -103,6 +103,15 @@ const DEMData* demDataOf(const RenderTile& renderTile) {
     return demData.getImagePtr() && demData.dim > 0 ? &demData : nullptr;
 }
 
+// demDataOf, holding the bucket that owns the data.
+std::shared_ptr<const DEMData> sharedDEMDataOf(const RenderTile& renderTile) {
+    if (!demDataOf(renderTile)) {
+        return nullptr;
+    }
+    const auto& bucket = static_cast<const RasterDEMTile&>(renderTile.getTile()).getSharedBucket();
+    return {bucket, &bucket->getDEMData()};
+}
+
 // The DEM height (not exaggerated) at a coordinate local to a tile the DEM tile covers, sampled as
 // the shaders' get_elevation() samples the DEM texture: bilinear between texels, with the texel
 // indices clamped to the data plus its 2-texel border (backfilled from the neighbouring DEM tiles),
@@ -864,8 +873,8 @@ const RenderTile* RenderTerrain::findDEMTile(const UnwrappedTileID& tileID) cons
 }
 
 RenderTerrain::TileElevation::TileElevation(
-    const DEMData& dem_, float scale_, float dx_, float dy_, float exaggeration_)
-    : dem(&dem_),
+    std::shared_ptr<const DEMData> dem_, float scale_, float dx_, float dy_, float exaggeration_)
+    : dem(std::move(dem_)),
       scale(scale_),
       dx(dx_),
       dy(dy_),
@@ -888,7 +897,7 @@ std::optional<RenderTerrain::TileElevation> RenderTerrain::getTileElevation(cons
     // neighbour lookup: the shaders sample this tile's DEM there too, into its border and then
     // clamped, and so does sampleDEM.
     const auto off = demSubTileOffset(tileID.canonical, demRenderTile->id.canonical);
-    return TileElevation(*demDataOf(*demRenderTile), off.scale, off.dx, off.dy, exaggeration);
+    return TileElevation(sharedDEMDataOf(*demRenderTile), off.scale, off.dx, off.dy, exaggeration);
 }
 
 std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_, float x, float y) const {
@@ -900,6 +909,7 @@ std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_
     if (!demRenderTile) {
         return std::nullopt;
     }
+    // Sampled within this call, before anything can replace the tile's DEM: no ref is needed.
     return sampleDEM(*demDataOf(*demRenderTile), demSubTileOffset(tileID.canonical, demRenderTile->id.canonical), x, y);
 }
 

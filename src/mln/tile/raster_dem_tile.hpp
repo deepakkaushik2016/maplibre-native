@@ -76,6 +76,8 @@ public:
     bool layerPropertiesUpdated(const Immutable<style::LayerProperties>& layerProperties) override;
 
     HillshadeBucket* getBucket() const;
+    /// The bucket, shared: holding it keeps its DEM data alive across a reload of the tile.
+    const std::shared_ptr<HillshadeBucket>& getSharedBucket() const { return bucket; }
     void backfillBorder(const RasterDEMTile& borderTile, DEMTileNeighbors mask);
 
     // neighboringTiles is a bitmask for which neighboring tiles have been backfilled

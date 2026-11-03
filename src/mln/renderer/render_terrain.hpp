@@ -229,18 +229,18 @@ public:
      * Covers the tile with the same DEM tile, its own or its closest loaded ancestor with
      * data, that getElevation reads, so each sample is O(1) with no tile search. Samples as
      * the shaders' get_elevation() does, so a point is lifted by exactly what it is drawn at.
-     * It points into the DEM source's tile data: use it within the frame that made it.
+     * Holds the DEM tile's bucket, so the data stays valid even if the tile reloads meanwhile.
      */
     class TileElevation {
     public:
-        TileElevation(const DEMData& dem, float scale, float dx, float dy, float exaggeration);
+        TileElevation(std::shared_ptr<const DEMData> dem, float scale, float dx, float dy, float exaggeration);
         /// The DEM height in metres (not exaggerated) at a tile-local coordinate
         float height(float x, float y) const;
         /// The exaggerated height in metres the shaders lift a tile-local point by
         float operator()(const Point<float>& point) const { return height(point.x, point.y) * exaggeration; }
 
     private:
-        const DEMData* dem;
+        std::shared_ptr<const DEMData> dem;
         /// Maps the tile into the DEM tile: it is the 1/scale sub-square at (dx, dy)
         float scale;
         float dx;
