@@ -601,6 +601,13 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
 
     // Symbol placement.
     assert((updateParameters->mode == MapMode::Tile) || !placedSymbolDataCollected);
+    // Placement collides symbols where they are drawn, lifted onto the terrain, so it reads the
+    // DEM. Bind the DEM source first: a still render places only once, before the renderer would.
+    const RenderTerrain* placementTerrain = nullptr;
+    if (renderTerrain && renderTerrain->isEnabled()) {
+        renderTerrain->prepareSource(*this);
+        placementTerrain = renderTerrain.get();
+    }
     bool symbolBucketsChanged = false;
     bool symbolBucketsAdded = false;
     std::set<std::string> usedSymbolLayers;
@@ -640,7 +647,7 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
         symbolBucketsChanged |= renderTreeParameters->placementChanged;
         if (renderTreeParameters->placementChanged) {
             Mutable<Placement> placement = Placement::create(updateParameters, placementController.getPlacement());
-            placement->placeLayers(layersNeedPlacement);
+            placement->placeLayers(layersNeedPlacement, placementTerrain);
             placementController.setPlacement(std::move(placement));
             crossTileSymbolIndex.pruneUnusedLayers(usedSymbolLayers);
             for (const auto& entry : renderSources) {
@@ -659,7 +666,7 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
         if (renderTreeParameters->placementChanged) {
             Mutable<Placement> placement = Placement::create(updateParameters);
             placement->collectPlacedSymbolData(placedSymbolDataCollected);
-            placement->placeLayers(layersNeedPlacement);
+            placement->placeLayers(layersNeedPlacement, placementTerrain);
             placementController.setPlacement(std::move(placement));
         }
         crossTileSymbolIndex.reset();
@@ -843,10 +850,10 @@ std::vector<Feature> RenderOrchestrator::queryRenderedFeatures(
     // a screen point against them where its ray meets sea level. Hand them, for each point, the
     // pixel where the terrain point under it would sit at sea level, so the sea-level matching
     // lands on the draped feature the point shows (gl-js #8158 resolves its query geometry on
-    // the terrain the same way). Symbols are placed and collided in plain screen space, so they
-    // keep the original geometry; when only symbol layers are queried, the sources match nothing
-    // against the geometry (symbol features are not in their feature index) and the raycast is
-    // skipped.
+    // the terrain the same way). Symbols are collided where they are drawn, lifted onto the
+    // terrain (see Placement::placeSymbol), and matched against those boxes, so they keep the
+    // original geometry; when only symbol layers are queried, the sources match nothing against the
+    // geometry (symbol features are not in their feature index) and the raycast is skipped.
     const bool matchesTileFeatures = std::ranges::any_of(filteredLayers, [](const auto& pair) {
         return pair.second->baseImpl->getTypeInfo()->crossTileIndex != style::LayerTypeInfo::CrossTileIndex::Required;
     });

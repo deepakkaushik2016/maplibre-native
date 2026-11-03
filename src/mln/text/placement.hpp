@@ -11,6 +11,7 @@
 
 namespace mln {
 
+class RenderTerrain;
 class SymbolBucket;
 class SymbolInstance;
 using SymbolInstanceReferences = std::vector<std::reference_wrapper<const SymbolInstance>>;
@@ -121,7 +122,8 @@ public:
                                      std::optional<Immutable<Placement>> prevPlacement = std::nullopt);
 
     virtual ~Placement();
-    virtual void placeLayers(const RenderLayerReferences&);
+    /// `terrain`: the terrain symbols are drawn on, read during this call only; null without terrain.
+    virtual void placeLayers(const RenderLayerReferences&, const RenderTerrain* terrain);
     void updateLayerBuckets(const RenderLayer&, const TransformState&, bool updateOpacities) const;
     virtual float symbolFadeChange(TimePoint now) const;
     virtual bool hasTransitions(TimePoint now) const;
@@ -200,6 +202,8 @@ protected:
     CollisionGroups collisionGroups;
     mutable std::optional<Immutable<Placement>> prevPlacement;
     bool showCollisionBoxes = false;
+    // The terrain symbols are drawn on, set while placeLayers runs.
+    const RenderTerrain* terrain = nullptr;
 
     // Cache being used by placeSymbol()
     std::vector<ProjectedCollisionBox> textBoxes;

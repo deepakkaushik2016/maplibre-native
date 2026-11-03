@@ -6,6 +6,7 @@
 #include <mln/tile/tile_id.hpp>
 #include <mln/util/constants.hpp>
 #include <mln/util/geo.hpp>
+#include <mln/util/geometry.hpp>
 #include <mln/gfx/vertex_buffer.hpp>
 #include <mln/gfx/index_buffer.hpp>
 #include <mln/renderer/terrain_cache_policy.hpp>
@@ -30,6 +31,7 @@ class LatLng;
 class TransformState;
 class UpdateParameters;
 class RenderSource;
+class RenderTile;
 class PaintParameters;
 class RenderTree;
 class LayerGroupBase;
@@ -221,6 +223,35 @@ public:
     /// As getElevationForLatLng, but empty where no loaded DEM tile covers the point (rather than 0).
     std::optional<double> findElevationForLatLng(const LatLng& latLng) const;
 
+    /**
+     * @brief The terrain height under one tile's points, resolved to its DEM tile up front
+     *
+     * Covers the tile with the same DEM tile, its own or its closest loaded ancestor with
+     * data, that getElevation reads, so each sample is O(1) with no tile search. It points
+     * into the DEM source's tile data: use it within the frame that made it.
+     */
+    class TileElevation {
+    public:
+        TileElevation(const DEMData& dem, float scale, float dx, float dy, float exaggeration);
+        /// The DEM height in metres (not exaggerated) at a tile-local coordinate, clamped to
+        /// the DEM's edge outside the tile
+        float height(float x, float y) const;
+        /// The exaggerated height in metres the shaders lift a tile-local point by
+        float operator()(const Point<float>& point) const { return height(point.x, point.y) * exaggeration; }
+
+    private:
+        const DEMData* dem;
+        /// Maps the tile into the DEM tile: it is the 1/scale sub-square at (dx, dy)
+        float scale;
+        float dx;
+        float dy;
+        float exaggeration;
+    };
+
+    /// The terrain under `tileID`'s points; empty when no loaded DEM tile covers it or the
+    /// terrain is flat (exaggeration 0), where every point sits at sea level.
+    std::optional<TileElevation> getTileElevation(const UnwrappedTileID& tileID) const;
+
     /// What every raycast through one transform shares, over the DEM loaded at the time.
     struct RaycastSetup {
         /// Inverse of the transform's projection matrix (world pixels, z in metres -> clip)
@@ -397,6 +428,8 @@ public:
 private:
     /// The zoom of the finest loaded DEM tile that has data, or -1 when there is none.
     int finestDEMZoom() const;
+    /// The loaded DEM tile with data that covers `tileID`: its own, or its closest ancestor.
+    const RenderTile* findDEMTile(const UnwrappedTileID& tileID) const;
     /// The DEM height (not exaggerated) at a tile coordinate, as getElevation reads it, but
     /// empty where no loaded DEM tile covers the coordinate (rather than 0).
     std::optional<float> findElevation(const UnwrappedTileID& tileID, float x, float y) const;

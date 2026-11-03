@@ -814,21 +814,15 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
     return findElevation(tileID, x, y).value_or(0.0f);
 }
 
-std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_, float x, float y) const {
+const RenderTile* RenderTerrain::findDEMTile(const UnwrappedTileID& tileID) const {
     if (!demSource) {
-        return std::nullopt;
+        return nullptr;
     }
-
-    UnwrappedTileID tileID = tileID_;
-    if (!normalizeTileCoordinates(tileID, x, y)) {
-        return std::nullopt;
-    }
-
-    // Find the DEM tile matching the requested tile, or its closest available ancestor
+    // The DEM tile matching the requested tile, or its closest available ancestor. Tiles with no
+    // DEM data are skipped, so a covering ancestor that has some answers instead.
     const auto renderTiles = demSource->getRawRenderTiles();
     const RenderTile* demRenderTile = nullptr;
     int bestZoom = -1;
-    // Tiles with no DEM data are skipped, so a covering ancestor that has some answers instead.
     for (const auto& renderTile : *renderTiles) {
         const UnwrappedTileID& candidate = renderTile.id;
         if ((candidate == tileID || tileID.isChildOf(candidate)) && std::cmp_greater(candidate.canonical.z, bestZoom) &&
@@ -837,33 +831,63 @@ std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_
             demRenderTile = &renderTile;
         }
     }
-    if (!demRenderTile) {
-        return std::nullopt;
-    }
+    return demRenderTile;
+}
 
-    const DEMData& demData = *demDataOf(*demRenderTile);
+RenderTerrain::TileElevation::TileElevation(
+    const DEMData& dem_, float scale_, float dx_, float dy_, float exaggeration_)
+    : dem(&dem_),
+      scale(scale_),
+      dx(dx_),
+      dy(dy_),
+      exaggeration(exaggeration_) {}
 
+float RenderTerrain::TileElevation::height(float x, float y) const {
     // Map the tile-local coordinate into the (possibly ancestor) DEM tile
-    const UnwrappedTileID& demTileID = demRenderTile->id;
-    const auto off = demSubTileOffset(tileID.canonical, demTileID.canonical);
-    const float xInDem = (off.dx * util::EXTENT + x) / off.scale;
-    const float yInDem = (off.dy * util::EXTENT + y) / off.scale;
+    const float xInDem = (dx * util::EXTENT + x) / scale;
+    const float yInDem = (dy * util::EXTENT + y) / scale;
 
     // Bilinear interpolation of the DEM texels, as in maplibre-gl-js Terrain.getDEMElevation
-    const float dim = static_cast<float>(demData.dim);
+    const float dim = static_cast<float>(dem->dim);
     const float px = util::clamp(xInDem / util::EXTENT * dim, 0.0f, dim - 1.0f);
     const float py = util::clamp(yInDem / util::EXTENT * dim, 0.0f, dim - 1.0f);
     const auto x0 = static_cast<int32_t>(std::floor(px));
     const auto y0 = static_cast<int32_t>(std::floor(py));
     const float fx = px - static_cast<float>(x0);
     const float fy = py - static_cast<float>(y0);
-    const float tl = static_cast<float>(demData.get(x0, y0));
-    const float tr = static_cast<float>(demData.get(x0 + 1, y0));
-    const float bl = static_cast<float>(demData.get(x0, y0 + 1));
-    const float br = static_cast<float>(demData.get(x0 + 1, y0 + 1));
+    const float tl = static_cast<float>(dem->get(x0, y0));
+    const float tr = static_cast<float>(dem->get(x0 + 1, y0));
+    const float bl = static_cast<float>(dem->get(x0, y0 + 1));
+    const float br = static_cast<float>(dem->get(x0 + 1, y0 + 1));
     const float top = tl + (tr - tl) * fx;
     const float bottom = bl + (br - bl) * fx;
     return top + (bottom - top) * fy;
+}
+
+std::optional<RenderTerrain::TileElevation> RenderTerrain::getTileElevation(const UnwrappedTileID& tileID) const {
+    const float exaggeration = getExaggeration();
+    if (exaggeration <= 0.0f) {
+        return std::nullopt;
+    }
+    const RenderTile* demRenderTile = findDEMTile(tileID);
+    if (!demRenderTile) {
+        return std::nullopt;
+    }
+    const auto off = demSubTileOffset(tileID.canonical, demRenderTile->id.canonical);
+    return TileElevation(*demDataOf(*demRenderTile), off.scale, off.dx, off.dy, exaggeration);
+}
+
+std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_, float x, float y) const {
+    UnwrappedTileID tileID = tileID_;
+    if (!normalizeTileCoordinates(tileID, x, y)) {
+        return std::nullopt;
+    }
+    const RenderTile* demRenderTile = findDEMTile(tileID);
+    if (!demRenderTile) {
+        return std::nullopt;
+    }
+    const auto off = demSubTileOffset(tileID.canonical, demRenderTile->id.canonical);
+    return TileElevation(*demDataOf(*demRenderTile), off.scale, off.dx, off.dy, 1.0f).height(x, y);
 }
 
 float RenderTerrain::getElevationWithExaggeration(const UnwrappedTileID& tileID, float x, float y) const {

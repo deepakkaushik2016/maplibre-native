@@ -4,6 +4,7 @@
 #include <mln/renderer/bucket.hpp>
 #include <mln/renderer/buckets/symbol_bucket.hpp>
 #include <mln/renderer/render_layer.hpp>
+#include <mln/renderer/render_terrain.hpp>
 #include <mln/renderer/render_tile.hpp>
 #include <mln/renderer/update_parameters.hpp>
 #include <mln/tile/geometry_tile.hpp>
@@ -144,8 +145,31 @@ public:
 
     bool hasIconTextFit = getLayout().get<IconTextFit>() != IconTextFitType::None;
 
+    // Whether the text and the icon are drawn lifted onto the terrain. The symbol shaders lift the
+    // anchor by the terrain under it through the label-plane matrix, which line labels and
+    // variable anchors replace with an identity over positions projected on the CPU, at sea level
+    // (see SymbolLayerTweaker).
+    bool textOnTerrain = (placementType == SymbolPlacementType::Point || !rotateTextWithMap) &&
+                         !getBucket().hasVariablePlacement;
+    bool iconOnTerrain = (placementType == SymbolPlacementType::Point || !rotateIconWithMap) &&
+                         (!getBucket().hasVariablePlacement || !hasIconTextFit);
+
+    // The terrain under the tile's symbols; empty without terrain, or where none is drawn lifted.
+    std::optional<RenderTerrain::TileElevation> elevation;
+
     std::optional<CollisionBoundaries> avoidEdges;
 };
+
+namespace {
+// `posMatrix` for points `elevation` metres up: M * (x, y, e, 1) = M * (x, y, 0, 1) + e * M's z column.
+mat4 elevatedMatrix(const mat4& posMatrix, float elevation) {
+    mat4 m = posMatrix;
+    for (size_t i = 0; i < 4; ++i) {
+        m[12 + i] += static_cast<double>(elevation) * m[8 + i];
+    }
+    return m;
+}
+} // namespace
 
 // PlacementController implementation
 
@@ -198,11 +222,13 @@ Placement::Placement()
 
 Placement::~Placement() = default;
 
-void Placement::placeLayers(const RenderLayerReferences& layers) {
+void Placement::placeLayers(const RenderLayerReferences& layers, const RenderTerrain* terrain_) {
+    terrain = terrain_;
     for (auto it = layers.crbegin(); it != layers.crend(); ++it) {
         std::set<uint32_t> seenCrossTileIDs;
         placeLayer(*it, seenCrossTileIDs);
     }
+    terrain = nullptr;
     commit();
 }
 
@@ -243,6 +269,10 @@ void Placement::placeSymbolBucket(const BucketPlacementData& params, std::set<ui
                          placementZoom,
                          collisionGroups.get(params.sourceId),
                          getAvoidEdges(symbolBucket, renderTile.matrix)};
+    if (terrain && (ctx.textOnTerrain || ctx.iconOnTerrain)) {
+        // One DEM tile search per bucket; each symbol then samples it in O(1).
+        ctx.elevation = terrain->getTileElevation(renderTile.id);
+    }
     for (const SymbolInstance& symbol : getSortedSymbols(params, ctx.pixelRatio)) {
         if (!symbol.check(SYM_GUARD_LOC)) continue;
         if (seenCrossTileIDs.contains(symbol.getCrossTileID())) continue;
@@ -278,6 +308,17 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
     }
     const SymbolBucket& bucket = ctx.getBucket();
     const mat4& posMatrix = ctx.getRenderTile().matrix;
+    // Collide the symbol where it is drawn: with terrain, lifted by the terrain under its anchor.
+    // That puts it in the collision index, which queryRenderedFeatures matches symbols against,
+    // where a tap on it lands.
+    std::optional<mat4> onTerrainMatrix;
+    if (ctx.elevation) {
+        if (const float elevation = (*ctx.elevation)(symbolInstance.getAnchor().point); elevation != 0.0f) {
+            onTerrainMatrix = elevatedMatrix(posMatrix, elevation);
+        }
+    }
+    const mat4& textMatrix = onTerrainMatrix && ctx.textOnTerrain ? *onTerrainMatrix : posMatrix;
+    const mat4& iconMatrix = onTerrainMatrix && ctx.iconOnTerrain ? *onTerrainMatrix : posMatrix;
     const auto& collisionGroup = ctx.collisionGroup;
     auto variableTextAnchors = symbolInstance.getTextAnchors();
     textBoxes.clear();
@@ -330,7 +371,7 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
                 textBoxes.clear();
                 auto placedFeature = collisionIndex.placeFeature(collisionFeature,
                                                                  {},
-                                                                 posMatrix,
+                                                                 textMatrix,
                                                                  ctx.textLabelPlaneMatrix,
                                                                  ctx.pixelRatio,
                                                                  placedSymbol,
@@ -441,7 +482,7 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
                         auto placedIconFeature = collisionIndex.placeFeature(
                             iconCollisionFeature,
                             shift,
-                            posMatrix,
+                            iconMatrix,
                             ctx.iconLabelPlaneMatrix,
                             ctx.pixelRatio,
                             placedSymbol,
@@ -539,7 +580,7 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
         const auto& placeIconFeature = [&](const CollisionFeature& collisionFeature) {
             return collisionIndex.placeFeature(collisionFeature,
                                                shift,
-                                               posMatrix,
+                                               iconMatrix,
                                                ctx.iconLabelPlaneMatrix,
                                                ctx.pixelRatio,
                                                placedSymbol,
@@ -1381,7 +1422,7 @@ public:
         : StaticPlacement(std::move(updateParameters_)) {}
 
 private:
-    void placeLayers(const RenderLayerReferences&) override;
+    void placeLayers(const RenderLayerReferences&, const RenderTerrain*) override;
     void placeSymbolBucket(const BucketPlacementData&, std::set<uint32_t>&) override;
     void collectPlacedSymbolData(bool enable) override { collectData = enable; }
     const std::vector<PlacedSymbolData>& getPlacedSymbolsData() const override { return placedSymbolsData; }
@@ -1412,7 +1453,7 @@ private:
     bool collectData = false;
 };
 
-void TilePlacement::placeLayers(const RenderLayerReferences& layers) {
+void TilePlacement::placeLayers(const RenderLayerReferences& layers, const RenderTerrain* /*terrain*/) {
     placedSymbolsData.clear();
     seenCrossTileIDs.clear();
     intersections.clear();
