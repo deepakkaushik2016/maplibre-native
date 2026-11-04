@@ -297,8 +297,6 @@ TEST(TerrainScreenQuery, PixelToLatLngToPixelRoundTrips) {
         SCOPED_TRACE(describe(camera));
         HillsScene scene(camera);
         int hits = 0;
-        double worstRoundTrip = 0.0;
-        double worstDrawn = 0.0;
         for (const auto& finger : screenGrid()) {
             SCOPED_TRACE(::testing::Message() << "finger (" << finger.x << ", " << finger.y << ")");
             const auto ground = scene.renderer().queryTerrainLatLng(finger);
@@ -311,23 +309,16 @@ TEST(TerrainScreenQuery, PixelToLatLngToPixelRoundTrips) {
             const auto drawnMeters = scene.renderer().queryTerrainElevation(*ground);
             ASSERT_TRUE(drawnMeters) << "no DEM under the ground the finger hit";
             const double drawn = distance(scene.project(*ground, *drawnMeters), finger);
-            worstDrawn = std::max(worstDrawn, drawn);
             EXPECT_LT(drawn, 0.5) << "the ground under the finger is not drawn under it";
 
             const auto pixel = scene.renderer().queryTerrainPixel(*ground);
             ASSERT_TRUE(pixel) << "the ground under the finger has no pixel";
             EXPECT_FALSE(pixel->occluded) << "the ground the finger sees is reported hidden";
             const double roundTrip = distance(pixel->point, finger);
-            worstRoundTrip = std::max(worstRoundTrip, roundTrip);
             EXPECT_LT(roundTrip, 0.5) << "the ground under the finger maps back elsewhere";
         }
         // At pitch 75 the top rows are sky; everything else is ground.
         EXPECT_GE(hits, camera.pitch >= 75.0 ? 25 : 40);
-        std::printf("    %-46s hits %2d, worst round trip %.4f px, worst drawn %.4f px\n",
-                    describe(camera).c_str(),
-                    hits,
-                    worstRoundTrip,
-                    worstDrawn);
     }
 }
 
@@ -429,12 +420,6 @@ TEST(TerrainScreenQuery, GroundMarkedAtTheTappedLatLngIsDrawnUnderTheFinger) {
             }
             const auto [centre, count] = scene.redCentroid(finger, 24);
             ASSERT_GT(count, 2) << "no patch drawn near the finger";
-            std::printf("    %-46s finger (%3.0f, %3.0f): patch drawn %.3f px from it (%d px)\n",
-                        describe(camera).c_str(),
-                        finger.x,
-                        finger.y,
-                        distance(centre, finger),
-                        count);
             EXPECT_LT(distance(centre, finger), 0.5)
                 << "the patch is drawn at (" << centre.x << ", " << centre.y << "), not under the finger";
         }
