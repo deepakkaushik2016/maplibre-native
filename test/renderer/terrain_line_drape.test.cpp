@@ -2,7 +2,11 @@
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
 
+#include <mln/gfx/renderer_backend.hpp>
+#include <mln/gfx/backend.hpp>
+#include <mln/gfx/context.hpp>
 #include <mln/gfx/headless_frontend.hpp>
+#include <mln/gfx/rendering_stats.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
 #include <mln/style/image.hpp>
@@ -295,4 +299,85 @@ TEST(TerrainLineDrape, EveryLineVariantDrapesLikeTheSolidLine) {
     expectLikeTheSolidLine(solid, grad, "line-gradient");
     expectLikeTheSolidLine(solid, gradDashed, "line-gradient + line-dasharray (gradient SDF)");
     expectLikeTheSolidLine(solid, pattern, "line-pattern");
+}
+
+namespace {
+
+struct Ink {
+    long long red = 0;
+    long long blue = 0;
+    int pixels = 0;
+};
+
+// The summed red and blue of the non-white pixels: where the line is.
+Ink inkOf(const PremultipliedImage& image) {
+    Ink ink;
+    const size_t count = static_cast<size_t>(image.size.width) * image.size.height;
+    for (size_t i = 0; i < count; ++i) {
+        const uint8_t* px = image.data.get() + i * 4;
+        if (px[0] < 200 || px[1] < 200 || px[2] < 200) {
+            ink.red += px[0];
+            ink.blue += px[2];
+            ++ink.pixels;
+        }
+    }
+    return ink;
+}
+
+} // namespace
+
+// A drape target that re-renders after the camera moves must draw with the frame's paint params,
+// not those of the frame it last rendered in: here the line's colour follows the zoom (on Metal the
+// shader evaluates it from the params' map_zoom), red at z13.5 and blue at z14.5. In Performance
+// mode the mesh stops at z14 over this z12 DEM, so zooming from 13.5 to 14.5 keeps the same drape
+// targets: they re-render (the integer zoom changed), rather than being created afresh.
+TEST(TerrainLineDrape, RedrawnDrapeUsesTheFramesPaintParams) {
+    // Evaluate the zoom-dependent colour in the shader (off by default in headless builds), so it
+    // comes from the paint params; restored on the way out.
+    struct GPUExpressionEval {
+        bool previous = gfx::Backend::getEnableGPUExpressionEval();
+        GPUExpressionEval() { gfx::Backend::setEnableGPUExpressionEval(true); }
+        ~GPUExpressionEval() { gfx::Backend::setEnableGPUExpressionEval(previous); }
+        GPUExpressionEval(const GPUExpressionEval&) = delete;
+        GPUExpressionEval& operator=(const GPUExpressionEval&) = delete;
+    } gpuExpressionEval;
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    const std::string dem = demTile();
+    fileSource->tileResponse = [&](const Resource&) {
+        Response res;
+        res.data = std::make_shared<std::string>(dem);
+        return res;
+    };
+    HeadlessFrontend frontend{{256, 256}, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize()));
+    map.setTerrainLoadMode(TerrainLoadMode::Performance);
+    map.getStyle().loadJSON(makeStyle(
+        R"({"line-width": 6, "line-color": ["interpolate", ["linear"], ["zoom"], 13.5, "#f00", 14.5, "#00f"]})",
+        true,
+        false));
+    int drapesCreated = 0;
+    const auto renderAt = [&](double zoom) {
+        map.jumpTo(CameraOptions().withCenter(LatLng{46.0, 10.0}).withZoom(zoom).withPitch(0.0));
+        const auto& stats = frontend.getBackend()->getContext().renderingStats();
+        const int texturesBefore = stats.numCreatedTextures;
+        PremultipliedImage image;
+        for (int i = 0; i < 4; ++i) {
+            loop.runOnce();
+            image = frontend.render(map).image;
+        }
+        drapesCreated = stats.numCreatedTextures - texturesBefore;
+        return inkOf(image);
+    };
+
+    const Ink before = renderAt(13.5);
+    ASSERT_GT(before.pixels, 300) << "the line did not render";
+    ASSERT_GT(before.red, 3 * before.blue) << "the line is not red at z13.5";
+    const Ink after = renderAt(14.5);
+    ASSERT_GT(after.pixels, 300) << "the line did not render after the camera moved";
+    EXPECT_EQ(drapesCreated, 0) << "the zoom created new textures, so no existing drape target re-rendered";
+    EXPECT_GT(after.blue, 3 * after.red) << "the redrawn drape kept the paint params of the frame before";
 }
