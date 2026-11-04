@@ -26,9 +26,9 @@ public:
     const PremultipliedImage* getImage() const { return &*image; }
     const std::shared_ptr<PremultipliedImage>& getImagePtr() const { return image; }
 
-    /// Lowest elevation in the tile, in meters, excluding the backfilled border.
+    /// Lowest elevation in the tile, in whole meters rounded down, excluding the backfilled border.
     int32_t getMinElevation() const { return minElevation; }
-    /// Highest elevation in the tile, in meters, excluding the backfilled border.
+    /// Highest elevation in the tile, in whole meters rounded up, excluding the backfilled border.
     int32_t getMaxElevation() const { return maxElevation; }
 
     const int32_t dim;

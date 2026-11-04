@@ -84,6 +84,20 @@ std::string plateauTile() {
     return encodePNG(image);
 }
 
+// A Mapbox Terrain-RGB tile all at `meters`: -10000 + (R * 65536 + G * 256 + B) * 0.1.
+std::string flatTile(double meters) {
+    const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
+    PremultipliedImage image({256, 256});
+    for (uint32_t i = 0; i < 256 * 256; ++i) {
+        uint8_t* px = image.data.get() + i * 4;
+        px[0] = static_cast<uint8_t>(value >> 16);
+        px[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+        px[2] = static_cast<uint8_t>(value & 0xff);
+        px[3] = 255;
+    }
+    return encodePNG(image);
+}
+
 // A 1000 m plateau cut by a north-south valley floored at sea level, valleyHalfWidth degrees either
 // side of the centre's longitude.
 constexpr double valleyHalfWidth = 0.004;
@@ -149,7 +163,7 @@ struct TerrainQueryScene {
     util::RunLoop loop;
     std::shared_ptr<StubFileSource> fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(),
                                                                                   ClientOptions());
-    std::string tile = plateauTile();
+    std::string tile;
     HeadlessFrontend frontend{{viewSize, viewSize}, 1};
     MapAdapter map{frontend,
                    MapObserver::nullObserver(),
@@ -159,7 +173,12 @@ struct TerrainQueryScene {
     ScreenCoordinate elevated;
     ScreenCoordinate seaLevel;
 
-    explicit TerrainQueryScene(double exaggeration = 1.0, bool valley = false) {
+    double groundMeters;
+
+    /// `groundMeters`: the flat ground's height (the plateau unless given); the valley cuts the plateau.
+    explicit TerrainQueryScene(double exaggeration = 1.0, bool valley = false, double groundMeters_ = plateauMeters)
+        : tile(groundMeters_ == plateauMeters ? plateauTile() : flatTile(groundMeters_)),
+          groundMeters(groundMeters_) {
         fileSource->tileResponse = [this, valley](const Resource& resource) {
             Response res;
             if (valley && resource.tileData) {
@@ -172,7 +191,8 @@ struct TerrainQueryScene {
             return res;
         };
         map.getStyle().loadJSON(queryStyle(exaggeration));
-        map.jumpTo(CameraOptions().withCenter(center).withZoom(13.0).withPitch(50.0).withCenterAltitude(plateauMeters));
+        map.jumpTo(CameraOptions().withCenter(center).withZoom(13.0).withPitch(50.0).withCenterAltitude(
+            groundMeters == plateauMeters ? plateauMeters : groundMeters * exaggeration));
         for (int i = 0; i < 4; ++i) {
             loop.runOnce();
             image = frontend.render(map).image;
@@ -180,7 +200,7 @@ struct TerrainQueryScene {
         const auto state = frontend.getTransformState();
         EXPECT_TRUE(state);
         if (state) {
-            elevated = project(*state, onLine, plateauMeters * exaggeration);
+            elevated = project(*state, onLine, groundMeters * exaggeration);
             seaLevel = project(*state, onLine, 0.0);
         }
     }
@@ -193,7 +213,7 @@ struct TerrainQueryScene {
         SCOPED_TRACE(::testing::Message() << "elevated (" << elevated.x << ", " << elevated.y << "), sea level ("
                                           << seaLevel.x << ", " << seaLevel.y << "), " << distance() << " px apart");
         ASSERT_EQ(image.size, (Size{viewSize, viewSize}));
-        ASSERT_GT(redAround(image, elevated), 10) << "the draped line is not drawn at its 1000 m projection";
+        ASSERT_GT(redAround(image, elevated), 10) << "the draped line is not drawn at its ground's projection";
         ASSERT_EQ(redAround(image, seaLevel), 0) << "the line is drawn at its sea-level projection";
         // The two points are far apart compared to the 6 px line, so the miss case is meaningful.
         ASSERT_GT(distance(), 40.0);
@@ -244,6 +264,18 @@ TEST(TerrainQuery, BoxAroundDrapedLine) {
     EXPECT_EQ(scene.queryBox(scene.elevated, 10.0), 1u) << "a box around the draped line misses it";
     EXPECT_EQ(scene.queryBox(scene.seaLevel, 10.0), 0u)
         << "a box around where the line would sit at sea level (nothing is drawn there) hits it";
+}
+
+// The ground is 0.9 m below sea level, all of it fraction, exaggerated 500 times: the line is drawn
+// 450 m below sea level. The tap's raycast is bounded by the DEM's elevation range, which must
+// reach down to the ground: a range rounded toward zero stops the ray at sea level, the tap falls
+// back to sea level and misses the line.
+TEST(TerrainQuery, DrapedLineOnGroundJustBelowSeaLevel) {
+    TerrainQueryScene scene(500.0, false, -0.9);
+    scene.expectRenderedScene();
+    EXPECT_EQ(scene.query(scene.elevated), 1u) << "a tap on the draped line misses it";
+    EXPECT_EQ(scene.query(scene.seaLevel), 0u)
+        << "a tap where the line would sit at sea level (nothing is drawn there) hits it";
 }
 
 // At exaggeration 0 the surface is drawn flat at sea level, so the line is where the 2D map puts it.

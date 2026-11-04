@@ -4,6 +4,10 @@
 #include <mln/util/tileset.hpp>
 #include <mln/geometry/dem_data.hpp>
 
+#include <cmath>
+#include <cstdint>
+#include <vector>
+
 using namespace mln;
 
 auto fakeImage = [](Size s) {
@@ -166,3 +170,57 @@ TEST(DEMData, TerrariumNoData) {
     DEMData mapbox(image, Tileset::RasterEncoding::Mapbox);
     EXPECT_EQ(mapbox.get(0, 0), -10000);
 };
+
+namespace {
+// A Terrarium image whose pixel (x, y) is `meters[y * dim + x]`, to the nearest 1/256 m.
+PremultipliedImage terrariumImage(uint32_t dim, const std::vector<double>& meters) {
+    PremultipliedImage image({dim, dim});
+    for (size_t i = 0; i < meters.size(); ++i) {
+        const auto value = static_cast<uint32_t>(std::lround((meters[i] + 32768.0) * 256.0));
+        image.data[i * 4] = static_cast<uint8_t>(value >> 16);
+        image.data[i * 4 + 1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+        image.data[i * 4 + 2] = static_cast<uint8_t>(value & 0xFF);
+        image.data[i * 4 + 3] = 255;
+    }
+    return image;
+}
+
+void expectRangeHoldsEveryHeight(const DEMData& dem) {
+    for (int32_t y = 0; y < dem.dim; ++y) {
+        for (int32_t x = 0; x < dem.dim; ++x) {
+            EXPECT_LE(dem.getMinElevation(), dem.get(x, y)) << "at (" << x << ", " << y << ")";
+            EXPECT_GE(dem.getMaxElevation(), dem.get(x, y)) << "at (" << x << ", " << y << ")";
+        }
+    }
+}
+} // namespace
+
+// The tile's elevation range bounds the terrain for frustum culling and for the tap raycast, so it
+// must hold every height the tile decodes to, fraction of a metre included: whole metres
+// outwards, never toward zero. A peak 255/256 m above 1000 m tops out at 1001; ground 5.5 m below
+// sea level bottoms out at -6.
+TEST(DEMData, ElevationRangeHoldsEveryDecodedHeight) {
+    const DEMData dem(terrariumImage(2, {1000.0 + 255.0 / 256.0, 1000.0, -5.5, 12.25}),
+                      Tileset::RasterEncoding::Terrarium);
+    EXPECT_FLOAT_EQ(dem.get(0, 0), 1000.0f + 255.0f / 256.0f);
+    EXPECT_FLOAT_EQ(dem.get(0, 1), -5.5f);
+    EXPECT_EQ(dem.getMaxElevation(), 1001);
+    EXPECT_EQ(dem.getMinElevation(), -6);
+    expectRangeHoldsEveryHeight(dem);
+}
+
+// Whole-metre heights give the range they always did.
+TEST(DEMData, ElevationRangeOfWholeMetres) {
+    const DEMData dem(terrariumImage(2, {1000.0, 20.0, -5.0, 3.0}), Tileset::RasterEncoding::Terrarium);
+    EXPECT_EQ(dem.getMaxElevation(), 1000);
+    EXPECT_EQ(dem.getMinElevation(), -5);
+    expectRangeHoldsEveryHeight(dem);
+}
+
+// Ground entirely below sea level, all of it fraction: the range is [-1, -1], not 0 m.
+TEST(DEMData, ElevationRangeBelowSeaLevel) {
+    const DEMData dem(terrariumImage(2, {-0.5, -0.25, -0.75, -0.5}), Tileset::RasterEncoding::Terrarium);
+    EXPECT_EQ(dem.getMaxElevation(), 0);
+    EXPECT_EQ(dem.getMinElevation(), -1);
+    expectRangeHoldsEveryHeight(dem);
+}
