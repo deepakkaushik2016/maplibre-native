@@ -461,6 +461,47 @@ void Terrain_QueryElevation(::benchmark::State& state) {
     state.SetItemsProcessed(static_cast<int64_t>(state.iterations()) * 1000);
 }
 
+// 4b. Screen <-> LatLng on the terrain as drawn, one point a call (a tap's ground; a callout or
+//     scrubber dot over a trail point). Arg 0: terrain off (the sea-level conversion); 1: terrain
+//     on, a point mid-screen; 2: terrain on, a point near the top of the ground, whose line of
+//     sight is the longest.
+ScreenCoordinate screenQueryPoint(int64_t arg) {
+    return arg == 2 ? ScreenCoordinate{viewSize / 2.0, viewSize * 0.15}
+                    : ScreenCoordinate{viewSize / 2.0, viewSize / 2.0};
+}
+
+void Terrain_QueryLatLngForPixel(::benchmark::State& state) {
+    TerrainScene scene({.terrain = state.range(0) != 0});
+    scene.load();
+    scene.renderStill();
+    const ScreenCoordinate point = screenQueryPoint(state.range(0));
+    const auto* renderer = scene.frontend.getRenderer();
+    if (!renderer->queryTerrainLatLng(point)) {
+        state.SkipWithError("no ground under the point");
+        return;
+    }
+    for (auto _ : state) {
+        auto ground = renderer->queryTerrainLatLng(point);
+        ::benchmark::DoNotOptimize(ground);
+    }
+}
+
+void Terrain_QueryPixelForLatLng(::benchmark::State& state) {
+    TerrainScene scene({.terrain = state.range(0) != 0});
+    scene.load();
+    scene.renderStill();
+    const auto* renderer = scene.frontend.getRenderer();
+    const auto ground = renderer->queryTerrainLatLng(screenQueryPoint(state.range(0)));
+    if (!ground || !renderer->queryTerrainPixel(*ground)) {
+        state.SkipWithError("no ground under the point");
+        return;
+    }
+    for (auto _ : state) {
+        auto pixel = renderer->queryTerrainPixel(*ground);
+        ::benchmark::DoNotOptimize(pixel);
+    }
+}
+
 // 5. A DEM tile arriving: Continuous mode, every tile loaded but the finest DEM tile under the
 //    centre; the time from its response to the first frame that samples it (worker decode and
 //    backfill, then the frame that uploads its texture and rebinds the mesh tiles over it).
@@ -616,6 +657,8 @@ BENCHMARK(Terrain_QueryTap)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_QueryBox)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_QueryLasso)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_QueryElevation)->Unit(::benchmark::kMicrosecond);
+BENCHMARK(Terrain_QueryLatLngForPixel)->Arg(0)->Arg(1)->Arg(2)->Unit(::benchmark::kMicrosecond);
+BENCHMARK(Terrain_QueryPixelForLatLng)->Arg(0)->Arg(1)->Arg(2)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_DemTileUpdate)->UseRealTime()->Unit(::benchmark::kMillisecond)->Iterations(10);
 BENCHMARK(Terrain_CameraClampFrame)->Arg(0)->Arg(1)->Arg(2)->Unit(::benchmark::kMillisecond)->Iterations(1024);
 BENCHMARK(Terrain_TileCover)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
