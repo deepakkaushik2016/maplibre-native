@@ -3,7 +3,7 @@ precision highp float;
 #endif
 
 in vec2 v_pos;
-uniform sampler2D u_image;
+uniform highp sampler2D u_image;
 layout (std140) uniform HillshadePrepareTilePropsUBO {
     highp vec4 u_unpack;
     highp vec2 u_dimension;
