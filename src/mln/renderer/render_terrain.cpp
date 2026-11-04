@@ -113,14 +113,17 @@ std::shared_ptr<const DEMData> sharedDEMDataOf(const RenderTile& renderTile) {
 }
 
 // The DEM height (not exaggerated) at a coordinate local to a tile the DEM tile covers, sampled as
-// the shaders' get_elevation() samples the DEM texture: bilinear between texels, with the texel
-// indices clamped to the data plus its 2-texel border (backfilled from the neighbouring DEM tiles),
-// not to the data alone. Across a DEM tile's last texel the height thus runs on into the
-// neighbour, as maplibre-gl-js Terrain.getDEMElevation reads it.
+// the shaders' get_elevation() samples the DEM texture: DEM pixel i describes the cell centred at
+// tile coordinate (i + 0.5) / dim, and the height is bilinear between those centres, with the
+// pixel indices clamped to the data plus its 2-texel border (backfilled from the neighbouring DEM
+// tiles), not to the data alone. Within half a pixel of a DEM tile's edge the height thus runs on
+// into the neighbour, as maplibre-gl-js Terrain.getDEMElevation reads it
+// (`DEM_CELL_CENTER_OFFSET`).
 float sampleDEM(const DEMData& dem, const DEMSubTileOffset& off, float x, float y) {
+    constexpr float cellCentre = 0.5f;
     const float dim = static_cast<float>(dem.dim);
-    const float px = (off.dx * util::EXTENT + x) / off.scale / util::EXTENT * dim;
-    const float py = (off.dy * util::EXTENT + y) / off.scale / util::EXTENT * dim;
+    const float px = (off.dx * util::EXTENT + x) / off.scale / util::EXTENT * dim - cellCentre;
+    const float py = (off.dy * util::EXTENT + y) / off.scale / util::EXTENT * dim - cellCentre;
     const float x0 = std::floor(px);
     const float y0 = std::floor(py);
     const float fx = px - x0;

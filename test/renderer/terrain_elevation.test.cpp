@@ -137,48 +137,78 @@ TEST(TerrainElevation, NormalizeKeepsTheResultInsideTheTile) {
 
 namespace {
 
-// A z10 DEM whose texel (i, j) is 500 + 2 i + 3 j metres: a plane, so the bilinear sample
-// between texels is exact, and steep enough (2-3 m per texel) that sampling the wrong texel,
-// or half a texel off, misses the 0.5 m tolerance.
+// A z10 DEM that is one plane across its tiles: DEM pixel (i, j), counted from the first pixel of
+// the tile holding (46, 10), is 500 + 2 i + 3 j metres. Bilinear interpolation between pixels
+// reproduces a plane exactly, and it is steep enough (2-3 m per pixel) that sampling the wrong
+// pixel, or half a pixel off, misses by 2.5 m or more.
 constexpr int demZoom = 10;
 constexpr uint32_t demDim = 256;
 constexpr int knownI = 100;
 constexpr int knownJ = 60;
 constexpr double knownMeters = 500.0 + 2.0 * knownI + 3.0 * knownJ; // 880 m
 
-double demMeters(uint32_t i, uint32_t j) {
+double demMeters(double i, double j) {
     return 500.0 + 2.0 * i + 3.0 * j;
 }
 
-std::string gradientTile() {
+// The z10 tile holding (46, 10), whose first pixel the plane counts from.
+CanonicalTileID knownTile() {
+    const double n = std::pow(2.0, demZoom);
+    const double lat0 = 46.0 * M_PI / 180.0;
+    const double tileX = std::floor((10.0 + 180.0) / 360.0 * n);
+    const double tileY = std::floor((1.0 - std::log(std::tan(lat0) + 1.0 / std::cos(lat0)) / M_PI) / 2.0 * n);
+    return {static_cast<uint8_t>(demZoom), static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY)};
+}
+
+// The point `u`, `v` DEM pixels right of and below the known tile's top-left corner. DEM pixel i
+// covers [i, i + 1), so its centre is at i + 0.5.
+LatLng demPoint(double u, double v) {
+    const double n = std::pow(2.0, demZoom);
+    const CanonicalTileID tile = knownTile();
+    const double x = tile.x + u / demDim;
+    const double y = tile.y + v / demDim;
+    const double lng = x / n * 360.0 - 180.0;
+    const double lat = std::atan(std::sinh(M_PI * (1.0 - 2.0 * y / n))) * 180.0 / M_PI;
+    return {lat, lng};
+}
+
+// The height of the terrain at `demPoint(u, v)`, as maplibre-gl-js draws and queries it: each DEM
+// pixel describes the cell centred at i + 0.5 (`DEM_CELL_CENTER_OFFSET` in terrain_coverage.ts,
+// `uv * dim + 1.5` in get_elevation), and the surface is bilinear between those centres.
+double drawnMeters(double u, double v) {
+    return demMeters(u - 0.5, v - 0.5);
+}
+
+// The centre of DEM pixel (knownI, knownJ), where the terrain is at that pixel's height exactly.
+LatLng knownPoint() {
+    return demPoint(knownI + 0.5, knownJ + 0.5);
+}
+
+// A tile of the plane, at any zoom: each pixel holds the plane at its centre.
+std::string gradientTile(const CanonicalTileID& id) {
+    const CanonicalTileID known = knownTile();
+    const double scale = std::pow(2.0, demZoom - id.z);
     PremultipliedImage image({demDim, demDim});
-    for (uint32_t j = 0; j < demDim; ++j) {
-        for (uint32_t i = 0; i < demDim; ++i) {
+    for (uint32_t y = 0; y < demDim; ++y) {
+        for (uint32_t x = 0; x < demDim; ++x) {
+            // This pixel's centre, in z10 DEM pixels from the known tile's corner.
+            const double u = (static_cast<double>(id.x) * demDim + x + 0.5) * scale - known.x * double{demDim};
+            const double v = (static_cast<double>(id.y) * demDim + y + 0.5) * scale - known.y * double{demDim};
             // Terrain-RGB: metres = -10000 + (R * 65536 + G * 256 + B) * 0.1.
-            const auto v = static_cast<uint32_t>(std::lround((demMeters(i, j) + 10000.0) * 10.0));
-            uint8_t* px = image.data.get() + (j * demDim + i) * 4;
-            px[0] = static_cast<uint8_t>((v >> 16) & 0xFF);
-            px[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
-            px[2] = static_cast<uint8_t>(v & 0xFF);
+            const auto value = static_cast<uint32_t>(std::lround((drawnMeters(u, v) + 10000.0) * 10.0));
+            uint8_t* px = image.data.get() + (static_cast<size_t>(y) * demDim + x) * 4;
+            px[0] = static_cast<uint8_t>((value >> 16) & 0xFF);
+            px[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+            px[2] = static_cast<uint8_t>(value & 0xFF);
             px[3] = 255;
         }
     }
     return encodePNG(image);
 }
 
-// Where texel (knownI, knownJ) of the z10 tile holding (46, 10) sits. A DEM texel i is sampled
-// at tile x = i / dim (maplibre-gl-js Terrain.getDEMElevation's convention, which
-// RenderTerrain::getElevation follows), so that is where the known value is exact.
-LatLng knownPoint() {
-    const double n = std::pow(2.0, demZoom);
-    const double lat0 = 46.0 * M_PI / 180.0;
-    const double tileX = std::floor((10.0 + 180.0) / 360.0 * n);
-    const double tileY = std::floor((1.0 - std::log(std::tan(lat0) + 1.0 / std::cos(lat0)) / M_PI) / 2.0 * n);
-    const double x = tileX + static_cast<double>(knownI) / demDim;
-    const double y = tileY + static_cast<double>(knownJ) / demDim;
-    const double lng = x / n * 360.0 - 180.0;
-    const double lat = std::atan(std::sinh(M_PI * (1.0 - 2.0 * y / n))) * 180.0 / M_PI;
-    return {lat, lng};
+CanonicalTileID tileOf(const Resource& resource) {
+    const auto& t = *resource.tileData;
+    return {static_cast<uint8_t>(t.z), static_cast<uint32_t>(t.x), static_cast<uint32_t>(t.y)};
 }
 
 std::string demStyle(const std::string& terrain) {
@@ -205,31 +235,30 @@ struct ElevationScene {
     util::RunLoop loop;
     std::shared_ptr<StubFileSource> fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(),
                                                                                   ClientOptions());
-    std::string tile = gradientTile();
     int demRequests = 0;
     HeadlessFrontend frontend{{256, 256}, 1};
     MapAdapter map;
 
     // `deliverDEM` false holds every DEM response, so terrain is set but no DEM tile ever loads;
     // the map then runs continuously, as a still render would wait for the DEM forever.
-    ElevationScene(const std::string& terrain, bool deliverDEM = true)
+    ElevationScene(const std::string& terrain, bool deliverDEM = true, const LatLng& center = knownPoint())
         : map(frontend,
               MapObserver::nullObserver(),
               fileSource,
               MapOptions()
                   .withMapMode(deliverDEM ? MapMode::Static : MapMode::Continuous)
                   .withSize(frontend.getSize())) {
-        fileSource->tileResponse = [this, deliverDEM](const Resource&) -> std::optional<Response> {
+        fileSource->tileResponse = [this, deliverDEM](const Resource& resource) -> std::optional<Response> {
             ++demRequests;
             if (!deliverDEM) {
                 return std::nullopt;
             }
             Response res;
-            res.data = std::make_shared<std::string>(tile);
+            res.data = std::make_shared<std::string>(gradientTile(tileOf(resource)));
             return res;
         };
         map.getStyle().loadJSON(demStyle(terrain));
-        map.jumpTo(CameraOptions().withCenter(knownPoint()).withZoom(12.0));
+        map.jumpTo(CameraOptions().withCenter(center).withZoom(12.0));
         if (deliverDEM) {
             frontend.render(map);
         } else {
@@ -239,7 +268,9 @@ struct ElevationScene {
         }
     }
 
-    std::optional<double> query() { return frontend.getRenderer()->queryTerrainElevation(knownPoint()); }
+    std::optional<double> query(const LatLng& at = knownPoint()) {
+        return frontend.getRenderer()->queryTerrainElevation(at);
+    }
 };
 
 } // namespace
@@ -256,6 +287,35 @@ TEST(TerrainElevation, RendererQueryAppliesExaggeration) {
     const auto q = scene.query();
     ASSERT_TRUE(q) << "no elevation where a loaded DEM tile covers the point";
     EXPECT_NEAR(*q, 2.0 * knownMeters, 1.0);
+}
+
+// The queried height is the terrain as maplibre-gl-js has it: each DEM pixel at its centre, and
+// bilinear between centres, also across a DEM tile's edge into its neighbour. The camera looks at
+// the known tile's top-left corner, so the three tiles meeting it there are loaded too and
+// backfill its border.
+TEST(TerrainElevation, QuerySamplesEachDEMPixelAtItsCentre) {
+    ElevationScene scene(R"("terrain": {"source": "dem", "exaggeration": 1},)", true, demPoint(0.0, 0.0));
+    struct Case {
+        const char* what;
+        double u;
+        double v;
+    };
+    const Case cases[] = {
+        {"a pixel's centre", knownI + 0.5, knownJ + 0.5},
+        {"a pixel's corner", knownI, knownJ},
+        {"inside a pixel", knownI + 0.3, knownJ + 0.85},
+        {"the first half pixel of the tile, west", 0.2, 10.5},
+        {"the last half pixel of the west neighbour", -0.2, 10.5},
+        {"the first half pixel of the tile, north", 10.5, 0.3},
+        {"the last half pixel of the north neighbour", 10.5, -0.3},
+        {"the corner of four tiles", 0.0, 0.0},
+        {"the last half pixel of the north-west neighbour", -0.4, -0.1},
+    };
+    for (const auto& c : cases) {
+        const auto q = scene.query(demPoint(c.u, c.v));
+        ASSERT_TRUE(q) << c.what << ": no elevation where a loaded DEM tile covers the point";
+        EXPECT_NEAR(*q, drawnMeters(c.u, c.v), 0.05) << c.what << " (" << c.u << ", " << c.v << ")";
+    }
 }
 
 TEST(TerrainElevation, RendererQueryNulloptBeforeDEMLoads) {
@@ -288,14 +348,13 @@ TEST(TerrainElevation, RendererQueryNulloptWhenTileHasNoData) {
 
     util::RunLoop loop;
     auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
-    const std::string tile = gradientTile();
-    fileSource->tileResponse = [&](const Resource&) -> std::optional<Response> {
+    fileSource->tileResponse = [&](const Resource& resource) -> std::optional<Response> {
         if (phase == Phase::Hold) {
             return std::nullopt;
         }
         Response res;
         if (phase == Phase::Deliver) {
-            res.data = std::make_shared<std::string>(tile);
+            res.data = std::make_shared<std::string>(gradientTile(tileOf(resource)));
         } else {
             res.noContent = true;
             ++wipes;

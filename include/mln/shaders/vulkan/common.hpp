@@ -266,7 +266,9 @@ float get_elevation(vec2 pos, sampler2D dem, vec4 dem_coords, vec4 dem_unpack,
     if (dem_enabled == 0.0) {
         return 0.0;
     }
-    vec2 coord = (pos * dem_coords.x + dem_coords.yz) * dem_dim + 2.0;
+    // DEM pixel i describes the cell centred at tile coordinate (i + 0.5) / dim, as in
+    // maplibre-gl-js, and sits at texel i + 2 behind the 2 texel border.
+    vec2 coord = (pos * dem_coords.x + dem_coords.yz) * dem_dim + 1.5;
     vec2 f = fract(coord);
     ivec2 c = ivec2(floor(coord));
     ivec2 hi = textureSize(dem, 0) - 1;

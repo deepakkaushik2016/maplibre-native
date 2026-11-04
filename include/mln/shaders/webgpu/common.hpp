@@ -64,7 +64,9 @@ fn get_elevation(pos: vec2<f32>,
     if (dem_enabled == 0.0) {
         return 0.0;
     }
-    let coord = (pos * dem_coords.x + dem_coords.yz) * dem_dim + 2.0;
+    // DEM pixel i describes the cell centred at tile coordinate (i + 0.5) / dim, as in
+    // maplibre-gl-js, and sits at texel i + 2 behind the 2 texel border.
+    let coord = (pos * dem_coords.x + dem_coords.yz) * dem_dim + 1.5;
     let f = fract(coord);
     let c = vec2<i32>(floor(coord));
     let hi = vec2<i32>(textureDimensions(dem, 0)) - vec2<i32>(1);

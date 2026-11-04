@@ -42,17 +42,31 @@ double lngOfDEMPixel(double globalPixelX) {
     return globalPixelX / (std::pow(2.0, demZoom) * demDim) * 360.0 - 180.0;
 }
 
+// DEM pixel i covers [i, i + 1) and describes the terrain at its centre, i + 0.5, as in
+// maplibre-gl-js; between two pixel centres the terrain is linear.
+//
 // The cliff DEM: z10 tiles up to x = 540 are 1000 m, tiles from x = 541 on are 1600 m. The step is
-// at the tile edge, so the last texel column of tile 540 rises to the first of tile 541 only in
-// the DEM border tile 540 is backfilled with, which is what the shaders interpolate into.
+// at the tile edge, so the first pixel column of tile 541 falls to the last of tile 540 only in
+// the DEM border tile 541 is backfilled with, which is what the shaders interpolate into.
 constexpr int32_t cliffTileX = 541;
-// A POI three quarters of the way across tile 540's last texel: drawn at 1000 + 0.75 * 600 m.
-const double cliffPoiLng = lngOfDEMPixel(cliffTileX * demDim - 0.25);
+// A POI a quarter of the way into tile 541's first pixel, before that pixel's centre: three
+// quarters of the way from the centre of tile 540's last pixel to it, so drawn at
+// 1000 + 0.75 * 600 m.
+const double cliffPoiLng = lngOfDEMPixel(cliffTileX * demDim + 0.25);
 constexpr double cliffPoiMeters = plateauMeters + 0.75 * (cliffTopMeters - plateauMeters);
+
+// The ridge DEM: one column of pixels at 1600 m, in the tile holding the POI at lng 10 (z10
+// x = 540, pixel column 113), and 1000 m everywhere else. A POI at the centre of the ridge's
+// pixels is drawn at the ridge's 1600 m; with the pixels at their corners it would be drawn
+// halfway down its flank, at 1300 m.
+constexpr int32_t ridgeTileX = 540;
+constexpr uint32_t ridgeColumn = 113;
+const double ridgePoiLng = lngOfDEMPixel(ridgeTileX * demDim + ridgeColumn + 0.5);
 
 enum class Dem {
     Plateau,
     Cliff,
+    Ridge,
     // A DEM served to z14, where the tiles with an odd x stand at `cliffTopMeters` and every
     // other tile (any other zoom included) at `plateauMeters`. The POI at lng 10 is in z14 tile
     // x = 8647, so it is drawn at the cliff top only if its DEM is that z14 tile.
@@ -77,14 +91,18 @@ struct SceneOptions {
     /// The DEM source's tile size: at 256 px its tiles are one zoom finer than the 512 px
     /// GeoJSON tiles at the same map zoom.
     uint32_t demTileSize = 256;
-    /// Z14Stripes only: the POI three quarters of the way across the last texel column of the
-    /// plateau child (z14 x = 8646), at the foot of the step up to the next child.
+    /// Z14Stripes only: the POI a quarter of the way into the first pixel column of the cliff-top
+    /// child (z14 x = 8647), on the step up from the plateau child before it: three quarters of
+    /// the way from the centre of the plateau child's last pixel to that pixel's centre.
     bool atStripeSeam = false;
 
     double poiLng() const {
         if (dem == Dem::Z14Stripes && atStripeSeam) {
-            return (static_cast<double>(stripeTileX) * 256.0 - 0.25) / (std::pow(2.0, stripesZoom) * 256.0) * 360.0 -
+            return (static_cast<double>(stripeTileX) * 256.0 + 0.25) / (std::pow(2.0, stripesZoom) * 256.0) * 360.0 -
                    180.0;
+        }
+        if (dem == Dem::Ridge) {
+            return ridgePoiLng;
         }
         return dem == Dem::Cliff ? cliffPoiLng : 10.0;
     }
@@ -93,6 +111,8 @@ struct SceneOptions {
         switch (dem) {
             case Dem::Cliff:
                 return cliffPoiMeters;
+            case Dem::Ridge:
+                return cliffTopMeters;
             case Dem::Z14Stripes:
                 // At z13 a 512 px DEM is served at z13, all plateau; a 256 px one at z14.
                 if (demTileSize != 256) {
@@ -162,15 +182,24 @@ std::string symbolStyle(const SceneOptions& options) {
 })STYLE";
 }
 
-// A Terrain-RGB tile all at `meters`: -10000 + (R * 65536 + G * 256 + B) * 0.1.
-std::string demTile(double meters, uint32_t size = 256) {
-    const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
+// A Terrain-RGB tile all at `meters` (-10000 + (R * 65536 + G * 256 + B) * 0.1), but for the
+// pixel column `ridge`, if any, which is at `ridgeMeters`.
+std::string demTile(double meters,
+                    uint32_t size = 256,
+                    std::optional<uint32_t> ridge = std::nullopt,
+                    double ridgeMeters = 0.0) {
+    const auto encode = [](double m) {
+        return static_cast<uint32_t>(std::lround((m + 10000.0) * 10.0));
+    };
+    const uint32_t value = encode(meters);
+    const uint32_t ridgeValue = encode(ridgeMeters);
     PremultipliedImage image({size, size});
     for (uint32_t i = 0; i < size * size; ++i) {
+        const uint32_t v = ridge && i % size == *ridge ? ridgeValue : value;
         uint8_t* px = image.data.get() + i * 4;
-        px[0] = static_cast<uint8_t>(value >> 16);
-        px[1] = static_cast<uint8_t>((value >> 8) & 0xff);
-        px[2] = static_cast<uint8_t>(value & 0xff);
+        px[0] = static_cast<uint8_t>(v >> 16);
+        px[1] = static_cast<uint8_t>((v >> 8) & 0xff);
+        px[2] = static_cast<uint8_t>(v & 0xff);
         px[3] = 255;
     }
     return encodePNG(image);
@@ -233,6 +262,7 @@ struct TerrainSymbolScene {
     SceneOptions options;
     std::string lowTile;
     std::string highTile;
+    std::string ridgeTile;
     PremultipliedImage image;
     // Where the symbol is drawn, and where its anchor sits at sea level.
     ScreenCoordinate drawn;
@@ -243,10 +273,15 @@ struct TerrainSymbolScene {
     explicit TerrainSymbolScene(SceneOptions options_)
         : options(options_),
           lowTile(demTile(plateauMeters, options.demTileSize)),
-          highTile(demTile(cliffTopMeters, options.demTileSize)) {
+          highTile(demTile(cliffTopMeters, options.demTileSize)),
+          ridgeTile(demTile(plateauMeters, options.demTileSize, ridgeColumn, cliffTopMeters)) {
         fileSource->tileResponse = [this](const Resource& resource) {
             Response res;
             const auto& tile = resource.tileData;
+            if (tile && options.dem == Dem::Ridge && tile->z == demZoom && tile->x == ridgeTileX) {
+                res.data = std::make_shared<std::string>(ridgeTile);
+                return res;
+            }
             const bool high = tile && ((options.dem == Dem::Cliff && tile->x >= cliffTileX) ||
                                        (options.dem == Dem::Z14Stripes && tile->z == stripesZoom && tile->x % 2 == 1));
             res.data = std::make_shared<std::string>(high ? highTile : lowTile);
@@ -351,9 +386,10 @@ TEST(TerrainSymbolQuery, BoxAroundElevatedIconHitsIt) {
         << "a box around where the icon would sit at sea level (nothing is drawn there) hits it";
 }
 
-// The icon stands in the last texel column of its DEM tile, at the foot of a 600 m step up to the
-// next tile. The shaders interpolate into the DEM border (backfilled from that next tile), so the
-// icon is drawn 450 m above the plateau; edge-clamped sampling would put its box on the plateau.
+// The icon stands in the first pixel column of its DEM tile, before that pixel's centre, on a 600 m
+// step down to the previous tile. The shaders interpolate into the DEM border (backfilled from that
+// previous tile), so the icon is drawn 450 m above the plateau; edge-clamped sampling would put
+// its box on the cliff top.
 TEST(TerrainSymbolQuery, IconAtDEMTileEdgeHitsWhereDrawn) {
     TerrainSymbolScene scene({.exaggeration = 1.25, .dem = Dem::Cliff});
     scene.expectDrawnAt(scene.onPlateau);
@@ -405,7 +441,7 @@ TEST(TerrainSymbolQuery, IconOverFinerDEMHitsWhereDrawn) {
     EXPECT_EQ(scene.queryBox(scene.drawn, 20.0), 1u) << "a box around the drawn icon misses it";
 }
 
-// Across the seam between two children the stitched DEM runs from one child's last texel into the
+// Across the seam between two children the stitched DEM runs from one child's last pixel into the
 // other's first, as the shaders do on the terrain mesh through the child's backfilled border: the
 // icon is drawn 450 m above the plateau, and its box must be there too.
 TEST(TerrainSymbolQuery, IconAtFinerDEMSeamHitsWhereDrawn) {
@@ -416,6 +452,25 @@ TEST(TerrainSymbolQuery, IconAtFinerDEMSeamHitsWhereDrawn) {
     EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
     EXPECT_EQ(scene.query(scene.onPlateau), 0u)
         << "a tap where the icon would sit on the plateau (nothing is drawn there) hits it";
+}
+
+// The POI stands on a ridge one DEM pixel wide, at the centre of the ridge's pixels: it is drawn
+// on the ridge's crest (1600 m, where maplibre-gl-js draws it), not halfway down its flank, and a
+// tap there finds it.
+TEST(TerrainSymbolQuery, IconOnARidgeOnePixelWideIsDrawnOnItsCrest) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .dem = Dem::Ridge});
+    const auto state = scene.frontend.getTransformState();
+    ASSERT_TRUE(state);
+    const LatLng poi{46.01, scene.options.poiLng()};
+    // Where it would be drawn with each DEM pixel at its corner instead: halfway down the flank.
+    const ScreenCoordinate onFlank = project(
+        *state, poi, 0.5 * (plateauMeters + cliffTopMeters) * *scene.options.exaggeration);
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    ASSERT_EQ(scene.redAround(onFlank), 0) << "the icon is drawn where pixels at their corners would put it, at ("
+                                           << onFlank.x << ", " << onFlank.y << ")";
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(onFlank), 0u) << "a tap on the ridge's flank (nothing is drawn there) hits the icon";
 }
 
 // Circles bind the DEM the same way (as do fill extrusions and heatmaps).

@@ -93,7 +93,9 @@ inline float get_elevation(float2 pos,
     if (dem_enabled == 0.0) {
         return 0.0;
     }
-    const float2 coord = (pos * dem_coords.x + dem_coords.yz) * dem_dim + 2.0;
+    // DEM pixel i describes the cell centred at tile coordinate (i + 0.5) / dim, as in
+    // maplibre-gl-js, and sits at texel i + 2 behind the 2 texel border.
+    const float2 coord = (pos * dem_coords.x + dem_coords.yz) * dem_dim + 1.5;
     const float2 f = fract(coord);
     const int2 c = int2(floor(coord));
     const int2 hi = int2(dem.get_width(), dem.get_height()) - 1;

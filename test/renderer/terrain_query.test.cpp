@@ -288,9 +288,10 @@ TEST(TerrainQuery, BoxEdgeOverReliefKeepsFeatureJustInside) {
 
 namespace {
 
-// A DEM that rises linearly northwards in web-mercator y. Texel i of a tile holds the height at
-// i / 256 across it, where the samplers (the shaders' get_elevation, RenderTerrain's sampleDEM)
-// read it, so bilinear interpolation reproduces the plane exactly: the drawn surface and the
+// A DEM that rises linearly northwards in web-mercator y. Pixel i of a tile holds the height at
+// its centre, (i + 0.5) / 256 across it, where the samplers (the shaders' get_elevation,
+// RenderTerrain's sampleDEM) place it, as maplibre-gl-js does, so bilinear interpolation reproduces
+// the plane exactly: the drawn surface and the
 // height under a point are known from the DEM tile that covers it. The z14 tiles hold the plane;
 // coarser tiles hold it raised by rampAncestorMeters, so it shows which tile a sample came from.
 constexpr double rampBaseMeters = 600.0;
@@ -310,7 +311,7 @@ std::string rampTile(const CanonicalTileID& id) {
     PremultipliedImage image({256, 256});
     const double tiles = std::pow(2.0, id.z);
     for (uint32_t y = 0; y < 256; ++y) {
-        const double meters = rampMeters((id.y + y / 256.0) / tiles) + (id.z < 14 ? rampAncestorMeters : 0.0);
+        const double meters = rampMeters((id.y + (y + 0.5) / 256.0) / tiles) + (id.z < 14 ? rampAncestorMeters : 0.0);
         const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
         for (uint32_t x = 0; x < 256; ++x) {
             uint8_t* px = image.data.get() + (static_cast<size_t>(y) * 256 + x) * 4;
