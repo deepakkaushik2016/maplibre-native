@@ -378,6 +378,9 @@ TEST(TerrainLineDrape, RedrawnDrapeUsesTheFramesPaintParams) {
     ASSERT_GT(before.red, 3 * before.blue) << "the line is not red at z13.5";
     const Ink after = renderAt(14.5);
     ASSERT_GT(after.pixels, 300) << "the line did not render after the camera moved";
-    EXPECT_EQ(drapesCreated, 0) << "the zoom created new textures, so no existing drape target re-rendered";
+    // Metal and Vulkan count every texture they create, so there no new texture means no new
+    // drape target. OpenGL's count is net: its texture pool takes one off when it frees a texture,
+    // and the zoom frees one (-1 here), so on OpenGL this only bounds the creations.
+    EXPECT_LE(drapesCreated, 0) << "the zoom created new textures, so no existing drape target re-rendered";
     EXPECT_GT(after.blue, 3 * after.red) << "the redrawn drape kept the paint params of the frame before";
 }
