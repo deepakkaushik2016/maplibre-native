@@ -387,6 +387,8 @@ void Map::Impl::anchorAfterHold() {
     anchorPassesLeft = 16;
     anchorBracketLow = -std::numeric_limits<double>::infinity();
     anchorBracketHigh = std::numeric_limits<double>::infinity();
+    anchorBracketLowGap = 0.0;
+    anchorBracketHighGap = 0.0;
     anchorBracketLastEnd = 0;
 }
 
