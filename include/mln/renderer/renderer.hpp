@@ -75,6 +75,53 @@ public:
      */
     std::optional<double> queryTerrainElevation(const LatLng& point) const;
 
+    /**
+     * @brief The ground drawn under a screen point.
+     *
+     * What `Map::latLngForPixel` answers at sea level, for the terrain surface as drawn: the
+     * line of sight through `point` is raycast against the loaded DEM (exaggeration applied),
+     * in the transform of the last rendered frame. Read the height there with
+     * queryTerrainElevation.
+     *
+     * Without terrain in the style, it is `Map::latLngForPixel` for the last rendered frame's
+     * transform, bit for bit.
+     *
+     * @param point screen pixels, top-left origin (as `Map::latLngForPixel` takes it)
+     * @return the point on the ground, wrapped to [-180, 180]; std::nullopt before the first
+     * frame (no transform to read), for a non-finite point, or, with terrain, when no DEM tile
+     * is loaded yet or the line of sight meets no ground (sky above the horizon, or ground no
+     * loaded DEM tile covers).
+     */
+    std::optional<LatLng> queryTerrainLatLng(const ScreenCoordinate& point) const;
+
+    /// Where a point on the ground is drawn (queryTerrainPixel).
+    struct TerrainPixel {
+        /// Screen pixels, top-left origin (as `Map::pixelForLatLng` returns it). It may lie
+        /// outside the viewport.
+        ScreenCoordinate point;
+        /// Ground drawn in front of the point hides it, as a ridge hides the valley behind it.
+        bool occluded = false;
+    };
+
+    /**
+     * @brief Where a point on the ground is drawn on the screen.
+     *
+     * What `Map::pixelForLatLng` answers at sea level, for the point lifted to the height the
+     * terrain is drawn at there (queryTerrainElevation), projected with the transform of the
+     * last rendered frame. The point is `occluded` when the line of sight through its pixel
+     * meets the ground more than one world pixel (a pixel of the map at its zoom) nearer the
+     * camera than the point itself. Longitudes are taken on the side of the antimeridian nearer
+     * the map's centre, as `Map::pixelForLatLng` takes them.
+     *
+     * Without terrain in the style, `point` is `Map::pixelForLatLng` for the last rendered
+     * frame's transform, bit for bit, and `occluded` is false.
+     *
+     * @return std::nullopt before the first frame (no transform to read), when the point is
+     * behind the camera (no pixel draws it; `Map::pixelForLatLng` answers a mirrored point
+     * there), or, with terrain, when no loaded DEM tile covers the point.
+     */
+    std::optional<TerrainPixel> queryTerrainPixel(const LatLng& point) const;
+
     /// Feature extension query
     FeatureExtensionValue queryFeatureExtensions(
         const std::string& sourceID,

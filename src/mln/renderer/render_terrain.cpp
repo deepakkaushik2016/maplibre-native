@@ -1220,6 +1220,14 @@ std::optional<RenderTerrain::RaycastSetup> RenderTerrain::prepareRaycast(const T
 }
 
 std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const ScreenCoordinate& point) const {
+    const auto hit = raycastPoint(setup, point);
+    if (!hit) {
+        return std::nullopt;
+    }
+    return Projection::unproject({(*hit)[0], (*hit)[1]}, setup.scale, LatLng::Unwrapped);
+}
+
+std::optional<vec3> RenderTerrain::raycastPoint(const RaycastSetup& setup, const ScreenCoordinate& point) const {
     // The ray from the near (clip z -1) to the far (clip z 1) plane, in world pixels with z in
     // metres - the space TransformState's projection matrix maps from.
     const double ndcX = point.x / setup.size.width * 2.0 - 1.0;
@@ -1235,8 +1243,8 @@ std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const Sc
     if (!t) {
         return std::nullopt;
     }
-    return Projection::unproject(
-        {near[0] + *t * (far[0] - near[0]), near[1] + *t * (far[1] - near[1])}, setup.scale, LatLng::Unwrapped);
+    return vec3{
+        {near[0] + *t * (far[0] - near[0]), near[1] + *t * (far[1] - near[1]), near[2] + *t * (far[2] - near[2])}};
 }
 
 std::optional<double> RenderTerrain::raycastAltitude(const TransformState& state,

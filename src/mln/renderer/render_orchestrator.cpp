@@ -832,6 +832,79 @@ ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineStri
     return result;
 }
 
+std::optional<LatLng> RenderOrchestrator::queryTerrainLatLng(const ScreenCoordinate& point) const {
+    const Size size = transformState.getSize();
+    // Before the first frame there is no transform to read.
+    if (size.isEmpty() || !std::isfinite(point.x) || !std::isfinite(point.y)) {
+        return std::nullopt;
+    }
+    // TransformState works y-up; the same flip as Transform::screenCoordinateToLatLng.
+    const ScreenCoordinate flipped{point.x, size.height - point.y};
+    if (!renderTerrain || !renderTerrain->isEnabled()) {
+        return transformState.screenCoordinateToLatLng(flipped, LatLng::Wrapped);
+    }
+    const auto setup = renderTerrain->prepareRaycast(transformState);
+    if (!setup) {
+        return std::nullopt;
+    }
+    const auto hit = renderTerrain->raycast(*setup, flipped);
+    if (!hit) {
+        return std::nullopt;
+    }
+    return hit->wrapped();
+}
+
+std::optional<Renderer::TerrainPixel> RenderOrchestrator::queryTerrainPixel(const LatLng& latLng) const {
+    const Size size = transformState.getSize();
+    if (size.isEmpty()) {
+        return std::nullopt;
+    }
+    // As Map::pixelForLatLng: on the side of the antimeridian nearer the centre, which is also
+    // where the DEM tiles drawn around the centre are.
+    LatLng unwrapped = latLng.wrapped();
+    unwrapped.unwrapForShortestPath(transformState.getLatLng());
+    if (!renderTerrain || !renderTerrain->isEnabled()) {
+        vec4 clip;
+        ScreenCoordinate pixel = transformState.latLngToScreenCoordinate(unwrapped, clip);
+        if (clip[3] <= 0) {
+            return std::nullopt;
+        }
+        // The same flip as Transform::latLngToScreenCoordinate.
+        pixel.y = size.height - pixel.y;
+        return Renderer::TerrainPixel{.point = pixel, .occluded = false};
+    }
+
+    const auto elevation = renderTerrain->findElevationForLatLng(unwrapped);
+    if (!elevation) {
+        return std::nullopt;
+    }
+    // The projection the terrain is drawn with: world pixels, z in metres.
+    const mat4& projection = transformState.getProjectionMatrix();
+    const Point<double> world = Projection::project(unwrapped, transformState.getScale());
+    vec4 clip;
+    matrix::transformMat4(clip, vec4{{world.x, world.y, *elevation, 1.0}}, projection);
+    if (clip[3] <= 0) {
+        return std::nullopt;
+    }
+    const ScreenCoordinate pixel{(clip[0] / clip[3] + 1.0) * size.width / 2.0,
+                                 (clip[1] / clip[3] + 1.0) * size.height / 2.0};
+
+    // Hidden when the line of sight through the pixel meets the ground nearer the camera. Clip w
+    // is the depth along the view axis in world pixels and grows along any line of sight, so the
+    // two compare directly. Ground within a world pixel of the point is the point itself: the
+    // raycast and the drawn mesh resolve no finer.
+    constexpr double occlusionToleranceWorldPixels = 1.0;
+    bool occluded = false;
+    if (const auto setup = renderTerrain->prepareRaycast(transformState)) {
+        if (const auto hit = renderTerrain->raycastPoint(*setup, pixel)) {
+            vec4 hitClip;
+            matrix::transformMat4(hitClip, vec4{{(*hit)[0], (*hit)[1], (*hit)[2], 1.0}}, projection);
+            occluded = hitClip[3] < clip[3] - occlusionToleranceWorldPixels;
+        }
+    }
+    return Renderer::TerrainPixel{.point = {pixel.x, size.height - pixel.y}, .occluded = occluded};
+}
+
 std::vector<Feature> RenderOrchestrator::queryRenderedFeatures(
     const ScreenLineString& geometry,
     const RenderedQueryOptions& options,

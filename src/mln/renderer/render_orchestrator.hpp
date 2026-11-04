@@ -74,6 +74,10 @@ public:
     std::vector<Feature> queryRenderedFeatures(const ScreenLineString&, const RenderedQueryOptions&) const;
     std::vector<Feature> querySourceFeatures(const std::string& sourceID, const SourceQueryOptions&) const;
     std::vector<Feature> queryShapeAnnotations(const ScreenLineString&) const;
+    /// Renderer::queryTerrainLatLng
+    std::optional<LatLng> queryTerrainLatLng(const ScreenCoordinate&) const;
+    /// Renderer::queryTerrainPixel
+    std::optional<Renderer::TerrainPixel> queryTerrainPixel(const LatLng&) const;
 
     FeatureExtensionValue queryFeatureExtensions(const std::string& sourceID,
                                                  const Feature& feature,

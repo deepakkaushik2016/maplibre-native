@@ -87,6 +87,14 @@ std::optional<double> Renderer::queryTerrainElevation(const LatLng& point) const
     return terrain->findElevationForLatLng(point);
 }
 
+std::optional<LatLng> Renderer::queryTerrainLatLng(const ScreenCoordinate& point) const {
+    return impl->orchestrator.queryTerrainLatLng(point);
+}
+
+std::optional<Renderer::TerrainPixel> Renderer::queryTerrainPixel(const LatLng& point) const {
+    return impl->orchestrator.queryTerrainPixel(point);
+}
+
 AnnotationIDs Renderer::queryShapeAnnotations(const ScreenBox& box) const {
     if (!LayerManager::annotationsEnabled) {
         return {};

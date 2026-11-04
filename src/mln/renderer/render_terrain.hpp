@@ -303,6 +303,9 @@ public:
      *         comes down to the terrain, as above the horizon)
      */
     std::optional<LatLng> raycast(const RaycastSetup& setup, const ScreenCoordinate& point) const;
+    /// As raycast, but the surface point in the space the transform's projection matrix maps
+    /// from: world pixels, z in metres (exaggeration applied).
+    std::optional<vec3> raycastPoint(const RaycastSetup& setup, const ScreenCoordinate& point) const;
 
     /**
      * @brief The height at which a line of sight first enters the terrain surface
