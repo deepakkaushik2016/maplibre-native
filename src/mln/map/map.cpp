@@ -157,7 +157,7 @@ void Map::jumpTo(const CameraOptions& camera) {
 
 void Map::easeTo(const CameraOptions& camera, const AnimationOptions& animation) {
     impl->cameraMutated = true;
-    impl->noteCameraSet(Impl::keepsViewAboutAnchor(camera));
+    impl->noteCameraSet(camera);
     impl->settleCenterAwaitingSeaLevel();
     impl->transform.easeTo(camera, animation);
     impl->onUpdate();
@@ -165,7 +165,7 @@ void Map::easeTo(const CameraOptions& camera, const AnimationOptions& animation)
 
 void Map::flyTo(const CameraOptions& camera, const AnimationOptions& animation) {
     impl->cameraMutated = true;
-    impl->noteCameraSet(Impl::keepsViewAboutAnchor(camera));
+    impl->noteCameraSet(camera);
     impl->settleCenterAwaitingSeaLevel();
     impl->transform.flyTo(camera, animation);
     impl->onUpdate();

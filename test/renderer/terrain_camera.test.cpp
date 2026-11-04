@@ -1814,3 +1814,37 @@ TEST(TerrainGesture, TerrainRemovedDuringADragDropsTheGroundItHad) {
     test.frame();
     EXPECT_LT(test.distance(test.project(seaLevel), finger), 2.0);
 }
+
+// A double tap's zoom is cut short by the app setting the centre (a recenter on the user). The
+// zoom was owed an anchor that keeps the view when it ended; the recenter must not inherit it,
+// which would slide the centre the app asked for along the line of sight. It lands where asked,
+// and the clamp puts it on the ground there.
+TEST(TerrainGesture, ACentreSetDuringAZoomAboutATapLandsWhereAsked) {
+    const LatLng target{alpsLatitude - 0.02, alpsLongitude + 0.03};
+    for (const auto duration : {Milliseconds(0), Milliseconds(300)}) {
+        AlpsGestureTest test(1.0);
+        ASSERT_TRUE(test.settle());
+        test.map.easeTo(CameraOptions().withZoom(14.0).withAnchor(ScreenCoordinate{195, 572}),
+                        AnimationOptions(Milliseconds(300)));
+        test.frame();
+        test.frame();
+        bool arrived = false;
+        AnimationOptions recenter(duration);
+        recenter.transitionFinishFn = [&] {
+            arrived = true;
+        };
+        test.map.easeTo(CameraOptions().withCenter(target), recenter);
+        ASSERT_TRUE(test.renderUntil([&] { return arrived; }));
+        test.renderUntil(
+            [&] {
+                const auto off = test.centerOffGround();
+                return off && std::abs(*off) < 1.0;
+            },
+            30);
+        ASSERT_TRUE(test.centerOffGround());
+        const auto camera = test.map.getCameraOptions();
+        EXPECT_NEAR(camera.center->latitude(), target.latitude(), 1e-7) << duration.count() << " ms";
+        EXPECT_NEAR(camera.center->longitude(), target.longitude(), 1e-7) << duration.count() << " ms";
+        EXPECT_LT(std::abs(*test.centerOffGround()), 1.0) << duration.count() << " ms";
+    }
+}

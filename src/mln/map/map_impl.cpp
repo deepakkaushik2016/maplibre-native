@@ -714,6 +714,17 @@ void Map::Impl::onTerrainGrabbedGroundElevation(uint64_t grabId, double elevatio
     }
 }
 
+void Map::Impl::noteCameraSet(const CameraOptions& camera) {
+    noteCameraSet(keepsViewAboutAnchor(camera));
+    // A centre the app sets is where it wants the centre. An anchor that keeps the view, owed to a
+    // change this one cuts short (a double tap's zoom), would slide it along the line of sight;
+    // the plain clamp puts it on the ground where it is.
+    if (camera.center) {
+        centerAwaitingTerrainAnchor = false;
+        centerAnchorKeepsView = false;
+    }
+}
+
 bool Map::Impl::keepsViewAboutAnchor(const CameraOptions& camera) {
     // An explicit centre wins over the anchor, and an explicit height is the app's to set.
     return camera.anchor && !camera.center && !camera.centerAltitude;
@@ -734,7 +745,7 @@ bool Map::Impl::clampCenterToTerrain(double elevationMeters) {
 
 void Map::Impl::jumpTo(const CameraOptions& camera) {
     cameraMutated = true;
-    noteCameraSet(keepsViewAboutAnchor(camera));
+    noteCameraSet(camera);
     settleCenterAwaitingSeaLevel();
     transform.jumpTo(camera);
     onUpdate();

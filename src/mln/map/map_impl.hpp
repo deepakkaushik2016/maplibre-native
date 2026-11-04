@@ -185,6 +185,9 @@ public:
     /// screen: with the centre's height held, the camera moves along the line of sight through the
     /// anchor, so the ground there stays put whatever its height.
     static bool keepsViewAboutAnchor(const CameraOptions& camera);
+    /// noteCameraSet for a camera command: about an anchor it keeps the view, and an explicit
+    /// centre cancels an anchor owed to the change it replaces.
+    void noteCameraSet(const CameraOptions& camera);
     /// Ends a hold: anchors the center keeping the view and starts the passes that follow it.
     void anchorAfterHold();
     /// Applies the clamp for the heights last reported, or leaves it to the end of a running
