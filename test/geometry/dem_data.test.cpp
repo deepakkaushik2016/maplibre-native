@@ -217,7 +217,7 @@ TEST(DEMData, ElevationRangeOfWholeMetres) {
     expectRangeHoldsEveryHeight(dem);
 }
 
-// Ground entirely below sea level, all of it fraction: the range is [-1, -1], not 0 m.
+// Ground entirely below sea level, all of it fraction: the range is [-1, 0], not [0, 0].
 TEST(DEMData, ElevationRangeBelowSeaLevel) {
     const DEMData dem(terrariumImage(2, {-0.5, -0.25, -0.75, -0.5}), Tileset::RasterEncoding::Terrarium);
     EXPECT_EQ(dem.getMaxElevation(), 0);

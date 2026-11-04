@@ -132,7 +132,7 @@ float DEMData::get(const int32_t x, const int32_t y) const {
     // 0.1 m steps from -10000 m, Terrarium 1/256 m steps from -32768 m. Counted as an integer
     // and scaled in double, so a height the encoding holds exactly (a whole metre, say) decodes
     // exactly, fraction of a metre kept, as maplibre-gl-js DEMData decodes it. The shaders'
-    // single-precision unpack vector (6553.6f is not exact) reads within a millimetre of this.
+    // single-precision unpack vector (6553.6f is not exact) reads within 2 mm of this.
     const auto steps = (uint32_t{value[0]} << 16) | (uint32_t{value[1]} << 8) | uint32_t{value[2]};
     // Reading no-data as -32768 m would drag the tile's elevation range (and the frustum
     // test built on it) down with it.
