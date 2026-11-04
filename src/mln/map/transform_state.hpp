@@ -246,7 +246,8 @@ public:
 
     /// The line of sight through a screen point (y-up), from the near to the far plane: Mercator x
     /// and y in [0, 1] and z in metres above sea level (terrain exaggeration applied). A straight
-    /// line in those units, so it keeps describing the same ground after the camera moves.
+    /// line in those units, so it keeps describing the same ground after the camera moves. Both
+    /// points are zero while the viewport is empty.
     std::array<vec3, 2> screenCoordinateToRay(const ScreenCoordinate&) const;
 
     double zoomScale(double zoom) const;

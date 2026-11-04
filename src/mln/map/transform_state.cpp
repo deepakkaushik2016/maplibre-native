@@ -829,6 +829,9 @@ TileCoordinate TransformState::screenCoordinateToTileCoordinate(const ScreenCoor
 }
 
 std::array<vec3, 2> TransformState::screenCoordinateToRay(const ScreenCoordinate& point) const {
+    if (size.isEmpty()) {
+        return {};
+    }
     // getInvertedMatrix gives x and y in Mercator units times the scale, z in metres.
     const auto unproject = [&](double depth) {
         vec4 coord;

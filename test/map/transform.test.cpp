@@ -1444,3 +1444,16 @@ TEST(Transform, MoveGroundToPutsTheGroundUnderThePoint) {
     EXPECT_FALSE(transform.moveGroundTo(ground, 100000.0, {195, 422}));
     EXPECT_EQ(before, transform.getLatLng());
 }
+
+// A map with no size yet has no line of sight to give, as it has no screen coordinates.
+TEST(TransformState, RayThroughAnEmptyViewportIsEmpty) {
+    const TransformState state;
+    const auto ray = state.screenCoordinateToRay({10, 10});
+    for (const auto& point : ray) {
+        for (const double value : point) {
+            EXPECT_EQ(value, 0.0);
+        }
+    }
+    Transform transform;
+    EXPECT_FALSE(transform.moveGroundTo(LatLng{47.0, 11.0}, 1000.0, {10, 10}));
+}
