@@ -176,7 +176,7 @@ void Map::moveBy(const ScreenCoordinate& point,
                  const std::optional<ScreenCoordinate>& anchor) {
     impl->cameraMutated = true;
     // An animated pan is how platforms carry a pan gesture's momentum on after the finger lifts.
-    impl->noteCameraSet(animation.duration && *animation.duration > Duration::zero());
+    impl->noteCameraSet(animation.duration && *animation.duration > Duration::zero(), /*keepsGrab=*/true);
     impl->settleCenterAwaitingSeaLevel();
     if (!anchor || !impl->moveGrabbedGround(point, *anchor, animation)) {
         impl->transform.moveBy(point, animation);
@@ -570,6 +570,7 @@ void Map::dumpDebugLogs() const {
 }
 
 void Map::setFreeCameraOptions(const FreeCameraOptions& camera) {
+    impl->groundGrab.reset();
     impl->settleCenterAwaitingSeaLevel();
     impl->transform.setFreeCameraOptions(camera);
     impl->cameraMutated = true;

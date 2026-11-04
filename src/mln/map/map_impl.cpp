@@ -159,6 +159,10 @@ void Map::Impl::onUpdate() {
     if (auto* terrain = style->impl->getTerrain()) {
         terrainImpl = terrain->impl;
     }
+    // Ground grabbed on another terrain (removed, re-exaggerated) is not where it was.
+    if (groundGrab && groundGrab->terrain != terrainImpl) {
+        groundGrab.reset();
+    }
 
     // The ground a gesture grabbed, while its height is unknown.
     std::optional<UpdateParameters::TerrainGrab> terrainGrab;
@@ -206,6 +210,7 @@ void Map::Impl::onUpdate() {
 }
 
 void Map::Impl::onStyleLoading() {
+    groundGrab.reset();
     loading = true;
     rendererFullyLoaded = false;
     observer.onWillStartLoadingMap();
@@ -385,7 +390,12 @@ void Map::Impl::anchorAfterHold() {
     anchorBracketLastEnd = 0;
 }
 
-void Map::Impl::noteCameraSet(bool keepsView) {
+void Map::Impl::noteCameraSet(bool keepsView, bool keepsGrab) {
+    // The next move of a drag would put the ground it grabbed back under the finger, undoing the
+    // camera the app has just set.
+    if (!keepsGrab) {
+        groundGrab.reset();
+    }
     anchorPassesLeft = 0;
     centerSettledBesideACliff = false;
     transitionKeepsView = keepsView;
@@ -656,10 +666,12 @@ bool Map::Impl::moveGrabbedGround(const ScreenCoordinate& offset,
                            std::hypot(anchor.x - groundGrab->finger.x, anchor.y - groundGrab->finger.y) < 0.5;
     if (!continues) {
         const TransformState& state = transform.getState();
-        groundGrab = GroundGrab{.id = ++lastGroundGrabId,
-                                .ray = state.screenCoordinateToRay({anchor.x, state.getSize().height - anchor.y}),
-                                .altitude = std::numeric_limits<double>::quiet_NaN(),
-                                .finger = anchor};
+        groundGrab = GroundGrab{
+            .id = ++lastGroundGrabId,
+            .ray = state.screenCoordinateToRay({anchor.x, state.getSize().height - anchor.y}),
+            .altitude = std::numeric_limits<double>::quiet_NaN(),
+            .finger = anchor,
+            .terrain = style->impl->getTerrain() ? std::optional(style->impl->getTerrain()->impl) : std::nullopt};
     }
     groundGrab->finger = {anchor.x + offset.x, anchor.y + offset.y};
     const bool moved = placeGrabbedGround(animation);

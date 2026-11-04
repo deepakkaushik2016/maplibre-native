@@ -11,6 +11,7 @@
 #include <mln/style/observer.hpp>
 #include <mln/style/source.hpp>
 #include <mln/style/style.hpp>
+#include <mln/style/terrain.hpp>
 #include <mln/util/size.hpp>
 #include <mln/tile/tile_operation.hpp>
 
@@ -175,10 +176,11 @@ public:
     /// is an anchor that keeps the view, because a gesture or its fling moved the camera, and not
     /// the plain jump onto the ground that follows an animation the app asked for.
     bool centerAnchorKeepsView = false;
-    /// Notes that the app sets the camera: a pass budget and a settled center belong to the
-    /// camera being replaced, and `keepsView` marks a change about a point that must stay put
-    /// (transitionKeepsView).
-    void noteCameraSet(bool keepsView = false);
+    /// Notes that the app sets the camera: a pass budget, a settled center and the ground a drag
+    /// grabbed belong to the camera being replaced, and `keepsView` marks a change about a point
+    /// that must stay put (transitionKeepsView). A drag's own moves keep their ground
+    /// (`keepsGrab`).
+    void noteCameraSet(bool keepsView = false, bool keepsGrab = false);
     /// A camera change about an anchor, which keeps the ground at the anchor where it is on the
     /// screen: with the centre's height held, the camera moves along the line of sight through the
     /// anchor, so the ground there stays put whatever its height.
@@ -220,6 +222,9 @@ public:
         double altitude = std::numeric_limits<double>::quiet_NaN();
         /// Where the last move left the finger (top-left origin).
         ScreenCoordinate finger;
+        /// The terrain the ground was grabbed on: another one (removed, re-exaggerated, a new
+        /// style) puts that ground elsewhere.
+        std::optional<Immutable<style::Terrain::Impl>> terrain;
     };
     std::optional<GroundGrab> groundGrab;
     uint64_t lastGroundGrabId = 0;

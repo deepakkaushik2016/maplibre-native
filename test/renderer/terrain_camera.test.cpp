@@ -1753,3 +1753,64 @@ TEST(TerrainGesture, APinchEndingRightAfterAStepLeavesTheCentreOnTheGround) {
         }
     }
 }
+
+namespace {
+
+// Starts an anchored drag off the centre and moves it a few steps, a frame after each, so the
+// renderer has reported the grabbed ground's height. Returns where the finger is.
+ScreenCoordinate startAnchoredDrag(AlpsGestureTest& test) {
+    ScreenCoordinate finger{120, 560};
+    test.map.anchorCenterOnTerrain();
+    test.map.setGestureInProgress(true);
+    test.map.moveBy({0, 0}, {}, finger);
+    test.frame();
+    for (int i = 0; i < 5; ++i) {
+        test.map.moveBy({0, -20}, {}, finger);
+        finger.y -= 20;
+        test.frame();
+    }
+    return finger;
+}
+
+} // namespace
+
+// The app moves the camera in the middle of a drag (a recenter on the user, say). The ground the
+// drag had grabbed belongs to the camera before it: the next move grabs the ground under the
+// finger now, rather than putting the old ground back under the finger and undoing the recenter.
+TEST(TerrainGesture, ACameraSetDuringADragDropsTheGroundItHad) {
+    AlpsGestureTest test(1.0);
+    ASSERT_TRUE(test.settle());
+    ScreenCoordinate finger = startAnchoredDrag(test);
+
+    test.map.jumpTo(CameraOptions().withCenter(LatLng{alpsLatitude + 0.03, alpsLongitude + 0.04}));
+    test.frame();
+    test.frame();
+    const auto ground = test.groundUnder(finger);
+    ASSERT_TRUE(ground);
+    test.map.moveBy({0, -20}, {}, finger);
+    finger.y -= 20;
+    test.frame();
+    test.frame();
+    EXPECT_LT(test.distance(test.project(*ground), finger), 2.0);
+}
+
+// The terrain goes away in the middle of a drag. The ground the drag had grabbed was up on the
+// terrain: the next move drags the flat map under the finger, not a plane at that old height.
+TEST(TerrainGesture, TerrainRemovedDuringADragDropsTheGroundItHad) {
+    AlpsGestureTest test(1.0);
+    ASSERT_TRUE(test.settle());
+    ScreenCoordinate finger = startAnchoredDrag(test);
+
+    test.map.getStyle().setTerrain(nullptr);
+    test.frame();
+    test.frame();
+    const TransformState state = test.map.getTransformState();
+    const GroundPoint seaLevel{
+        .location = state.screenCoordinateToLatLng({finger.x, state.getSize().height - finger.y}, 0.0),
+        .altitude = 0.0};
+    test.map.moveBy({0, -20}, {}, finger);
+    finger.y -= 20;
+    test.frame();
+    test.frame();
+    EXPECT_LT(test.distance(test.project(seaLevel), finger), 2.0);
+}
