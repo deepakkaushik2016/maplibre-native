@@ -159,17 +159,23 @@ public:
     /// The passes left the center beside a cliff in the data, off the height under it: the clamp
     /// leaves it there until the camera next moves, rather than move the camera onto that height.
     bool centerSettledBesideACliff = false;
-    /// The running transition is a pan's momentum (an animated Map::moveBy), which the eye
-    /// clearance may cut short, rather than a camera move the app asked for, which it leaves
-    /// alone.
-    bool transitionIsFling = false;
+    /// The running transition moves the camera about a point that must stay put on the screen: a
+    /// pan's momentum (an animated Map::moveBy), or a change about an anchor (a double tap's zoom),
+    /// rather than a camera move the app asked for. The clamp holds the centre's height through it
+    /// and anchors keeping the view when it ends, and the eye clearance may cut it short.
+    bool transitionKeepsView = false;
     /// What the clamp is owed when the transition or gesture ends (centerAwaitingTerrainAnchor)
     /// is an anchor that keeps the view, because a gesture or its fling moved the camera, and not
     /// the plain jump onto the ground that follows an animation the app asked for.
     bool centerAnchorKeepsView = false;
     /// Notes that the app sets the camera: a pass budget and a settled center belong to the
-    /// camera being replaced, and `fling` marks a pan's momentum.
-    void noteCameraSet(bool fling = false);
+    /// camera being replaced, and `keepsView` marks a change about a point that must stay put
+    /// (transitionKeepsView).
+    void noteCameraSet(bool keepsView = false);
+    /// A camera change about an anchor, which keeps the ground at the anchor where it is on the
+    /// screen: with the centre's height held, the camera moves along the line of sight through the
+    /// anchor, so the ground there stays put whatever its height.
+    static bool keepsViewAboutAnchor(const CameraOptions& camera);
     /// Ends a hold: anchors the center keeping the view and starts the passes that follow it.
     void anchorAfterHold();
     /// Applies the clamp for the heights last reported, or leaves it to the end of a running

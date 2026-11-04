@@ -197,7 +197,7 @@ void Map::Impl::onUpdate() {
                                .terrainLoadMode = terrainLoadMode,
                                .terrainSkirtLength = terrainSkirtLength,
                                .debugAboveGroundLog = debugAboveGroundLog,
-                               .transitionTargetCenter = centerClampedToGround && !transitionIsFling
+                               .transitionTargetCenter = centerClampedToGround && !transitionKeepsView
                                                              ? transform.getTransitionTargetCenter()
                                                              : std::nullopt,
                                .terrainGrab = terrainGrab};
@@ -384,10 +384,17 @@ void Map::Impl::anchorAfterHold() {
     anchorBracketHigh = std::numeric_limits<double>::infinity();
 }
 
-void Map::Impl::noteCameraSet(bool fling) {
+void Map::Impl::noteCameraSet(bool keepsView) {
     anchorPassesLeft = 0;
     centerSettledBesideACliff = false;
-    transitionIsFling = fling;
+    transitionKeepsView = keepsView;
+    // Owed an anchor that keeps the view once the change is over, even when no ground report
+    // arrives while it runs (an immediate change, a short animation): a plain jump onto the
+    // ground would move the camera off the point that was to stay put.
+    if (keepsView && centerClampedToGround) {
+        centerAwaitingTerrainAnchor = true;
+        centerAnchorKeepsView = true;
+    }
 }
 
 void Map::Impl::anchorCenterOnTerrain() {
@@ -509,7 +516,7 @@ void Map::Impl::applyCenterClamp() {
         centerSettledBesideACliff = false;
         // A fling towards rising ground can carry the eye under it. As gl-js keeps the camera
         // above the terrain during an animation, lift it; the jump ends the fling at the slope.
-        if (transitionIsFling) {
+        if (transitionKeepsView) {
             centerAnchorKeepsView = true;
             if (eyeClearCenterAltitude() > transform.getState().getCenterAltitude() + 0.5) {
                 transform.jumpTo(CameraOptions().withCenterAltitude(eyeClearCenterAltitude()));
@@ -598,7 +605,7 @@ void Map::Impl::onTerrainTransitionTargetElevationChanged(double elevationMeters
     // A camera animation the app asked for (a recenter, a flight) eases the center's height to the
     // ground it is headed for, as gl-js does. Without it the animation kept the height it left,
     // and the clamp jumped the center, and the camera with it, onto the ground when it ended.
-    if (!centerClampedToGround || transitionIsFling || !transform.inTransition()) {
+    if (!centerClampedToGround || transitionKeepsView || !transform.inTransition()) {
         return;
     }
     transform.retargetTransitionCenterAltitude(elevationMeters);
@@ -666,6 +673,11 @@ void Map::Impl::onTerrainGrabbedGroundElevation(uint64_t grabId, double elevatio
     }
 }
 
+bool Map::Impl::keepsViewAboutAnchor(const CameraOptions& camera) {
+    // An explicit centre wins over the anchor, and an explicit height is the app's to set.
+    return camera.anchor && !camera.center && !camera.centerAltitude;
+}
+
 bool Map::Impl::clampCenterToTerrain(double elevationMeters) {
     // Sub-metre differences are the terrain cover shifting under a camera that just moved,
     // not the ground actually changing height; acting on them would chase itself.
@@ -681,7 +693,7 @@ bool Map::Impl::clampCenterToTerrain(double elevationMeters) {
 
 void Map::Impl::jumpTo(const CameraOptions& camera) {
     cameraMutated = true;
-    noteCameraSet();
+    noteCameraSet(keepsViewAboutAnchor(camera));
     settleCenterAwaitingSeaLevel();
     transform.jumpTo(camera);
     onUpdate();

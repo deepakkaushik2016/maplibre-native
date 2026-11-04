@@ -1653,3 +1653,66 @@ TEST(TerrainGesture, ADragKeepsTheGroundItGrabbedUnderTheFinger) {
         }
     }
 }
+
+namespace {
+
+// A zoom about a tapped point, as a double tap or a mouse wheel asks for it: the ground at the
+// tap is grabbed first, then the zoom runs, frame-stepped, with `atEveryFrame` told the distance
+// between that ground and the tap on each frame. Returns that distance once the camera has
+// settled.
+double zoomAbout(AlpsGestureTest& test,
+                 const ScreenCoordinate& tap,
+                 double zoomBy,
+                 Milliseconds duration,
+                 const std::function<void(double)>& atEveryFrame) {
+    test.map.anchorCenterOnTerrain();
+    test.frame();
+    const auto grabbed = test.groundUnder(tap);
+    if (!grabbed) {
+        ADD_FAILURE() << "no ground under the tap";
+        return std::numeric_limits<double>::infinity();
+    }
+    bool finished = false;
+    AnimationOptions animation(duration);
+    animation.transitionFinishFn = [&] {
+        finished = true;
+    };
+    const double zoom = *test.map.getCameraOptions().zoom + zoomBy;
+    test.map.easeTo(CameraOptions().withZoom(zoom).withAnchor(tap), animation);
+    atEveryFrame(test.distance(test.project(*grabbed), tap));
+    test.renderUntil([&] {
+        atEveryFrame(test.distance(test.project(*grabbed), tap));
+        return finished;
+    });
+    for (int i = 0; i < 30; ++i) {
+        test.frame();
+        atEveryFrame(test.distance(test.project(*grabbed), tap));
+    }
+    return test.distance(test.project(*grabbed), tap);
+}
+
+} // namespace
+
+// A double tap on the ridge's flank, with the clamp on: the tapped ground stays under the finger
+// through the zoom and after it. Held at the centre's height, a zoom about the tap moves the camera
+// along the line of sight through it, so the ground there stays put whatever its height. The clamp
+// treated the zoom as a camera move the app asked for: it eased the centre's height towards the
+// ground under the centre the zoom started from, then jumped it onto the ground the zoom arrived
+// over, moving the camera off that line: 18 to 30 px.
+TEST(TerrainGesture, AZoomAboutATapKeepsTheTappedGroundUnderIt) {
+    for (const double exaggeration : {1.0, 1.5}) {
+        for (const auto duration : {Milliseconds(300), Milliseconds(0)}) {
+            for (const double zoomBy : {1.0, -1.0}) {
+                AlpsGestureTest test(exaggeration);
+                ASSERT_TRUE(test.settle());
+                double worst = 0.0;
+                const double atRest = zoomAbout(
+                    test, {195, 572}, zoomBy, duration, [&](double distance) { worst = std::max(worst, distance); });
+                const auto label = ::testing::Message() << "exaggeration " << exaggeration << ", " << duration.count()
+                                                        << " ms, zoom by " << zoomBy;
+                EXPECT_LT(worst, 2.0) << label;
+                EXPECT_LT(atRest, 2.0) << label;
+            }
+        }
+    }
+}
