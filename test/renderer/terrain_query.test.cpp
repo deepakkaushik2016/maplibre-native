@@ -436,10 +436,11 @@ TEST(TerrainQuery, RaycastAcrossDEMTilesAndAncestorsHitsWhereDrawn) {
                      << "trail " << i << " at " << meters << " m, drawn at (" << drawn.x << ", " << drawn.y << ")");
         ASSERT_GT(drawn.y, 0);
         ASSERT_LT(drawn.y, viewSize);
-        // Rows within 3 px of the trail's height, along the east-west trail: the farthest is
-        // foreshortened to a row or two, which a sub-pixel shift splits between 7 and 14 pixels of
-        // a square window.
-        ASSERT_GT(redAround(image, drawn, 3, 10), 10) << "the trail is not drawn at its height on the ramp";
+        // The rows within a pixel of the trail's height, along the east-west trail (21 by 3 px):
+        // the farthest is foreshortened to a single row. More than a fifth of the window red, as
+        // the 7 px square this replaced asked: one full row of the trail at its height, while a
+        // row a pixel or more off is outside the window.
+        ASSERT_GT(redAround(image, drawn, 1, 10), 13) << "the trail is not drawn at its height on the ramp";
         const auto hits = frontend.getRenderer()->queryRenderedFeatures(drawn, options);
         ASSERT_EQ(hits.size(), 1u) << "a tap on the drawn trail does not find exactly one trail";
         EXPECT_EQ(hits[0].properties.at("name"), mapbox::feature::value(std::to_string(i)))
