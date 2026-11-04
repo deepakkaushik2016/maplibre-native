@@ -21,6 +21,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -95,7 +96,9 @@ std::string hillsTile(const LatLng& origin, const std::string& url) {
     return encodePNG(image);
 }
 
-std::string hillsStyle(std::optional<double> exaggeration) {
+/// `demZoom`: serve the DEM at that zoom only (minzoom = maxzoom), so no coarser tile stands in
+/// where one is missing; by default up to z11.
+std::string hillsStyle(std::optional<double> exaggeration, std::optional<int> demZoom = std::nullopt) {
     const std::string terrain = exaggeration ? R"("terrain": {"source": "dem", "exaggeration": )" +
                                                    std::to_string(*exaggeration) + "},"
                                              : "";
@@ -106,7 +109,10 @@ std::string hillsStyle(std::optional<double> exaggeration) {
       "type": "raster-dem",
       "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
       "encoding": "mapbox",
-      "maxzoom": 11,
+      "minzoom": )STYLE" +
+           std::to_string(demZoom.value_or(0)) + R"STYLE(,
+      "maxzoom": )STYLE" +
+           std::to_string(demZoom.value_or(11)) + R"STYLE(,
       "tileSize": 256
     },
     "patch": {"type": "geojson", "data": {"type": "FeatureCollection", "features": []}}
@@ -145,22 +151,32 @@ struct HillsScene {
     std::optional<double> exaggeration;
     PremultipliedImage image;
 
-    explicit HillsScene(const CameraCase& camera_, std::optional<double> exaggeration_ = 1.5)
+    /// A DEM tile `withheld` answers with no content, leaving a hole no DEM covers.
+    using Withheld = std::function<bool(const Resource::TileData&)>;
+
+    explicit HillsScene(const CameraCase& camera_,
+                        std::optional<double> exaggeration_ = 1.5,
+                        std::optional<int> demZoom = std::nullopt,
+                        Withheld withheld = {})
         : camera(camera_),
           exaggeration(exaggeration_) {
         const LatLng origin = camera.center;
-        fileSource->tileResponse = [origin](const Resource& resource) {
+        fileSource->tileResponse = [origin, withheld](const Resource& resource) {
+            Response res;
+            if (withheld && resource.tileData && withheld(*resource.tileData)) {
+                res.noContent = true;
+                return res;
+            }
             static std::unordered_map<std::string, std::string> cache;
             const std::string key = std::to_string(origin.latitude()) + resource.url;
             auto it = cache.find(key);
             if (it == cache.end()) {
                 it = cache.emplace(key, hillsTile(origin, resource.url)).first;
             }
-            Response res;
             res.data = std::make_shared<std::string>(it->second);
             return res;
         };
-        map.getStyle().loadJSON(hillsStyle(exaggeration));
+        map.getStyle().loadJSON(hillsStyle(exaggeration, demZoom));
         map.setBounds(BoundOptions().withMaxPitch(85.0));
         map.jumpTo(CameraOptions()
                        .withCenter(camera.center)
@@ -447,6 +463,42 @@ TEST(TerrainScreenQuery, APointBehindARidgeIsOccluded) {
     const auto facePixel = scene.renderer().queryTerrainPixel(nearFace);
     ASSERT_TRUE(facePixel);
     EXPECT_FALSE(facePixel->occluded) << "a point on the ridge's near face is reported hidden";
+}
+
+// Occlusion counts only ground the loaded DEM holds: with the DEM tiles under the ridge missing
+// (no coarser tile stands in), nothing loaded lies in front of the point behind it, so it is not
+// occluded, and a tap at its pixel reads the point itself. With those tiles loaded, the same point
+// from the same camera is occluded.
+TEST(TerrainScreenQuery, GroundNoLoadedDEMCoversNeverOccludes) {
+    // Pitch 60: at 75 a still render never finishes with the DEM held to one zoom.
+    const CameraCase camera{.center = {46.0, 10.0}, .pitch = 60.0, .bearing = 0.0};
+    constexpr int demZoom = 13;
+    const auto row = [](const LatLng& latLng) {
+        return static_cast<int64_t>(std::floor(Projection::project(latLng, 1.0).y / util::tileSize_D * (1 << demZoom)));
+    };
+    // The DEM tile row that holds the ridge's crest and both its flanks.
+    const int64_t ridgeRow = row(offset(camera.center, ridgeNorthKm, 0.0));
+    ASSERT_EQ(row(offset(camera.center, 1.5, 0.0)), ridgeRow);
+    ASSERT_EQ(row(offset(camera.center, 4.5, 0.0)), ridgeRow);
+    const LatLng hidden = offset(camera.center, 5.0, 0.0);
+    ASSERT_NE(row(hidden), ridgeRow);
+
+    for (const bool hole : {false, true}) {
+        SCOPED_TRACE(hole ? "ridge tiles missing" : "ridge tiles loaded");
+        HillsScene scene(
+            camera, 1.5, demZoom, [&](const Resource::TileData& tile) { return hole && tile.y == ridgeRow; });
+        ASSERT_EQ(scene.renderer().queryTerrainElevation(offset(camera.center, ridgeNorthKm, 0.0)).has_value(), !hole);
+        ASSERT_TRUE(scene.renderer().queryTerrainElevation(hidden)) << "no DEM under the point";
+        const auto pixel = scene.renderer().queryTerrainPixel(hidden);
+        ASSERT_TRUE(pixel);
+        EXPECT_GT(pixel->point.y, 0.0);
+        EXPECT_LT(pixel->point.y, viewHeight);
+        EXPECT_EQ(pixel->occluded, !hole);
+        const auto seen = scene.renderer().queryTerrainLatLng(pixel->point);
+        ASSERT_TRUE(seen);
+        const double seenNorthKm = (seen->latitude() - camera.center.latitude()) * kmPerDegree;
+        EXPECT_NEAR(seenNorthKm, hole ? 5.0 : ridgeNorthKm, hole ? 0.01 : 1.0);
+    }
 }
 
 // Above the horizon there is no ground to read.

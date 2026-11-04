@@ -101,7 +101,8 @@ public:
         /// Screen pixels, top-left origin (as `Map::pixelForLatLng` returns it). It may lie
         /// outside the viewport.
         ScreenCoordinate point;
-        /// Ground drawn in front of the point hides it, as a ridge hides the valley behind it.
+        /// Ground from the loaded DEM is drawn in front of the point and hides it, as a ridge
+        /// hides the valley behind it. See queryTerrainPixel for what it does not see.
         bool occluded = false;
     };
 
@@ -110,10 +111,19 @@ public:
      *
      * What `Map::pixelForLatLng` answers at sea level, for the point lifted to the height the
      * terrain is drawn at there (queryTerrainElevation), projected with the transform of the
-     * last rendered frame. The point is `occluded` when the line of sight through its pixel
-     * meets the ground more than one world pixel (a pixel of the map at its zoom) nearer the
-     * camera than the point itself. Longitudes are taken in the world copy nearest the map's
-     * centre, where the frame draws them.
+     * last rendered frame. Longitudes are taken in the world copy nearest the map's centre,
+     * where the frame draws them.
+     *
+     * `occluded` is true only when ground from the loaded DEM is drawn in front of the point:
+     * the line of sight through its pixel, raycast as queryTerrainLatLng does, meets loaded-DEM
+     * ground more than one world pixel (a pixel of the map at its zoom) nearer the camera than
+     * the point. Otherwise it is false, which is not a proof that nothing hides the point:
+     * - ground no loaded DEM tile covers never occludes (the frame draws a stand-in height
+     *   there until its DEM arrives);
+     * - a line of sight the raycast does not see meet the ground reports the point unoccluded.
+     *   The raycast samples it every 4 world pixels across the ground, or every 1/512 of its
+     *   stretch within the loaded DEM's height range if that is longer, so it can step over a
+     *   crest thinner than that on a long, grazing line of sight.
      *
      * Without terrain in the style, `point` is `Map::pixelForLatLng` for the last rendered
      * frame's transform, bit for bit, and `occluded` is false. (Unless LatLngBounds hold the
