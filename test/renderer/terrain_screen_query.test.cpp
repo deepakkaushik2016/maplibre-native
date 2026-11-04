@@ -10,6 +10,7 @@
 #include <mln/math/angles.hpp>
 #include <mln/renderer/renderer.hpp>
 #include <mln/style/layers/circle_layer.hpp>
+#include <mln/style/layers/fill_extrusion_layer.hpp>
 #include <mln/style/sources/geojson_source.hpp>
 #include <mln/style/style.hpp>
 #include <mln/util/chrono.hpp>
@@ -242,6 +243,70 @@ struct HillsScene {
         layer->setCircleRadius(radius);
         layer->setCirclePitchAlignment(alignment);
         style.addLayer(std::move(layer));
+    }
+
+    // A flat red roof `halfKm` either side of `location`, `meters` above the ground at its centre:
+    // an extrusion with its base at its height, so it has no walls, only the roof.
+    void setRoof(const LatLng& location, double halfKm, float meters) {
+        auto& style = map.getStyle();
+        if (!style.getSource("roof")) {
+            style.addSource(std::make_unique<style::GeoJSONSource>("roof"));
+            auto layer = std::make_unique<style::FillExtrusionLayer>("roof", "roof");
+            layer->setFillExtrusionColor(Color::red());
+            layer->setFillExtrusionBase(meters);
+            layer->setFillExtrusionHeight(meters);
+            style.addLayer(std::move(layer));
+        }
+        const LatLng sw = offset(location, -halfKm, -halfKm);
+        const LatLng ne = offset(location, halfKm, halfKm);
+        style.getSource("roof")->as<style::GeoJSONSource>()->setGeoJSON(
+            Geometry<double>{Polygon<double>{{{sw.longitude(), sw.latitude()},
+                                              {ne.longitude(), sw.latitude()},
+                                              {ne.longitude(), ne.latitude()},
+                                              {sw.longitude(), ne.latitude()},
+                                              {sw.longitude(), sw.latitude()}}}});
+    }
+
+    // Where that roof is drawn on the ground drawn at its centre: the centre of area of its four
+    // corners projected at the drawn height there plus `meters`.
+    ScreenCoordinate roofCentre(const LatLng& location, double halfKm, double meters) {
+        const double height = renderer().queryTerrainElevation(location).value_or(0.0) + meters;
+        std::array<ScreenCoordinate, 4> q;
+        const std::array<std::pair<double, double>, 4> corners{
+            {{-halfKm, -halfKm}, {-halfKm, halfKm}, {halfKm, halfKm}, {halfKm, -halfKm}}};
+        for (size_t i = 0; i < 4; ++i) {
+            q[i] = project(offset(location, corners[i].first, corners[i].second), height);
+        }
+        double area = 0.0;
+        double x = 0.0;
+        double y = 0.0;
+        for (size_t i = 0; i < 4; ++i) {
+            const auto& a = q[i];
+            const auto& b = q[(i + 1) % 4];
+            const double cross = a.x * b.y - b.x * a.y;
+            area += cross;
+            x += (a.x + b.x) * cross;
+            y += (a.y + b.y) * cross;
+        }
+        return {x / (3.0 * area), y / (3.0 * area)};
+    }
+
+    // The centre of every red pixel on the screen (the roof is drawn without antialiasing).
+    ScreenCoordinate redCentre() const {
+        double x = 0.0;
+        double y = 0.0;
+        int count = 0;
+        for (uint32_t row = 0; row < image.size.height; ++row) {
+            for (uint32_t col = 0; col < image.size.width; ++col) {
+                const uint8_t* px = image.data.get() + (static_cast<size_t>(row) * image.size.width + col) * 4;
+                if (px[0] > 128 && px[1] < 128) {
+                    x += col + 0.5;
+                    y += row + 0.5;
+                    ++count;
+                }
+            }
+        }
+        return count ? ScreenCoordinate{x / count, y / count} : ScreenCoordinate{-1.0, -1.0};
     }
 
     // The centre of the patch drawn within `radius` of `around`, in screen coordinates (a pixel's
@@ -681,5 +746,23 @@ TEST(TerrainScreenQuery, ACircleNearAnyEdgeOfItsTileIsDrawnOnTheGround) {
         EXPECT_LT(distance(centre, pixel->point), 0.3)
             << "the circle is drawn at (" << centre.x << ", " << centre.y << "), the ground at (" << pixel->point.x
             << ", " << pixel->point.y << ")";
+    }
+}
+
+// An extrusion stands on the ground at the centre of its footprint: the whole roof is raised by the
+// height drawn there. The footprint lies inside its tile, clear of every neighbour's buffer.
+TEST(TerrainScreenQuery, AnExtrusionIsRaisedByTheGroundAtTheCentreOfItsFootprint) {
+    const LatLng origin{46.0, 10.0};
+    constexpr double halfKm = 0.25;
+    constexpr float meters = 80.0f; // clear of the ground on these slopes, so none of it is hidden
+    for (const double pitch : {0.0, 60.0, 75.0}) {
+        SCOPED_TRACE(::testing::Message() << "pitch " << pitch);
+        HillsScene scene({.center = origin, .pitch = pitch, .bearing = 0.0});
+        scene.setRoof(origin, halfKm, meters);
+        scene.render();
+        const ScreenCoordinate expected = scene.roofCentre(origin, halfKm, meters);
+        const ScreenCoordinate drawn = scene.redCentre();
+        EXPECT_LT(distance(drawn, expected), 0.4) << "the roof is drawn at (" << drawn.x << ", " << drawn.y
+                                                  << "), on the ground at (" << expected.x << ", " << expected.y << ")";
     }
 }

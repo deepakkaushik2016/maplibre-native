@@ -104,17 +104,20 @@ void FillExtrusionBucket::addFeature(const GeometryTileFeature& feature,
         if (totalVertices == 0) continue;
 
         // Polygon centroid (outer ring), so the whole extrusion is raised by a
-        // single terrain elevation instead of shearing across a slope (as gl-js does)
+        // single terrain elevation instead of shearing across a slope (as gl-js does).
+        // The ring repeats its first vertex at the end; count it once, as gl-js does,
+        // or the centroid leans towards that corner.
         Point<int16_t> centroid{0, 0};
         if (!polygon.empty() && !polygon.front().empty()) {
+            const auto& ring = polygon.front();
+            const std::size_t count = ring.size() > 1 && ring.front() == ring.back() ? ring.size() - 1 : ring.size();
             Point<double> accum{0.0, 0.0};
-            for (const auto& pt : polygon.front()) {
-                accum.x += pt.x;
-                accum.y += pt.y;
+            for (std::size_t i = 0; i < count; ++i) {
+                accum.x += ring[i].x;
+                accum.y += ring[i].y;
             }
-            const auto count = static_cast<double>(polygon.front().size());
-            centroid.x = static_cast<int16_t>(std::floor(accum.x / count));
-            centroid.y = static_cast<int16_t>(std::floor(accum.y / count));
+            centroid.x = static_cast<int16_t>(std::floor(accum.x / static_cast<double>(count)));
+            centroid.y = static_cast<int16_t>(std::floor(accum.y / static_cast<double>(count)));
         }
 
         std::vector<uint32_t> flatIndices;
