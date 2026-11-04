@@ -1716,3 +1716,40 @@ TEST(TerrainGesture, AZoomAboutATapKeepsTheTappedGroundUnderIt) {
         }
     }
 }
+
+// A pinch over the ridge's flank that ends straight after its last step, before a frame has
+// rendered the camera there, leaves the centre on the ground under it once it settles. The end
+// anchors the centre on the ground keeping the view, in passes that slide it along the line of
+// sight as the renderer reports the ground under it. Once the passes had heights on both sides they
+// halved the bracket: over ground whose height swings as the centre slides that took more passes
+// than they had, or put the centre short of ground that hardly changed under it, too little for the
+// renderer to report again, and they stopped 2.5 to 5.4 m off it. A step under a meter was refused,
+// and the passes stopped there as if beside a cliff, ignoring every report after it.
+TEST(TerrainGesture, APinchEndingRightAfterAStepLeavesTheCentreOnTheGround) {
+    for (const double exaggeration : {1.0, 1.5}) {
+        AlpsGestureTest test(exaggeration);
+        ASSERT_TRUE(test.settle());
+        for (const ScreenCoordinate focus :
+             {ScreenCoordinate{195, 572}, ScreenCoordinate{80, 300}, ScreenCoordinate{300, 700}}) {
+            for (const double zoomBy : {1.0, -1.0}) {
+                test.map.anchorCenterOnTerrain();
+                test.map.setGestureInProgress(true);
+                constexpr int steps = 5;
+                for (int i = 0; i < steps; ++i) {
+                    if (i > 0) {
+                        test.frame();
+                    }
+                    const double zoom = *test.map.getCameraOptions().zoom + zoomBy / steps;
+                    test.map.jumpTo(CameraOptions().withZoom(zoom).withAnchor(focus));
+                }
+                test.map.setGestureInProgress(false);
+                const auto label = ::testing::Message() << "exaggeration " << exaggeration << ", focus " << focus.x
+                                                        << "," << focus.y << ", zoom by " << zoomBy;
+                ASSERT_TRUE(test.renderUntil([&] { return test.centerOffGround().has_value(); })) << label;
+                // Ground still loading under the centre is waited for; it is not a pass.
+                test.renderUntil([&] { return std::abs(*test.centerOffGround()) < 1.0; }, 30);
+                EXPECT_LT(std::abs(*test.centerOffGround()), 1.0) << label;
+            }
+        }
+    }
+}

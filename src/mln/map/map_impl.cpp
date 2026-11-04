@@ -382,6 +382,7 @@ void Map::Impl::anchorAfterHold() {
     anchorPassesLeft = 16;
     anchorBracketLow = -std::numeric_limits<double>::infinity();
     anchorBracketHigh = std::numeric_limits<double>::infinity();
+    anchorBracketLastEnd = 0;
 }
 
 void Map::Impl::noteCameraSet(bool keepsView) {
@@ -407,10 +408,10 @@ void Map::Impl::anchorCenterOnTerrain() {
     }
 }
 
-bool Map::Impl::setCenterAltitudeKeepingView(double altitudeMeters) {
+bool Map::Impl::setCenterAltitudeKeepingView(double altitudeMeters, double minimumRise) {
     const TransformState& state = transform.getState();
     const double rise = altitudeMeters - state.getCenterAltitude();
-    if (std::abs(rise) < 1.0) {
+    if (std::abs(rise) < minimumRise) {
         return false;
     }
     const CameraOptions camera = transform.getCameraOptions(std::nullopt);
@@ -557,14 +558,27 @@ void Map::Impl::applyCenterClamp() {
         // Right after an anchor, a center that is off the ground it looks at slides along the line
         // of sight onto it, keeping the camera; only the eye clearance moves the camera. Ground
         // above the center means the line of sight meets it higher up, nearer the camera; ground
-        // below, lower down. Once both sides are known the next height is the middle of them.
+        // below, lower down. Once both sides are known the next height is between them.
         const double current = transform.getState().getCenterAltitude();
         if (anchorPassesLeft > 0 && target == terrainCenterElevation && std::abs(current - target) >= 0.5) {
             --anchorPassesLeft;
-            if (target > current) {
-                anchorBracketLow = std::max(anchorBracketLow, current);
-            } else {
-                anchorBracketHigh = std::min(anchorBracketHigh, current);
+            const double gap = target - current;
+            if (gap > 0.0) {
+                if (current > anchorBracketLow) {
+                    anchorBracketLow = current;
+                    anchorBracketLowGap = gap;
+                    if (anchorBracketLastEnd == 1) {
+                        anchorBracketHighGap /= 2.0;
+                    }
+                    anchorBracketLastEnd = 1;
+                }
+            } else if (current < anchorBracketHigh) {
+                anchorBracketHigh = current;
+                anchorBracketHighGap = gap;
+                if (anchorBracketLastEnd == -1) {
+                    anchorBracketLowGap /= 2.0;
+                }
+                anchorBracketLastEnd = -1;
             }
             const bool bracketed = std::isfinite(anchorBracketLow) && std::isfinite(anchorBracketHigh);
             if (bracketed && anchorBracketHigh - anchorBracketLow < 1.0) {
@@ -574,8 +588,23 @@ void Map::Impl::applyCenterClamp() {
                 centerSettledBesideACliff = true;
                 return;
             }
-            const double next = bracketed ? (anchorBracketLow + anchorBracketHigh) / 2 : target;
-            if (setCenterAltitudeKeepingView(next)) {
+            // Where the line through the bracket's ends crosses the ground: over smooth ground the
+            // line of sight meets it there within a pass or two, and halving the gap at the end
+            // that stays put narrows the bracket round a cliff in the data as halving it would.
+            // Halving the bracket every pass took more than the 16 passes over ground whose height
+            // swings as the center slides (a slope facing the camera), and the clamp then jumped
+            // the camera; or put the center short of ground that hardly changed under it, too
+            // little for the renderer to report again, and the passes stopped tens of meters off.
+            const double next = bracketed
+                                    ? anchorBracketLow + anchorBracketLowGap * (anchorBracketHigh - anchorBracketLow) /
+                                                             (anchorBracketLowGap - anchorBracketHighGap)
+                                    : target;
+            // Down to a few centimeters: a step under a meter still brings the center onto the
+            // ground. Refusing it left the center as if beside a cliff, and an anchor that ran
+            // before the first frame after a camera change (a pinch ending straight after its last
+            // step) took the height of the ground under the old center, often within a meter of the
+            // center: the clamp then ignored the ground the center had moved over, tens of meters off.
+            if (setCenterAltitudeKeepingView(next, 0.05)) {
                 onUpdate();
                 return;
             }

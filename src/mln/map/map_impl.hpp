@@ -152,10 +152,17 @@ public:
     int anchorPassesLeft = 0;
     /// The heights the passes have shown the line of sight meets the ground above and below:
     /// over broken ground the height under the center can flip between two values as it slides,
-    /// so the passes halve the bracket instead of chasing them, and leave the center there once
+    /// so the passes narrow the bracket instead of chasing them, and leave the center there once
     /// it is under a meter wide.
     double anchorBracketLow = -std::numeric_limits<double>::infinity();
     double anchorBracketHigh = std::numeric_limits<double>::infinity();
+    /// How far the ground was above the center at anchorBracketLow (positive) and below it at
+    /// anchorBracketHigh (negative), and which end the last pass moved (1 low, -1 high): where the
+    /// line through the ends crosses the ground is the next height, the Illinois variant of
+    /// regula falsi.
+    double anchorBracketLowGap = 0.0;
+    double anchorBracketHighGap = 0.0;
+    int anchorBracketLastEnd = 0;
     /// The passes left the center beside a cliff in the data, off the height under it: the clamp
     /// leaves it there until the camera next moves, rather than move the camera onto that height.
     bool centerSettledBesideACliff = false;
@@ -185,8 +192,9 @@ public:
     /// Slides the centre along the line of sight to `altitudeMeters`, the zoom following, so the
     /// camera stays where it is. False, changing nothing, when there was nothing to move, the line
     /// of sight nearly grazes the plane at that altitude, the plane is (nearly) at the camera, or
-    /// the zoom limits, the bounds or the constrain mode would cut the move short.
-    bool setCenterAltitudeKeepingView(double altitudeMeters);
+    /// the zoom limits, the bounds or the constrain mode would cut the move short. A change under
+    /// `minimumRise` meters counts as nothing to move.
+    bool setCenterAltitudeKeepingView(double altitudeMeters, double minimumRise = 1.0);
     /// Whether the style had terrain when last checked, and whether the centre has yet to come
     /// back to sea level since it was removed (a transition was in flight, or a still map has
     /// not rendered since).
