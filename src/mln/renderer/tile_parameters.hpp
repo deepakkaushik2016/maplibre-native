@@ -56,9 +56,9 @@ public:
     bool isUpdateSynchronous = false;
     bool captureRenderedFeatures = false;
     /// With terrain on: the most tiles one source covers (ideal and prefetch covers each),
-    /// keeping those nearest `coverTileLimitOrigin`. A source whose minzoom is deeper than the
-    /// far field needs is covered at that minzoom to the horizon, thousands of tiles at a steep
-    /// pitch however few the mesh draws there. 0 = no limit.
+    /// keeping those nearest `coverTileLimitOrigin`. A cover with no level of detail runs at the
+    /// source's zoom to the horizon, thousands of tiles at a steep pitch however few the mesh
+    /// draws there. 0 = no limit.
     size_t coverTileLimit = 0;
     /// Where coverTileLimit measures from (normalized web-mercator): the ground under the
     /// camera, RenderTerrain::meshTileCapOrigin, the same point the mesh-tile cap uses.

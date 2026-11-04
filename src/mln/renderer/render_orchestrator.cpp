@@ -304,11 +304,12 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
         tileParameters.tileLodOrigin = RenderTerrain::meshTileCapOrigin(updateParameters->transformState);
     }
 
-    // A source whose minzoom is deeper than the far field's zoom is covered at that minzoom out
-    // to the horizon: thousands of tiles at a steep pitch, each kept with its geometry for as
-    // long as the view holds. The terrain mesh is capped to the tiles nearest the camera
-    // (RenderTerrain::computeMeshCover), so keep the nearest few per mesh tile, measured from
-    // the same point. The DEM source keeps its own cover.
+    // A cover with no level of detail runs at the source's zoom out to the horizon: thousands
+    // of tiles at a steep pitch, each kept with its geometry for as long as the view holds. (A
+    // source's minzoom does not: the far field it is too deep for is left out.) The terrain mesh
+    // is capped to the tiles nearest the camera (RenderTerrain::computeMeshCover), so keep the
+    // nearest few per mesh tile, measured from the same point. The DEM source keeps its own
+    // cover.
     const size_t coverTileLimit = terrainEnabled ? terrainLoadBudget(updateParameters->terrainLoadMode).maxMeshTiles *
                                                        RenderTerrain::sourceTilesPerMeshTile
                                                  : 0;

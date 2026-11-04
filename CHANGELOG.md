@@ -36,6 +36,7 @@
 ### 🐞 Bug fixes
 
 - *...Add new stuff here...*
+- [core] Fix a source with a `minzoom` covering a view pitched past the level-of-detail threshold at that `minzoom` out to the horizon (thousands of tiles, and a still render or snapshot over terrain that did not finish). Where the view wants tiles coarser than the source has, it now has none, as in maplibre-gl-js.
 - [core] Fix rendered-feature queries near the final endpoint of an offset line.
 - [core] Fix plugin layer filters ignoring the style's global state.
 - [core] Fix plugin layers with read-write depth drawables not depth testing when drawn above a `fill-extrusion` layer.

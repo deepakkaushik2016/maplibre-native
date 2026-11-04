@@ -63,9 +63,9 @@ struct TileCoverParameters {
     bool roundZoom = false;
     /// Cover no more than this many tiles: the ones whose centers lie nearest `tileLimitOrigin`,
     /// which come back in that order. The cover is walked nearest first and stops at the limit,
-    /// so its cost follows the limit and not the size of the view: a source whose minzoom is
-    /// deeper than the far field's zoom would otherwise enumerate (and sort) every tile out to the
-    /// horizon at a steep pitch, a couple of hundred thousand of them, to keep a few hundred.
+    /// so its cost follows the limit and not the size of the view: a cover with no level of
+    /// detail would otherwise enumerate (and sort) every tile out to the horizon at a steep
+    /// pitch, a couple of hundred thousand of them, to keep a few hundred.
     /// 0 means no limit.
     size_t tileLimit = 0;
     /// Where `tileLimit` measures from (normalized web-mercator).

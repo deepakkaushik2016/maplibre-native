@@ -97,7 +97,8 @@ public:
 };
 
 // A steep view over terrain, with a vector source and the DEM both behind a stub file source that
-// records what each one is asked for.
+// records what each one is asked for. The level of detail is off (a pitch threshold of pi), so each
+// source covers the whole view at its zoom out to the horizon: thousands of tiles at this pitch.
 class TerrainSourceCoverTest {
 public:
     struct Options {
@@ -130,6 +131,7 @@ public:
             return res;
         };
         map.setTerrainLoadMode(options.mode);
+        map.setTileLodPitchThreshold(std::numbers::pi);
         map.getStyle().loadJSON(deepSourceStyle(options.demMinZoom, options.demMaxZoom));
         map.setBounds(BoundOptions().withMaxPitch(85.0));
         map.jumpTo(CameraOptions().withCenter(LatLng{38.26, -120.68}).withZoom(options.zoom).withPitch(options.pitch));
@@ -179,6 +181,7 @@ public:
         const auto coverZoom = static_cast<uint8_t>(std::clamp(static_cast<int>(zoom), 13, 14));
         FlatTerrain terrain;
         const util::TileCoverParameters params{.transformState = map.getTransformState(),
+                                               .tileLodPitchThreshold = std::numbers::pi,
                                                .elevationProvider = overTerrain ? &terrain : nullptr};
         std::vector<std::pair<double, CanonicalTileID>> ranked;
         for (const OverscaledTileID& id : util::tileCover(params, coverZoom, Range<uint8_t>{13, 14}, coverZoom)) {
@@ -237,9 +240,9 @@ void expectOnlyTheTilesNearestTheCamera(const TerrainSourceCoverTest::Options& o
 
 } // namespace
 
-// A source whose minzoom is deeper than the far field is covered at that minzoom out to the
-// horizon, thousands of tiles at a steep pitch. Under terrain it asks for the nearest few per
-// tile of the mesh-tile cap, nearest the camera, not the map centre.
+// A source covered at its zoom out to the horizon asks for thousands of tiles at a steep pitch.
+// Under terrain it asks for the nearest few per tile of the mesh-tile cap, nearest the camera, not
+// the map centre.
 TEST(TerrainSourceCover, ASourceRequestsOnlyTheTilesNearestTheCamera) {
     expectOnlyTheTilesNearestTheCamera({.mode = TerrainLoadMode::Quality, .size = {1600, 1600}});
 }

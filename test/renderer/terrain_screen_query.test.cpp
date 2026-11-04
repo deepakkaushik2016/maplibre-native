@@ -20,7 +20,9 @@
 #include <mln/util/mat4.hpp>
 #include <mln/util/projection.hpp>
 #include <mln/util/run_loop.hpp>
+#include <mln/util/tile_range.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -168,7 +170,8 @@ struct HillsScene {
     explicit HillsScene(const CameraCase& camera_,
                         std::optional<double> exaggeration_ = 1.5,
                         std::optional<int> demZoom = std::nullopt,
-                        Withheld withheld = {})
+                        Withheld withheld = {},
+                        const std::optional<std::string>& style = std::nullopt)
         : camera(camera_),
           exaggeration(exaggeration_) {
         const LatLng origin = camera.center;
@@ -195,7 +198,7 @@ struct HillsScene {
             res.data = std::make_shared<std::string>(it->second);
             return res;
         };
-        map.getStyle().loadJSON(hillsStyle(exaggeration, demZoom));
+        map.getStyle().loadJSON(style ? *style : hillsStyle(exaggeration, demZoom));
         map.setBounds(BoundOptions().withMaxPitch(85.0));
         map.jumpTo(CameraOptions()
                        .withCenter(camera.center)
@@ -586,7 +589,6 @@ TEST(TerrainScreenQuery, APointBehindARidgeIsOccluded) {
 // occluded, and a tap at its pixel reads the point itself. With those tiles loaded, the same point
 // from the same camera is occluded.
 TEST(TerrainScreenQuery, GroundNoLoadedDEMCoversNeverOccludes) {
-    // Pitch 60: at 75 a still render never finishes with the DEM held to one zoom.
     const CameraCase camera{.center = {46.0, 10.0}, .pitch = 60.0, .bearing = 0.0};
     constexpr int demZoom = 13;
     const auto row = [](const LatLng& latLng) {
@@ -615,6 +617,76 @@ TEST(TerrainScreenQuery, GroundNoLoadedDEMCoversNeverOccludes) {
         const double seenNorthKm = (seen->latitude() - camera.center.latitude()) * kmPerDegree;
         EXPECT_NEAR(seenNorthKm, hole ? 5.0 : ridgeNorthKm, hole ? 0.01 : 1.0);
     }
+}
+
+// A still frame at a grazing pitch over a DEM held to one zoom finishes, having asked only for the
+// DEM tiles the view wants at that zoom. The far field wants tiles coarser than the DEM has, so it
+// has none there (as in gl-js) and is drawn at the stand-in height. The DEM's cover used to run at
+// its minzoom out to the horizon: over 10,000 tiles at z13, and a still frame that did not finish.
+TEST(TerrainScreenQuery, AStillFrameAtAGrazingPitchOverASingleZoomDEMFinishes) {
+    for (const int demZoom : {11, 13}) {
+        for (const double pitch : {75.0, 85.0}) {
+            SCOPED_TRACE(::testing::Message() << "DEM at z" << demZoom << ", pitch " << pitch);
+            const CameraCase camera{.center = {46.0, 10.0}, .pitch = pitch, .bearing = 0.0};
+            HillsScene scene(camera, 1.5, demZoom);
+            EXPECT_LT(scene.requested.size(), 64u) << "the DEM's cover runs on past what the view wants";
+            for (const auto& tile : scene.requested) {
+                EXPECT_EQ(tile.z, demZoom);
+            }
+            const auto meters = scene.renderer().queryTerrainElevation(camera.center);
+            EXPECT_TRUE(meters) << "no DEM under the centre";
+            EXPECT_NEAR(meters.value_or(0.0), hillsMeters(0.0, 0.0) * 1.5, 1.0);
+        }
+    }
+}
+
+// The app's tileset: a planet DEM to z12 under the terrain, and a z13-14 source held to a park by its
+// bounds (hillshaded here). At a grazing pitch from inside the park a still frame finishes, the
+// planet DEM reaches the horizon at the coarse zooms the far field wants, and the park asks only for
+// its own tiles near the camera.
+TEST(TerrainScreenQuery, AStillFrameAtAGrazingPitchOverAPlanetDEMAndABoundedParkSourceFinishes) {
+    const CameraCase camera{.center = {46.0, 10.0}, .pitch = 75.0, .bearing = 0.0};
+    const LatLngBounds park = LatLngBounds::hull({45.95, 9.95}, {46.05, 10.05});
+    const std::string style = R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {"type": "raster-dem", "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"], "encoding": "mapbox",
+            "minzoom": 0, "maxzoom": 12, "tileSize": 256},
+    "park": {"type": "raster-dem", "tiles": ["http://example.com/park/{z}-{x}-{y}.png"], "encoding": "mapbox",
+             "minzoom": 13, "maxzoom": 14, "tileSize": 256, "bounds": [9.95, 45.95, 10.05, 46.05]}
+  },
+  "terrain": {"source": "dem", "exaggeration": 1.5},
+  "layers": [
+    {"id": "background", "type": "background", "paint": {"background-color": "white"}},
+    {"id": "park", "type": "hillshade", "source": "park"}
+  ]
+})STYLE";
+    HillsScene scene(camera, 1.5, std::nullopt, {}, style);
+    ASSERT_TRUE(scene.stillDone);
+    size_t dem = 0;
+    size_t parkTiles = 0;
+    int8_t coarsest = std::numeric_limits<int8_t>::max();
+    for (const auto& tile : scene.requested) {
+        if (tile.urlTemplate.find("/park/") != std::string::npos) {
+            ++parkTiles;
+            EXPECT_GE(tile.z, 13);
+            EXPECT_LE(tile.z, 14);
+            // Inside the bounds: in their tile range at its zoom.
+            const auto range = util::TileRange::fromLatLngBounds(park, tile.z, tile.z);
+            EXPECT_TRUE(range.contains(CanonicalTileID(tile.z, tile.x, tile.y)))
+                << "park tile " << int(tile.z) << "/" << tile.x << "/" << tile.y << " outside its bounds";
+        } else {
+            ++dem;
+            EXPECT_LE(tile.z, 12);
+            coarsest = std::min(coarsest, tile.z);
+        }
+    }
+    EXPECT_GT(parkTiles, 0u) << "the park source asked for nothing";
+    EXPECT_LT(parkTiles, 64u) << "the park's cover runs on past what the view wants";
+    EXPECT_GT(dem, 0u);
+    EXPECT_LT(dem, 64u);
+    EXPECT_LT(coarsest, 12) << "the far field is not covered at the coarser zooms it wants";
+    ASSERT_TRUE(scene.renderer().queryTerrainElevation(camera.center)) << "no DEM under the centre";
 }
 
 // Above the horizon there is no ground to read.

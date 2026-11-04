@@ -464,6 +464,14 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             shouldSplitTile = *longestDim * state.tileLodScale < distToSplit;
         }
 
+        // The view wants this tile coarser than the source has: the source covers nothing here, as
+        // gl-js's coveringTiles skips it. Splitting it down to the source's minzoom instead covered
+        // the view at the minzoom out to the horizon (10,273 tiles at pitch 75 over a source held
+        // to z13). Only a variable-zoom cover gets here; a fixed one has minZoom == z and splits on.
+        if (allowVariableZoom && !shouldSplitTile && node.zoom < minZoom && node.zoom != maxZoom) {
+            continue;
+        }
+
         // Have we reached the target depth or is the tile too far away to be any split further?
         if (node.zoom == maxZoom || (!shouldSplitTile && node.zoom >= minZoom)) {
             // Perform precise intersection test between the frustum and aabb.

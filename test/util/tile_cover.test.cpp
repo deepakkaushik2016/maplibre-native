@@ -14,6 +14,8 @@
 #include <map>
 #include <cstdlib> /* srand, rand */
 #include <ctime>   /* time */
+#include <iterator>
+#include <vector>
 #include <gtest/gtest.h>
 
 using namespace mln;
@@ -210,7 +212,7 @@ struct CountingElevation : util::TileElevationProvider {
 
 } // namespace
 
-// A source whose minzoom is as deep as the view's zoom is covered at that zoom out to the horizon:
+// A cover with no level of detail, deeper than the view's zoom, runs at that zoom out to the horizon:
 // at a steep pitch, a couple of hundred thousand tiles, of which a caller may want a few hundred.
 // With a tile limit the cover is walked nearest first and stops once it has them, so it reads the
 // nodes near the origin and no more, and what it returns is the nearest tiles of the whole cover.
@@ -221,15 +223,17 @@ TEST(TileCover, TileLimitReturnsTheNearestTilesWithoutWalkingTheWholeView) {
     transform.jumpTo(
         CameraOptions().withCenter(LatLng{38.692, -120.095}).withZoom(12.0).withBearing(30.0).withPitch(80.0));
 
-    constexpr uint8_t z = 14; // the source's minzoom, deeper than the view's zoom
+    constexpr uint8_t z = 14; // deeper than the view's zoom
     constexpr size_t limit = 40;
     const Range<uint8_t> deep{z, z};
     const CountingElevation counter;
-    util::TileCoverParameters params{.transformState = transform.getState(), .elevationProvider = &counter};
+    // A fixed-zoom cover (the variable-zoom threshold above the pitch) covers the whole view at z.
+    util::TileCoverParameters params{
+        .transformState = transform.getState(), .tileLodPitchThreshold = M_PI / 2.0, .elevationProvider = &counter};
 
     const auto whole = util::tileCover(params, z, deep);
     ASSERT_GT(whole.size(), 1000 * limit)
-        << "a steep view covers well over a hundred thousand tiles at the source's minzoom";
+        << "a steep view covers well over a hundred thousand tiles at a fixed zoom deeper than its own";
     const size_t askedForWhole = counter.asked;
     counter.asked = 0;
 
@@ -937,6 +941,49 @@ TEST(TileCover, ElevatedCentreCoversTheGroundAtTheBottomOfTheView) {
             }
             EXPECT_EQ(0, uncoveredBottomPoints(transform.getState(), cover, plateau))
                 << "zoom " << zoom << " centre altitude " << centerAltitude << " cover " << cover.size() << " tiles";
+        }
+    }
+}
+
+// A source's minzoom limits the zooms it covers with, not how far its cover reaches. Where a view
+// pitched past the variable-zoom threshold wants a tile coarser than the minzoom, the source has no
+// tile there, as in gl-js, whose coveringTiles skips it: the cover is the full range's cover less
+// its tiles below the minzoom. Splitting such a tile down to the minzoom covered the view at the
+// minzoom out to the horizon. At pitch 75 over a raster-dem held to z13 that was thousands of
+// tiles, and a still render that did not finish.
+TEST(TileCover, ASourceMinZoomLeavesOutTheTilesTheViewWantsCoarser) {
+    for (const auto mode : {TileLodMode::Default, TileLodMode::Distance, TileLodMode::Adaptive}) {
+        for (const double pitch : {61.0, 75.0, 85.0}) {
+            Transform transform;
+            transform.resize({390, 844});
+            transform.setMaxPitch(85.0);
+            transform.jumpTo(CameraOptions().withCenter(LatLng{46.0, 10.0}).withZoom(13.0).withPitch(pitch));
+            util::TileCoverParameters params{transform.getState()};
+            params.tileLodMode = mode;
+            const auto full = util::tileCover(params, 13, Range<uint8_t>{0, 13}, 14);
+            for (const uint8_t minZoom : {11, 13}) {
+                SCOPED_TRACE(::testing::Message() << "mode " << static_cast<int>(mode) << ", pitch " << pitch
+                                                  << ", minzoom " << int(minZoom));
+                std::set<OverscaledTileID> expected;
+                for (const auto& id : full) {
+                    if (id.canonical.z >= minZoom) {
+                        expected.insert(id);
+                    }
+                }
+                const auto cover = util::tileCover(params, 13, Range<uint8_t>{minZoom, 13}, 14);
+                const std::set<OverscaledTileID> covered(cover.begin(), cover.end());
+                EXPECT_EQ(covered.size(), cover.size()) << "a tile is covered twice";
+                std::vector<OverscaledTileID> extra;
+                std::vector<OverscaledTileID> missing;
+                std::set_difference(
+                    covered.begin(), covered.end(), expected.begin(), expected.end(), std::back_inserter(extra));
+                std::set_difference(
+                    expected.begin(), expected.end(), covered.begin(), covered.end(), std::back_inserter(missing));
+                EXPECT_TRUE(extra.empty()) << extra.size() << " tiles more than the full range's (" << cover.size()
+                                           << " in all, " << full.size() << " in the full range's), the first "
+                                           << (extra.empty() ? OverscaledTileID{0, 0, 0} : extra.front());
+                EXPECT_TRUE(missing.empty()) << missing.size() << " of the full range's tiles left out";
+            }
         }
     }
 }
