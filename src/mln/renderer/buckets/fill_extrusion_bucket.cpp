@@ -21,6 +21,7 @@
 #pragma warning(pop)
 #endif
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
@@ -54,6 +55,21 @@ using namespace style;
 
 struct GeometryTooLongException : std::exception {};
 
+namespace {
+
+// Whether every vertex of the ring lies beyond the same edge of the tile.
+bool isEntirelyOutside(const GeometryCoordinates& ring) {
+    const auto all = [&](auto beyond) {
+        return std::all_of(ring.begin(), ring.end(), beyond);
+    };
+    return all([](const GeometryCoordinate& p) { return p.x < 0; }) ||
+           all([](const GeometryCoordinate& p) { return p.x > util::EXTENT; }) ||
+           all([](const GeometryCoordinate& p) { return p.y < 0; }) ||
+           all([](const GeometryCoordinate& p) { return p.y > util::EXTENT; });
+}
+
+} // namespace
+
 FillExtrusionBucket::FillExtrusionBucket(
     const FillExtrusionBucket::PossiblyEvaluatedLayoutProperties& layout_,
     const std::map<std::string, Immutable<style::LayerProperties>>& layerPaintProperties,
@@ -81,6 +97,14 @@ void FillExtrusionBucket::addFeature(const GeometryTileFeature& feature,
     const auto vertexOffset = vertices.elements();
 
     for (auto& polygon : classifyRings(geometry)) {
+        // A polygon whose outer ring lies wholly beyond one edge of the tile is in the tile's
+        // buffer only: the tile it lies in draws it. Drawn here too, over terrain it would be
+        // raised by this tile's DEM sampled beyond its edge, and stand off the ground beside
+        // its own copy. maplibre-gl-js skips it the same way (isEntirelyOutside).
+        if (polygon.empty() || isEntirelyOutside(polygon.front())) {
+            continue;
+        }
+
         // Optimize polygons with many interior rings for earcut tessellation.
         limitHoles(polygon, 500);
 

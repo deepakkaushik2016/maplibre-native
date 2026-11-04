@@ -268,8 +268,8 @@ struct HillsScene {
     }
 
     // Where that roof is drawn on the ground drawn at its centre: the centre of area of its four
-    // corners projected at the drawn height there plus `meters`.
-    ScreenCoordinate roofCentre(const LatLng& location, double halfKm, double meters) {
+    // corners projected at the drawn height there plus `meters`, and its area in pixels.
+    std::pair<ScreenCoordinate, double> roofOnTheGround(const LatLng& location, double halfKm, double meters) {
         const double height = renderer().queryTerrainElevation(location).value_or(0.0) + meters;
         std::array<ScreenCoordinate, 4> q;
         const std::array<std::pair<double, double>, 4> corners{
@@ -288,11 +288,12 @@ struct HillsScene {
             x += (a.x + b.x) * cross;
             y += (a.y + b.y) * cross;
         }
-        return {x / (3.0 * area), y / (3.0 * area)};
+        return {{x / (3.0 * area), y / (3.0 * area)}, std::abs(area) / 2.0};
     }
 
-    // The centre of every red pixel on the screen (the roof is drawn without antialiasing).
-    ScreenCoordinate redCentre() const {
+    // The centre of every red pixel on the screen (the roof is drawn without antialiasing), and how
+    // many there are.
+    std::pair<ScreenCoordinate, int> redPixels() const {
         double x = 0.0;
         double y = 0.0;
         int count = 0;
@@ -306,7 +307,10 @@ struct HillsScene {
                 }
             }
         }
-        return count ? ScreenCoordinate{x / count, y / count} : ScreenCoordinate{-1.0, -1.0};
+        if (count == 0) {
+            return {{-1.0, -1.0}, 0};
+        }
+        return {{x / count, y / count}, count};
     }
 
     // The centre of the patch drawn within `radius` of `around`, in screen coordinates (a pixel's
@@ -760,8 +764,79 @@ TEST(TerrainScreenQuery, AnExtrusionIsRaisedByTheGroundAtTheCentreOfItsFootprint
         HillsScene scene({.center = origin, .pitch = pitch, .bearing = 0.0});
         scene.setRoof(origin, halfKm, meters);
         scene.render();
-        const ScreenCoordinate expected = scene.roofCentre(origin, halfKm, meters);
-        const ScreenCoordinate drawn = scene.redCentre();
+        const auto [expected, area] = scene.roofOnTheGround(origin, halfKm, meters);
+        const auto [drawn, count] = scene.redPixels();
+        EXPECT_NEAR(count / area, 1.0, 0.02) << "the roof covers " << count << " px, not " << area;
+        EXPECT_LT(distance(drawn, expected), 0.4) << "the roof is drawn at (" << drawn.x << ", " << drawn.y
+                                                  << "), on the ground at (" << expected.x << ", " << expected.y << ")";
+    }
+}
+
+// An extrusion in a neighbour's buffer is drawn once, on the ground: the footprint lies a fifth of a
+// z13 tile from its tile's east edge, which is also a z11 DEM tile edge, so its eastern neighbour
+// holds all of it in its buffer, beyond its own DEM. That copy read its height off the DEM's
+// clamped edge and stood beside the real one whenever the neighbour was on screen.
+TEST(TerrainScreenQuery, AnExtrusionInANeighboursBufferIsDrawnOnceOnTheGround) {
+    const LatLng origin{46.0, 10.0};
+    const LatLng point{46.000197, 10.011712};
+    constexpr double halfKm = 0.25;
+    constexpr float meters = 80.0f;
+    struct View {
+        const char* name;
+        LatLng hillsOrigin;
+        bool centred;
+    };
+    for (const View& view : {View{.name = "off-centre", .hillsOrigin = origin, .centred = false},
+                             View{.name = "centred", .hillsOrigin = origin, .centred = true},
+                             View{.name = "centred, hills laid out from it", .hillsOrigin = point, .centred = true}}) {
+        for (const double pitch : {0.0, 60.0, 75.0}) {
+            SCOPED_TRACE(::testing::Message() << view.name << ", pitch " << pitch);
+            HillsScene scene({.center = view.hillsOrigin, .pitch = pitch, .bearing = 0.0});
+            if (view.centred) {
+                scene.map.jumpTo(CameraOptions().withCenter(point).withCenterAltitude(
+                    hillsMeters(view.hillsOrigin, point) * *scene.exaggeration));
+            }
+            scene.setRoof(point, halfKm, meters);
+            scene.render();
+            const auto [expected, area] = scene.roofOnTheGround(point, halfKm, meters);
+            const auto [drawn, count] = scene.redPixels();
+            // A second copy adds to the area; the pixels' edges alone stay within a few percent.
+            EXPECT_NEAR(count / area, 1.0, 0.04) << "the roof covers " << count << " px, not " << area;
+            EXPECT_LT(distance(drawn, expected), 0.4)
+                << "the roof is drawn at (" << drawn.x << ", " << drawn.y << "), on the ground at (" << expected.x
+                << ", " << expected.y << ")";
+        }
+    }
+}
+
+// The same beyond each edge: a footprint a fifth of a tile in from an edge of its z13 tile, which is
+// also a z11 DEM tile edge, lies wholly in the buffer of the neighbour across it.
+TEST(TerrainScreenQuery, AnExtrusionNearAnyEdgeOfItsTileIsDrawnOnceOnTheGround) {
+    const LatLng origin{46.0, 10.0};
+    constexpr int zoom = 13;
+    constexpr int demZoom = 11;
+    constexpr int perDEMTile = 1 << (zoom - demZoom);
+    constexpr double halfKm = 0.25;
+    constexpr float meters = 80.0f;
+    const Point<double> originTile = Projection::project(origin, 1.0) / util::tileSize_D * double(1 << zoom);
+    const double west = std::floor(originTile.x / perDEMTile) * perDEMTile;
+    const double north = std::floor(originTile.y / perDEMTile) * perDEMTile;
+    const Point<double> southEast{west + perDEMTile - 1, north + perDEMTile - 1};
+    const Point<double> northWest{west, north};
+    for (const auto& [side, tile, inTile] : {std::tuple{"east", southEast, Point<double>{0.8, 0.5}},
+                                             std::tuple{"south", southEast, Point<double>{0.5, 0.8}},
+                                             std::tuple{"west", northWest, Point<double>{0.2, 0.5}},
+                                             std::tuple{"north", northWest, Point<double>{0.5, 0.2}}}) {
+        SCOPED_TRACE(side);
+        const LatLng point = Projection::unproject((tile + inTile) * util::tileSize_D / double(1 << zoom), 1.0);
+        HillsScene scene({.center = origin, .pitch = 60.0, .bearing = 0.0});
+        scene.map.jumpTo(
+            CameraOptions().withCenter(point).withCenterAltitude(hillsMeters(origin, point) * *scene.exaggeration));
+        scene.setRoof(point, halfKm, meters);
+        scene.render();
+        const auto [expected, area] = scene.roofOnTheGround(point, halfKm, meters);
+        const auto [drawn, count] = scene.redPixels();
+        EXPECT_NEAR(count / area, 1.0, 0.04) << "the roof covers " << count << " px, not " << area;
         EXPECT_LT(distance(drawn, expected), 0.4) << "the roof is drawn at (" << drawn.x << ", " << drawn.y
                                                   << "), on the ground at (" << expected.x << ", " << expected.y << ")";
     }
