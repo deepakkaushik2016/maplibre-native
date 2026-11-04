@@ -776,6 +776,14 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         } else {
             lastReportedTargetElevation = std::numeric_limits<double>::quiet_NaN();
         }
+        // And the ground a gesture grabbed, so a drag keeps it under the finger at its own height
+        // rather than the centre's. One raycast a grab: none on the frames after it is reported.
+        if (const auto& grab = updateParameters->terrainGrab; grab && grab->id != lastReportedGrabId) {
+            if (const auto altitude = terrain->raycastAltitude(updateParameters->transformState, grab->ray)) {
+                lastReportedGrabId = grab->id;
+                observer->onTerrainGrabbedGroundElevation(grab->id, *altitude);
+            }
+        }
     }
 
     auto stats = std::make_shared<gfx::RenderingStats>(context.threadSafeCopyRenderingStats());

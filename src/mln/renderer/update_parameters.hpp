@@ -13,6 +13,7 @@
 #include <mln/util/geo.hpp>
 #include <mln/util/immutable.hpp>
 
+#include <array>
 #include <numbers>
 #include <optional>
 #include <vector>
@@ -74,6 +75,14 @@ public:
     // The center a running camera animation is headed for (Transform::getTransitionTargetCenter):
     // the renderer reports the ground there so the map can ease the center's height to it.
     std::optional<LatLng> transitionTargetCenter;
+    /// The line of sight through the ground a gesture grabbed (Map::moveBy with an anchor), while
+    /// its height is unknown: the renderer reports where it meets the terrain, once per grab.
+    struct TerrainGrab {
+        uint64_t id = 0;
+        /// TransformState::screenCoordinateToRay from the camera at the grab.
+        std::array<vec3, 2> ray;
+    };
+    std::optional<TerrainGrab> terrainGrab;
 };
 
 } // namespace mln

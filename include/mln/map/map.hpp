@@ -74,7 +74,20 @@ public:
     void jumpTo(const CameraOptions&);
     void easeTo(const CameraOptions&, const AnimationOptions&);
     void flyTo(const CameraOptions&, const AnimationOptions&);
-    void moveBy(const ScreenCoordinate&, const AnimationOptions& = {});
+    /**
+     * @brief Pans the map by `offset` pixels.
+     *
+     * Without an anchor, the ground at the screen centre moves by `offset`. With one, the ground at
+     * `anchor` (where the finger was before this move, top-left origin) does: over terrain at its own
+     * height, so a drag keeps the ground it grabbed under the finger wherever on the screen it grabbed
+     * it. During a gesture (setGestureInProgress), a move whose anchor is where the last one left the
+     * finger carries on with the ground the first one grabbed; any other anchor grabs anew. The ground's
+     * height comes from the renderer a frame after the grab; until then the centre's stands in for it,
+     * and the camera follows once it arrives.
+     */
+    void moveBy(const ScreenCoordinate&,
+                const AnimationOptions& = {},
+                const std::optional<ScreenCoordinate>& anchor = std::nullopt);
     void scaleBy(double scale, const std::optional<ScreenCoordinate>& anchor, const AnimationOptions& animation = {});
     void pitchBy(double pitch, const AnimationOptions& animation = {});
     void rotateBy(const ScreenCoordinate& first, const ScreenCoordinate& second, const AnimationOptions& = {});

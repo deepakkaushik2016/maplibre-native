@@ -1557,17 +1557,26 @@ struct AlpsGestureTest {
         return std::hypot(a.x - b.x, a.y - b.y);
     }
 
-    // A drag as the app's gesture layer sends it: the centre anchored on the ground at the start,
-    // then `moves` equal pan steps adding up to `drag`, a frame after each. Returns the largest
-    // distance between the ground grabbed at `grab` and the finger, while held and after release.
+    // A drag as the app's gesture layer sends it: the centre anchored on the ground when the finger
+    // goes down, then `moves` equal steps adding up to `drag`, a frame after each. A plain drag pans
+    // by the finger's movement; an anchored one also says where the finger is, and grabs the ground
+    // there as it goes down. Returns the largest distance between the ground grabbed at `grab` and
+    // the finger, while held and after release.
     struct DragResult {
         double held = std::numeric_limits<double>::infinity();
         double released = std::numeric_limits<double>::infinity();
     };
-    DragResult drag(const ScreenCoordinate& grab, const ScreenCoordinate& drag, int moves) {
+    enum class Pan {
+        Plain,
+        Anchored
+    };
+    DragResult drag(const ScreenCoordinate& grab, const ScreenCoordinate& drag, int moves, Pan pan = Pan::Plain) {
         DragResult result;
         map.anchorCenterOnTerrain();
         map.setGestureInProgress(true);
+        if (pan == Pan::Anchored) {
+            map.moveBy({0, 0}, {}, grab);
+        }
         frame();
         const auto grabbed = groundUnder(grab);
         if (!grabbed) {
@@ -1578,7 +1587,11 @@ struct AlpsGestureTest {
         ScreenCoordinate finger = grab;
         const ScreenCoordinate step{drag.x / moves, drag.y / moves};
         for (int i = 0; i < moves; ++i) {
-            map.moveBy(step);
+            if (pan == Pan::Anchored) {
+                map.moveBy(step, {}, finger);
+            } else {
+                map.moveBy(step);
+            }
             finger = {finger.x + step.x, finger.y + step.y};
             frame();
             result.held = std::max(result.held, distance(project(*grabbed), finger));
@@ -1607,6 +1620,36 @@ TEST(TerrainGesture, PanStepsKeepTheGroundGrabbedAtTheCentreUnderTheFinger) {
             const auto drift = test.drag({195, 422}, {200, 0}, moves);
             EXPECT_LT(drift.held, 2.0) << "exaggeration " << exaggeration << ", " << moves << " steps";
             EXPECT_LT(drift.released, 2.0) << "exaggeration " << exaggeration << ", " << moves << " steps";
+        }
+    }
+}
+
+// The same drag, grabbed anywhere on the screen and dragged any way. A plain pan moves the ground at
+// the centre by the finger's movement: the ground under the finger moves as far only when it is in
+// the centre's row and at the centre's height. Dragged towards the camera from the centre, the
+// ground slid up to 86 px from under the finger, and grabbed off the centre on the ridge's flank 17
+// to 28 px. An anchored pan keeps the ground the finger grabbed under it, at that ground's own
+// height, which the renderer reports a frame after the grab: on the centre's plane instead, the
+// ground grabbed off the centre slid 6 to 11 px.
+TEST(TerrainGesture, ADragKeepsTheGroundItGrabbedUnderTheFinger) {
+    struct Drag {
+        const char* name;
+        ScreenCoordinate grab;
+        ScreenCoordinate drag;
+    };
+    for (const double exaggeration : {1.0, 1.5}) {
+        for (const int moves : {10, 40, 100}) {
+            for (const Drag& d : {Drag{"centre, along the ridge", {195, 422}, {200, 0}},
+                                  Drag{"centre, across the ridge", {195, 422}, {0, 200}},
+                                  Drag{"off the centre, along the ridge", {120, 560}, {200, 0}},
+                                  Drag{"off the centre, across the ridge", {120, 560}, {0, -200}}}) {
+                AlpsGestureTest test(exaggeration);
+                ASSERT_TRUE(test.settle());
+                const auto drift = test.drag(d.grab, d.drag, moves, AlpsGestureTest::Pan::Anchored);
+                EXPECT_LT(drift.held, 2.0) << d.name << ", exaggeration " << exaggeration << ", " << moves << " steps";
+                EXPECT_LT(drift.released, 2.0)
+                    << d.name << ", exaggeration " << exaggeration << ", " << moves << " steps";
+            }
         }
     }
 }

@@ -1422,3 +1422,25 @@ TEST(Camera, SetOrientationWithRollNoPitch) {
     EXPECT_NEAR(pitch, pitch_, 1.0e-9);
     EXPECT_NEAR(0.0, roll_, 1.0e-9);
 }
+
+// A drag over terrain puts the ground the finger grabbed under the finger at that ground's own
+// height, wherever on the screen it is and wherever the finger goes, with the camera at its height.
+TEST(Transform, MoveGroundToPutsTheGroundUnderThePoint) {
+    Transform transform;
+    transform.resize({390, 844});
+    transform.jumpTo(
+        CameraOptions().withCenter(LatLng{47.265, 11.404}).withZoom(13.0).withPitch(60.0).withCenterAltitude(2300.0));
+    const ScreenCoordinate grab{100, 500};
+    const LatLng ground = transform.screenCoordinateToLatLng(grab, 1500.0, LatLng::Unwrapped);
+    for (const ScreenCoordinate finger :
+         {ScreenCoordinate{300, 500}, ScreenCoordinate{100, 700}, ScreenCoordinate{250, 300}}) {
+        ASSERT_TRUE(transform.moveGroundTo(ground, 1500.0, finger));
+        const LatLng under = transform.screenCoordinateToLatLng(finger, 1500.0, LatLng::Unwrapped);
+        EXPECT_LT(metersBetween(ground, under), 0.01) << finger.x << ", " << finger.y;
+        EXPECT_NEAR(transform.getState().getCenterAltitude(), 2300.0, 1e-9);
+    }
+    // A height the line of sight never comes down to, above the camera: no ground to put there.
+    const LatLng before = transform.getLatLng();
+    EXPECT_FALSE(transform.moveGroundTo(ground, 100000.0, {195, 422}));
+    EXPECT_EQ(before, transform.getLatLng());
+}

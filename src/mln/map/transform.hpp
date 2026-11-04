@@ -67,6 +67,15 @@ public:
         @param offset The distance to pan the map by, measured in pixels from
             top to bottom and from left to right. */
     void moveBy(const ScreenCoordinate& offset, const AnimationOptions& = {});
+    /** Pans the map so that the ground at `location`, `altitudeMeters` above sea level (terrain
+        exaggeration applied), is drawn at `point` (top-left origin). The camera keeps its height,
+        so everything along the line of sight through `point` stays there.
+        @return false, leaving the camera alone, when that line of sight does not come down to
+            `altitudeMeters` within the visible depth (the point is above the horizon). */
+    bool moveGroundTo(const LatLng& location,
+                      double altitudeMeters,
+                      const ScreenCoordinate& point,
+                      const AnimationOptions& = {});
     LatLng getLatLng(LatLng::WrapMode = LatLng::Wrapped) const;
 
     // Bounds

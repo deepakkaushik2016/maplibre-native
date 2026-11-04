@@ -1184,9 +1184,6 @@ std::optional<RenderTerrain::RaycastSetup> RenderTerrain::prepareRaycast(const T
 }
 
 std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const ScreenCoordinate& point) const {
-    const double minElevation = setup.minElevation;
-    const double maxElevation = setup.maxElevation;
-
     // The ray from the near (clip z -1) to the far (clip z 1) plane, in world pixels with z in
     // metres - the space TransformState's projection matrix maps from.
     const double ndcX = point.x / setup.size.width * 2.0 - 1.0;
@@ -1198,6 +1195,36 @@ std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const Sc
     };
     const vec3 near = unproject(-1.0);
     const vec3 far = unproject(1.0);
+    const auto t = raycastSegment(setup, near, far);
+    if (!t) {
+        return std::nullopt;
+    }
+    return Projection::unproject(
+        {near[0] + *t * (far[0] - near[0]), near[1] + *t * (far[1] - near[1])}, setup.scale, LatLng::Unwrapped);
+}
+
+std::optional<double> RenderTerrain::raycastAltitude(const TransformState& state,
+                                                     const std::array<vec3, 2>& ray) const {
+    const auto setup = prepareRaycast(state);
+    if (!setup) {
+        return std::nullopt;
+    }
+    // From Mercator units to the world pixels raycastSegment marches in.
+    const double worldSize = Projection::worldSize(setup->scale);
+    const vec3 near{{ray[0][0] * worldSize, ray[0][1] * worldSize, ray[0][2]}};
+    const vec3 far{{ray[1][0] * worldSize, ray[1][1] * worldSize, ray[1][2]}};
+    const auto t = raycastSegment(*setup, near, far);
+    if (!t) {
+        return std::nullopt;
+    }
+    return near[2] + *t * (far[2] - near[2]);
+}
+
+std::optional<double> RenderTerrain::raycastSegment(const RaycastSetup& setup,
+                                                    const vec3& near,
+                                                    const vec3& far) const {
+    const double minElevation = setup.minElevation;
+    const double maxElevation = setup.maxElevation;
     const double dx = far[0] - near[0];
     const double dy = far[1] - near[1];
     const double dz = far[2] - near[2];
@@ -1257,7 +1284,7 @@ std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const Sc
                 const double mid = (lo + hi) / 2.0;
                 (belowTerrain(mid) ? hi : lo) = mid;
             }
-            return at(hi);
+            return hi;
         }
         previousT = t;
     }

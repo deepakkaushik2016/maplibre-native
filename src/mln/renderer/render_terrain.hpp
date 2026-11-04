@@ -293,6 +293,19 @@ public:
     std::optional<LatLng> raycast(const RaycastSetup& setup, const ScreenCoordinate& point) const;
 
     /**
+     * @brief The height at which a line of sight first enters the terrain surface
+     *
+     * As raycast, for a line of sight taken from an earlier camera (TransformState::screenCoordinateToRay):
+     * the ground a gesture grabbed, after the camera has moved on.
+     *
+     * @param state the transform the frame was drawn with
+     * @param ray two points on the line of sight, the camera's side first: Mercator x and y, z in metres
+     * @return metres above sea level, exaggeration applied; empty when the ray misses the terrain or no
+     *         DEM is loaded
+     */
+    std::optional<double> raycastAltitude(const TransformState& state, const std::array<vec3, 2>& ray) const;
+
+    /**
      * @brief Get the terrain exaggeration multiplier
      */
     float getExaggeration() const;
@@ -429,6 +442,9 @@ public:
     Immutable<style::Terrain::Impl> impl;
 
 private:
+    /// The march raycast and raycastAltitude share: where along the segment from `near` to `far`
+    /// (world pixels, z in metres) it first enters the surface, from 0 to 1.
+    std::optional<double> raycastSegment(const RaycastSetup& setup, const vec3& near, const vec3& far) const;
     /// The zoom of the finest loaded DEM tile that has data, or -1 when there is none.
     int finestDEMZoom() const;
     /// The loaded DEM tile with data that covers `tileID`: its own, or its closest ancestor.

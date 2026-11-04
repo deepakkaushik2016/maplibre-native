@@ -85,6 +85,11 @@ public:
     /// covers it (UpdateParameters::transitionTargetCenter), and whenever a finer one changes it.
     virtual void onTerrainTransitionTargetElevationChanged(double /*elevationMeters*/) {}
 
+    /// The height of the ground a gesture grabbed (UpdateParameters::terrainGrab, `grabId`), where
+    /// the line of sight it was grabbed along meets the rendered terrain. Reported once per grab,
+    /// once a DEM tile covers that ground.
+    virtual void onTerrainGrabbedGroundElevation(uint64_t /*grabId*/, double /*elevationMeters*/) {}
+
     /// Style is missing an image
     using StyleImageMissingCallback = std::function<void()>;
     virtual void onStyleImageMissing(const std::string&, const StyleImageMissingCallback& done) { done(); }

@@ -828,6 +828,17 @@ TileCoordinate TransformState::screenCoordinateToTileCoordinate(const ScreenCoor
     return {.p = {p.x, p.y}, .z = static_cast<double>(atZoom)};
 }
 
+std::array<vec3, 2> TransformState::screenCoordinateToRay(const ScreenCoordinate& point) const {
+    // getInvertedMatrix gives x and y in Mercator units times the scale, z in metres.
+    const auto unproject = [&](double depth) {
+        vec4 coord;
+        // y-up in, as screenCoordinateToTileCoordinate takes it, which flips it the same way.
+        matrix::transformMat4(coord, vec4{{point.x, size.height - point.y, depth, 1}}, getInvertedMatrix());
+        return vec3{{coord[0] / coord[3] / scale, coord[1] / coord[3] / scale, coord[2] / coord[3]}};
+    };
+    return {unproject(0), unproject(1)};
+}
+
 LatLng TransformState::screenCoordinateToLatLng(const ScreenCoordinate& point, LatLng::WrapMode wrapMode) const {
     auto coord = screenCoordinateToTileCoordinate(point, 0);
     return Projection::unproject(coord.p, 1. / util::tileSize_D, wrapMode);

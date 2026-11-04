@@ -448,6 +448,35 @@ void Transform::moveBy(const ScreenCoordinate& offset, const AnimationOptions& a
            animation);
 }
 
+bool Transform::moveGroundTo(const LatLng& location,
+                             double altitudeMeters,
+                             const ScreenCoordinate& point,
+                             const AnimationOptions& animation) {
+    // Where the line of sight through `point` meets the plane at `altitudeMeters`; moving the
+    // camera across by the difference to `location` puts `location` on it. Heights are drawn at the
+    // centre's scale, which the move changes a little with the centre's latitude, so a second step
+    // takes up what that left (1.6 m for a 250 px move over 800 m of relief, under 1 cm after it).
+    constexpr double mercator = 1.0 / util::tileSize_D;
+    const ScreenCoordinate yUp{point.x, state.getSize().height - point.y};
+    const Point<double> ground = Projection::project(location, mercator);
+    TransformState trial(state);
+    Point<double> center = Projection::project(getLatLng(LatLng::Unwrapped), mercator);
+    for (int step = 0; step < 2; ++step) {
+        const auto ray = trial.screenCoordinateToRay(yUp);
+        const double dz = ray[1][2] - ray[0][2];
+        const double t = dz < 0.0 ? (altitudeMeters - ray[0][2]) / dz : -1.0;
+        if (t <= 0.0 || t > 1.0) {
+            // The line of sight does not come down to that height in front of the camera.
+            return false;
+        }
+        const Point<double> under{ray[0][0] + t * (ray[1][0] - ray[0][0]), ray[0][1] + t * (ray[1][1] - ray[0][1])};
+        center = center + ground - under;
+        trial.setLatLngZoom(Projection::unproject(center, mercator, LatLng::Unwrapped), trial.getZoom());
+    }
+    easeTo(CameraOptions().withCenter(Projection::unproject(center, mercator, LatLng::Unwrapped)), animation);
+    return true;
+}
+
 LatLng Transform::getLatLng(LatLng::WrapMode wrap) const {
     return state.getLatLng(wrap);
 }

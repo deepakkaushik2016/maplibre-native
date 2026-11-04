@@ -67,6 +67,7 @@ public:
     void onTerrainCenterElevationChanged(double elevationMeters) final;
     void onTerrainEyeElevationChanged(double elevationMeters) final;
     void onTerrainTransitionTargetElevationChanged(double elevationMeters) final;
+    void onTerrainGrabbedGroundElevation(uint64_t grabId, double elevationMeters) final;
     void onStyleImageMissing(const std::string&, const std::function<void()>&) final;
     void onRemoveUnusedStyleImages(const std::vector<std::string>&) final;
     void onRegisterShaders(gfx::ShaderRegistry&) final;
@@ -195,6 +196,26 @@ public:
     /// A height report arrived while a camera transition or a gesture was running; the clamp
     /// applies it once that ends instead of cutting it short.
     bool centerAwaitingTerrainAnchor = false;
+    /// The ground a pan anchored at a finger grabbed (Map::moveBy), kept for the rest of the
+    /// gesture: the line of sight it was grabbed along and, once the renderer has reported it, the
+    /// height where that meets the terrain. Each move puts that ground under the finger, so the
+    /// moves do not add up errors.
+    struct GroundGrab {
+        uint64_t id = 0;
+        std::array<vec3, 2> ray;
+        double altitude = std::numeric_limits<double>::quiet_NaN();
+        /// Where the last move left the finger (top-left origin).
+        ScreenCoordinate finger;
+    };
+    std::optional<GroundGrab> groundGrab;
+    uint64_t lastGroundGrabId = 0;
+    /// Pans the ground at `anchor` by `offset` (Map::moveBy); false, leaving the camera alone,
+    /// when the finger is above the horizon of the ground it holds.
+    bool moveGrabbedGround(const ScreenCoordinate& offset,
+                           const ScreenCoordinate& anchor,
+                           const AnimationOptions& animation);
+    /// Puts the grabbed ground under the finger, at its reported height or, until then, the centre's.
+    bool placeGrabbedGround(const AnimationOptions& animation);
     /// Moves the centre altitude to `elevationMeters` keeping lng/lat; false when the change
     /// is under the sub-metre threshold.
     bool clampCenterToTerrain(double elevationMeters);

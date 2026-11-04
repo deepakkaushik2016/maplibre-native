@@ -111,6 +111,8 @@ private:
     double lastReportedCenterElevation = 0.0;
     double lastReportedEyeElevation = std::numeric_limits<double>::quiet_NaN();
     double lastReportedTargetElevation = std::numeric_limits<double>::quiet_NaN();
+    /// The last gesture grab whose ground was reported (UpdateParameters::terrainGrab).
+    uint64_t lastReportedGrabId = 0;
 
     enum class RenderState {
         Never,

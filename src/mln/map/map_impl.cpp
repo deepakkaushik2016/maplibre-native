@@ -160,6 +160,12 @@ void Map::Impl::onUpdate() {
         terrainImpl = terrain->impl;
     }
 
+    // The ground a gesture grabbed, while its height is unknown.
+    std::optional<UpdateParameters::TerrainGrab> terrainGrab;
+    if (groundGrab && std::isnan(groundGrab->altitude) && terrainImpl) {
+        terrainGrab = UpdateParameters::TerrainGrab{.id = groundGrab->id, .ray = groundGrab->ray};
+    }
+
     UpdateParameters params = {.styleLoaded = style->impl->isLoaded(),
                                .mode = mode,
                                .pixelRatio = pixelRatio,
@@ -193,7 +199,8 @@ void Map::Impl::onUpdate() {
                                .debugAboveGroundLog = debugAboveGroundLog,
                                .transitionTargetCenter = centerClampedToGround && !transitionIsFling
                                                              ? transform.getTransitionTargetCenter()
-                                                             : std::nullopt};
+                                                             : std::nullopt,
+                               .terrainGrab = terrainGrab};
 
     rendererFrontend.update(std::make_shared<UpdateParameters>(std::move(params)));
 }
@@ -603,6 +610,60 @@ void Map::Impl::onTerrainEyeElevationChanged(double elevationMeters) {
         return;
     }
     applyCenterClamp();
+}
+
+bool Map::Impl::moveGrabbedGround(const ScreenCoordinate& offset,
+                                  const ScreenCoordinate& anchor,
+                                  const AnimationOptions& animation) {
+    // A move that starts where the last one left the finger carries on with the same ground.
+    const bool continues = groundGrab &&
+                           std::hypot(anchor.x - groundGrab->finger.x, anchor.y - groundGrab->finger.y) < 0.5;
+    if (!continues) {
+        const TransformState& state = transform.getState();
+        groundGrab = GroundGrab{.id = ++lastGroundGrabId,
+                                .ray = state.screenCoordinateToRay({anchor.x, state.getSize().height - anchor.y}),
+                                .altitude = std::numeric_limits<double>::quiet_NaN(),
+                                .finger = anchor};
+    }
+    groundGrab->finger = {anchor.x + offset.x, anchor.y + offset.y};
+    const bool moved = placeGrabbedGround(animation);
+    // Only a gesture holds on to the ground between moves.
+    if (!moved || !transform.isGestureInProgress()) {
+        groundGrab.reset();
+    }
+    return moved;
+}
+
+bool Map::Impl::placeGrabbedGround(const AnimationOptions& animation) {
+    // Until the renderer reports the ground's height, the centre's plane: where the ground is
+    // when the centre is on it, and the plane a plain pan would move.
+    const double altitude = std::isnan(groundGrab->altitude) ? transform.getState().getCenterAltitude()
+                                                             : groundGrab->altitude;
+    const auto& [near, far] = groundGrab->ray;
+    const double dz = far[2] - near[2];
+    if (dz >= 0.0) {
+        return false;
+    }
+    const double t = (altitude - near[2]) / dz;
+    if (t <= 0.0) {
+        return false;
+    }
+    constexpr double mercator = 1.0 / util::tileSize_D;
+    const LatLng ground = Projection::unproject(
+        {near[0] + t * (far[0] - near[0]), near[1] + t * (far[1] - near[1])}, mercator, LatLng::Unwrapped);
+    return transform.moveGroundTo(ground, altitude, groundGrab->finger, animation);
+}
+
+void Map::Impl::onTerrainGrabbedGroundElevation(uint64_t grabId, double elevationMeters) {
+    if (!groundGrab || groundGrab->id != grabId) {
+        return;
+    }
+    groundGrab->altitude = elevationMeters;
+    // Moves made before the height arrived used the centre's: put the ground under the finger
+    // now rather than at the next move, unless an animation owns the camera.
+    if (!transform.inTransition() && placeGrabbedGround({})) {
+        onUpdate();
+    }
 }
 
 bool Map::Impl::clampCenterToTerrain(double elevationMeters) {
