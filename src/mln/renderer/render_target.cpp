@@ -15,6 +15,7 @@
 #include <mln/util/hash.hpp>
 #include <mln/util/string.hpp>
 
+#include <cassert>
 #include <cmath>
 #include <set>
 
@@ -107,6 +108,7 @@ void RenderTarget::updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& par
     }
     drapeGlobalParams = params;
     drapeGlobalParams.drape_tile = drapeTileValues;
+    drapeGlobalParamsRecorded = true;
 }
 
 RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrator& orchestrator,
@@ -404,7 +406,11 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
     // The target re-renders: bring its copy of the global paint params up to date. Kept
     // targets skip this, since nothing else reads the copy (on Metal an update allocates a
     // new buffer, once per drape target per frame while the camera moves).
-    if (drapeTileID) {
+    // Renderer::Impl records the params (updateDrapeGlobalUBO) for every target before any
+    // renders. A caller that renders one without recording them would draw it with all-zero
+    // params: fail loudly in debug builds, and keep the main global buffer in release builds.
+    assert(!drapeTileID || drapeGlobalParamsRecorded);
+    if (drapeTileID && drapeGlobalParamsRecorded) {
         if (!drapeGlobalUniformBuffer) {
             drapeGlobalUniformBuffer = context.createUniformBuffer(&drapeGlobalParams, sizeof(drapeGlobalParams), true);
         } else {

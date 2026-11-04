@@ -173,6 +173,9 @@ protected:
     gfx::UniformBufferPtr drapeGlobalUniformBuffer;
     // The values updateDrapeGlobalUBO last recorded, written to the buffer when the target renders
     shaders::GlobalPaintParamsUBO drapeGlobalParams{};
+    // Whether updateDrapeGlobalUBO has recorded them: until it has, they are all zero, and a
+    // drape rendered with them would draw nothing in the right place.
+    bool drapeGlobalParamsRecorded = false;
     // Coverage baked into the target texture by the last actual render. The
     // target keeps its previously rendered content whenever the currently
     // available coverage is strictly worse, so a drape never regresses to
