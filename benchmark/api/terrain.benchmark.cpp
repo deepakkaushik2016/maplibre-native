@@ -457,7 +457,8 @@ void Terrain_QueryElevation(::benchmark::State& state) {
 // 5. A DEM tile arriving: Continuous mode, every tile loaded but the finest DEM tile under the
 //    centre; the time from its response to the first frame that samples it (worker decode and
 //    backfill, then the frame that uploads its texture and rebinds the mesh tiles over it).
-//    Counter: that frame's CPU time.
+//    Counter: that frame's CPU time. The loop spins the run loop while it waits, so only the
+//    real_time column means anything (cpu_time counts the spinning).
 void Terrain_DemTileUpdate(::benchmark::State& state) {
     // Which DEM tile under the centre is finest: ask a throwaway map.
     std::optional<CanonicalTileID> target;
@@ -487,16 +488,29 @@ void Terrain_DemTileUpdate(::benchmark::State& state) {
         scene->load();
         scene->settle(std::chrono::milliseconds(1500));
         if (!scene->fileSource->isHeld()) {
+            state.ResumeTiming();
             state.SkipWithError("the DEM tile under the centre was not requested");
             break;
         }
         const auto before = scene->frontend.getRenderer()->queryTerrainElevation(sceneCenter);
+        const auto& stats = scene->frontend.getBackend()->getContext().renderingStats();
         state.ResumeTiming();
 
+        // Done at the first frame after every tile, the released one included, has loaded: the
+        // frame count once the map is fully loaded marks it. The elevation under the centre
+        // moving says so too, should that frame already be done by then.
         const auto start = std::chrono::steady_clock::now();
         scene->fileSource->release();
-        while (scene->frontend.getRenderer()->queryTerrainElevation(sceneCenter) == before) {
+        std::optional<int> framesAtLoad;
+        while (true) {
             scene->loop.runOnce();
+            if (!framesAtLoad && scene->map.isFullyLoaded()) {
+                framesAtLoad = stats.numFrames;
+            }
+            if (framesAtLoad && (stats.numFrames > *framesAtLoad ||
+                                 scene->frontend.getRenderer()->queryTerrainElevation(sceneCenter) != before)) {
+                break;
+            }
             if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
                 state.SkipWithError("the released DEM tile never reached a frame");
                 break;
