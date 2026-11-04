@@ -519,7 +519,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     // (same values plus the target tile in drape_tile)
     if (orchestrator.getRenderTerrain()) {
         texturePool.visitRenderTargets([&](std::shared_ptr<RenderTarget>& renderTarget) {
-            renderTarget->updateDrapeGlobalUBO(globalPaintParamsUBO, context);
+            renderTarget->updateDrapeGlobalUBO(globalPaintParamsUBO);
         });
     }
 

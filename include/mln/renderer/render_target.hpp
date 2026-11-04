@@ -2,6 +2,7 @@
 
 #include <mln/gfx/types.hpp>
 #include <mln/renderer/terrain_cache_policy.hpp>
+#include <mln/shaders/layer_ubo.hpp>
 #include <mln/tile/tile_id.hpp>
 #include <mln/util/size.hpp>
 #include <mln/util/color.hpp>
@@ -53,8 +54,11 @@ public:
     const std::optional<UnwrappedTileID>& getDrapeTileID() const { return drapeTileID; }
 
     /// Refresh this drape target's copy of the global paint parameters,
-    /// carrying the target tile in `drape_tile` (no-op for non-drape targets)
-    void updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& params, gfx::Context& context);
+    /// carrying the target tile in `drape_tile` (no-op for non-drape targets).
+    /// Only the target's own draws read the copy, so it reaches the GPU in render(),
+    /// and only when the target re-renders: a drape kept from an earlier frame (every
+    /// target while panning) costs no buffer update.
+    void updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& params);
 
     /// Get the render target texture
     const gfx::Texture2DPtr& getTexture();
@@ -167,6 +171,8 @@ protected:
     // apply_drape_transform; w = 1 marks an active drape target
     std::array<float, 4> drapeTileValues{{0, 0, 0, 0}};
     gfx::UniformBufferPtr drapeGlobalUniformBuffer;
+    // The values updateDrapeGlobalUBO last recorded, written to the buffer when the target renders
+    shaders::GlobalPaintParamsUBO drapeGlobalParams{};
     // Coverage baked into the target texture by the last actual render. The
     // target keeps its previously rendered content whenever the currently
     // available coverage is strictly worse, so a drape never regresses to

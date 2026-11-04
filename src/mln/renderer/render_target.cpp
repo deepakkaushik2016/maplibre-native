@@ -101,17 +101,12 @@ void RenderTarget::setDrapeTileID(const UnwrappedTileID& id) {
                        1.0f};
 }
 
-void RenderTarget::updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& params, gfx::Context& context_) {
+void RenderTarget::updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& params) {
     if (!drapeTileID) {
         return;
     }
-    shaders::GlobalPaintParamsUBO drapeParams = params;
-    drapeParams.drape_tile = drapeTileValues;
-    if (!drapeGlobalUniformBuffer) {
-        drapeGlobalUniformBuffer = context_.createUniformBuffer(&drapeParams, sizeof(drapeParams), true);
-    } else {
-        drapeGlobalUniformBuffer->update(&drapeParams, sizeof(drapeParams));
-    }
+    drapeGlobalParams = params;
+    drapeGlobalParams.drape_tile = drapeTileValues;
 }
 
 RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrator& orchestrator,
@@ -404,6 +399,17 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
         // Committed to re-rendering this drape (a cache miss). Count it so the
         // measure-first overlay can show drape churn per frame.
         context.renderingStats().numDrapeTargetsRendered++;
+    }
+
+    // The target re-renders: bring its copy of the global paint params up to date. Kept
+    // targets skip this, since nothing else reads the copy (on Metal an update allocates a
+    // new buffer, once per drape target per frame while the camera moves).
+    if (drapeTileID) {
+        if (!drapeGlobalUniformBuffer) {
+            drapeGlobalUniformBuffer = context.createUniformBuffer(&drapeGlobalParams, sizeof(drapeGlobalParams), true);
+        } else {
+            drapeGlobalUniformBuffer->update(&drapeGlobalParams, sizeof(drapeGlobalParams));
+        }
     }
 
     // Drape targets carry a depth and stencil attachment, as maplibre-gl-js's
