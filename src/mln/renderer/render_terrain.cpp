@@ -141,6 +141,83 @@ float sampleDEM(const DEMData& dem, const DEMSubTileOffset& off, float x, float 
     return top + (bottom - top) * fy;
 }
 
+// One texel at 0 m in a DEM encoding: the shader decodes dot(rgb * 255, unpack.xyz) - unpack.w, so
+// an all-zero texel is -unpack.w (-10 km for Mapbox, -32 km for Terrarium), which sinks whatever
+// samples it out of view. Split unpack.w into the R, G, B digits (Mapbox: 1, 134, 160; Terrarium:
+// 128, 0, 0).
+std::array<uint8_t, 4> zeroElevationTexel(const std::array<float, 4>& unpack) {
+    std::array<uint8_t, 4> texel{};
+    double rest = unpack[3];
+    for (size_t i = 0; i < 3; ++i) {
+        const double digit = rest / unpack[i];
+        const double value = std::clamp(i < 2 ? std::floor(digit) : std::round(digit), 0.0, 255.0);
+        texel[i] = static_cast<uint8_t>(value);
+        rest -= value * unpack[i];
+    }
+    texel[3] = 255;
+    return texel;
+}
+
+struct StitchSource {
+    CanonicalTileID id;
+    const DEMData* dem;
+};
+
+// The DEM of `tile` stitched from DEM tiles under it (RenderTerrain::StitchedDEM), painted coarse
+// to fine: `sources` is sorted by zoom. Twice the DEM tile size, so a child copies in texel for
+// texel, out into the 2-texel border where it lies on the edge; a deeper descendant is decimated
+// (the texel under each stitched texel's centre), and anything none covers stays at 0 m.
+std::shared_ptr<const DEMData> stitchDEM(const CanonicalTileID& tile, const std::vector<StitchSource>& sources) {
+    const DEMData& first = *sources.front().dem;
+    const int32_t dim = first.dim * 2;
+    const int32_t stride = dim + 4;
+    auto image = std::make_shared<PremultipliedImage>(
+        Size(static_cast<uint32_t>(stride), static_cast<uint32_t>(stride)));
+    auto* out = reinterpret_cast<uint32_t*>(image->data.get());
+    const auto zero = zeroElevationTexel(first.getUnpackVector());
+    uint32_t zeroBits = 0;
+    std::memcpy(&zeroBits, zero.data(), sizeof(zeroBits));
+    std::fill(out, out + static_cast<size_t>(stride) * stride, zeroBits);
+
+    for (const auto& source : sources) {
+        const DEMData& dem = *source.dem;
+        const int dz = source.id.z - tile.z;
+        // One source, one tile size; a descendant too deep to span a stitched texel adds nothing.
+        if (dem.dim != first.dim || dz <= 0 || dz >= 31 || (dim >> dz) == 0) {
+            continue;
+        }
+        const int32_t size = dim >> dz;
+        const auto x0 = static_cast<int32_t>((static_cast<int64_t>(source.id.x) - (int64_t{tile.x} << dz)) * size);
+        const auto y0 = static_cast<int32_t>((static_cast<int64_t>(source.id.y) - (int64_t{tile.y} << dz)) * size);
+        const int32_t xa = x0 == 0 ? -2 : x0;
+        const int32_t xb = x0 + size == dim ? dim + 2 : x0 + size;
+        const int32_t ya = y0 == 0 ? -2 : y0;
+        const int32_t yb = y0 + size == dim ? dim + 2 : y0 + size;
+        const bool exact = size == dem.dim;
+        // This descendant's texel at stitched offset t from its origin (t may run into the border)
+        const auto local = [&](int32_t t) {
+            if (exact) {
+                return t;
+            }
+            const auto texel = static_cast<int32_t>(std::floor((t + 0.5) * dem.dim / size));
+            return util::clamp(texel, -2, dem.dim + 1);
+        };
+        const auto* in = reinterpret_cast<const uint32_t*>(dem.getImage()->data.get());
+        for (int32_t y = ya; y < yb; ++y) {
+            uint32_t* row = out + static_cast<ptrdiff_t>(y + 2) * stride + 2;
+            const uint32_t* inRow = in + static_cast<ptrdiff_t>(local(y - y0) + 2) * dem.stride + 2;
+            if (exact) {
+                std::memcpy(row + xa, inRow + (xa - x0), static_cast<size_t>(xb - xa) * sizeof(uint32_t));
+            } else {
+                for (int32_t x = xa; x < xb; ++x) {
+                    row[x] = inRow[local(x - x0)];
+                }
+            }
+        }
+    }
+    return std::make_shared<const DEMData>(std::move(image), first.encoding);
+}
+
 } // namespace
 
 RenderTerrain::RenderTerrain(Immutable<style::Terrain::Impl> impl_)
@@ -493,6 +570,9 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
 
     // Decode and cache the DEM textures of loaded DEM tiles
     ++demUpdateCounter;
+    // Stitched DEMs no lookup asked for since the frame before (placement looks up before this
+    // update, the layer tweakers after it) belong to tiles no longer drawn.
+    std::erase_if(stitchedDEMs, [&](const auto& stitched) { return stitched.second.lastUsed + 1 < demUpdateCounter; });
     for (const auto& renderTile : *renderTiles) {
         const auto& tile = renderTile.getTile();
         if (tile.kind != Tile::Kind::RasterDEM) {
@@ -889,15 +969,68 @@ std::optional<RenderTerrain::TileElevation> RenderTerrain::getTileElevation(cons
     if (exaggeration <= 0.0f) {
         return std::nullopt;
     }
-    const RenderTile* demRenderTile = findDEMTile(tileID);
-    if (!demRenderTile) {
-        return std::nullopt;
-    }
     // A coordinate outside the tile, which only Tile mode's buffer-zone symbols have, needs no
     // neighbour lookup: the shaders sample this tile's DEM there too, into its border and then
     // clamped, and so does sampleDEM.
-    const auto off = demSubTileOffset(tileID.canonical, demRenderTile->id.canonical);
-    return TileElevation(sharedDEMDataOf(*demRenderTile), off.scale, off.dx, off.dy, exaggeration);
+    if (const RenderTile* demRenderTile = findDEMTile(tileID)) {
+        const auto off = demSubTileOffset(tileID.canonical, demRenderTile->id.canonical);
+        return TileElevation(sharedDEMDataOf(*demRenderTile), off.scale, off.dx, off.dy, exaggeration);
+    }
+    if (const StitchedDEM* stitched = findStitchedDEM(tileID)) {
+        return TileElevation(stitched->dem, 1.0f, 0.0f, 0.0f, exaggeration);
+    }
+    return std::nullopt;
+}
+
+RenderTerrain::StitchedDEM* RenderTerrain::findStitchedDEM(const UnwrappedTileID& tileID) const {
+    if (!demSource) {
+        return nullptr;
+    }
+    const auto renderTiles = demSource->getRawRenderTiles();
+    const auto under = [&](const RenderTile& renderTile) {
+        return renderTile.id.canonical.z > tileID.canonical.z && renderTile.id.isChildOf(tileID);
+    };
+    // Still current while the same DEM tiles under it hold the same data, in the same order.
+    const auto existing = stitchedDEMs.find(tileID);
+    bool current = existing != stitchedDEMs.end();
+    size_t count = 0;
+    for (const auto& renderTile : *renderTiles) {
+        const DEMData* data = under(renderTile) ? demDataOf(renderTile) : nullptr;
+        if (data) {
+            current = current && count < existing->second.sources.size() &&
+                      existing->second.sources[count].get() == data;
+            ++count;
+        }
+    }
+    if (current && count == existing->second.sources.size()) {
+        existing->second.lastUsed = demUpdateCounter;
+        return &existing->second;
+    }
+    if (count == 0) {
+        if (existing != stitchedDEMs.end()) {
+            stitchedDEMs.erase(existing);
+        }
+        return nullptr;
+    }
+
+    StitchedDEM stitched;
+    stitched.sources.reserve(count);
+    std::vector<StitchSource> coarseToFine;
+    coarseToFine.reserve(count);
+    for (const auto& renderTile : *renderTiles) {
+        if (const DEMData* data = under(renderTile) ? demDataOf(renderTile) : nullptr) {
+            stitched.sources.push_back(sharedDEMDataOf(renderTile));
+            coarseToFine.push_back({.id = renderTile.id.canonical, .dem = data});
+        }
+    }
+    std::stable_sort(coarseToFine.begin(), coarseToFine.end(), [](const StitchSource& a, const StitchSource& b) {
+        return a.id.z < b.id.z;
+    });
+    stitched.dem = stitchDEM(tileID.canonical, coarseToFine);
+    stitched.lastUsed = demUpdateCounter;
+    StitchedDEM& slot = stitchedDEMs[tileID];
+    slot = std::move(stitched);
+    return &slot;
 }
 
 const RenderTile* RenderTerrain::findDEMTile(const UnwrappedTileID& tileID, DEMTileMemo& memo) const {
@@ -1131,49 +1264,62 @@ std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const Sc
     return std::nullopt;
 }
 
-std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const UnwrappedTileID& tileID) const {
-    // Find the DEM texture matching the requested tile, or its closest available ancestor
-    const UnwrappedTileID* demTileID = nullptr;
-    const DEMTextureEntry* entry = nullptr;
-    int bestZoom = -1;
-    for (const auto& [candidate, candidateEntry] : demTextures) {
-        if ((candidate == tileID || tileID.isChildOf(candidate)) && std::cmp_greater(candidate.canonical.z, bestZoom)) {
-            bestZoom = candidate.canonical.z;
-            demTileID = &candidate;
-            entry = &candidateEntry;
+std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const UnwrappedTileID& tileID,
+                                                                        gfx::Context& context) {
+    // The DEM getTileElevation samples (placement lifts collision boxes by it), so a symbol is
+    // drawn where it collides and is queried. First the DEM tile matching the requested tile, or
+    // its closest loaded ancestor with data, as findDEMTile resolves it.
+    if (const RenderTile* demRenderTile = findDEMTile(tileID)) {
+        auto entry = demTextures.find(demRenderTile->id);
+        if (entry == demTextures.end()) {
+            // update() uploads every loaded DEM tile, but may since have evicted this one
+            auto texture = createDEMTexture(context, *demDataOf(*demRenderTile));
+            if (!texture) {
+                return std::nullopt;
+            }
+            entry = demTextures
+                        .emplace(demRenderTile->id,
+                                 DEMTextureEntry{.texture = std::move(texture),
+                                                 .dim = demDataOf(*demRenderTile)->dim,
+                                                 .lastUsed = demUpdateCounter})
+                        .first;
         }
+        entry->second.lastUsed = demUpdateCounter;
+        // Map tile-local coordinates (0..EXTENT) of the requested tile into
+        // normalized coordinates (0..1) of the (possibly ancestor) DEM tile
+        const auto mapping = demTileMapping(tileID.canonical, demRenderTile->id.canonical);
+        return TerrainData{
+            .demTexture = entry->second.texture,
+            .demCoords = {{mapping[0], mapping[1], mapping[2], 0.0f}},
+            .demDim = static_cast<float>(entry->second.dim),
+        };
     }
-    if (!entry || !entry->texture) {
+
+    // A DEM finer than the tile (a 256 px DEM is a zoom deeper than 512 px vector tiles): bind
+    // the DEM stitched from the tile's loaded descendants, which covers exactly this tile.
+    StitchedDEM* stitched = findStitchedDEM(tileID);
+    if (!stitched) {
         return std::nullopt;
     }
-
-    // Map tile-local coordinates (0..EXTENT) of the requested tile into
-    // normalized coordinates (0..1) of the (possibly ancestor) DEM tile
-    const auto mapping = demTileMapping(tileID.canonical, demTileID->canonical);
-
+    if (!stitched->texture) {
+        stitched->texture = createDEMTexture(context, *stitched->dem);
+        if (!stitched->texture) {
+            return std::nullopt;
+        }
+    }
     return TerrainData{
-        .demTexture = entry->texture,
-        .demCoords = {{mapping[0], mapping[1], mapping[2], 0.0f}},
-        .demDim = static_cast<float>(entry->dim),
+        .demTexture = stitched->texture,
+        .demCoords = {{1.0f / util::EXTENT, 0.0f, 0.0f, 0.0f}},
+        .demDim = static_cast<float>(stitched->dem->dim),
     };
 }
 
 const std::shared_ptr<gfx::Texture2D>& RenderTerrain::getPlaceholderDEMTexture(gfx::Context& context) {
     if (!placeholderDEMTexture || placeholderDEMUnpack != demUnpackVector) {
-        // One texel at 0 m in the current encoding: the shader decodes dot(rgb * 255, unpack.xyz)
-        // - unpack.w, so an all-zero texel is -unpack.w (-10 km for Mapbox, -32 km for
-        // Terrarium) and a tile without DEM sank out of view, leaving its drape undrawn. Split
-        // unpack.w into the R, G, B digits (Mapbox: 1, 134, 160; Terrarium: 128, 0, 0).
-        auto image = std::make_shared<PremultipliedImage>(Size{1, 1});
-        uint8_t* texel = image->data.get();
-        double rest = demUnpackVector[3];
-        for (int i = 0; i < 3; ++i) {
-            const double digit = rest / demUnpackVector[i];
-            const double value = std::clamp(i < 2 ? std::floor(digit) : std::round(digit), 0.0, 255.0);
-            texel[i] = static_cast<uint8_t>(value);
-            rest -= value * demUnpackVector[i];
-        }
-        texel[3] = 255;
+        // One texel at 0 m in the current encoding: an all-zero one would sink a tile without
+        // DEM out of view, leaving its drape undrawn.
+        const auto zero = zeroElevationTexel(demUnpackVector);
+        auto image = std::make_shared<PremultipliedImage>(Size{1, 1}, zero.data(), zero.size());
         placeholderDEMUnpack = demUnpackVector;
         placeholderDEMTexture = context.createTexture2D();
         placeholderDEMTexture->setImage(image);

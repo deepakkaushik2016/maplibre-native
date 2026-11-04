@@ -135,7 +135,7 @@ void FillExtrusionLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintP
         // shader can displace the extrusion by the terrain elevation
         std::optional<RenderTerrain::TerrainData> terrainData;
         if (parameters.terrain && parameters.terrain->isEnabled()) {
-            terrainData = parameters.terrain->getTerrainData(tileID);
+            terrainData = parameters.terrain->getTerrainData(tileID, context);
         }
         if (parameters.terrain) {
             drawable.setTexture(

@@ -172,7 +172,7 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
         const bool terrainEnabled = parameters.terrain && parameters.terrain->isEnabled();
         std::optional<RenderTerrain::TerrainData> terrainData;
         if (terrainEnabled) {
-            terrainData = parameters.terrain->getTerrainData(tileID);
+            terrainData = parameters.terrain->getTerrainData(tileID, context);
         }
         if (parameters.terrain) {
             drawable.setTexture(

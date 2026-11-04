@@ -14,6 +14,9 @@ namespace mln {
 class DEMData {
 public:
     DEMData(const PremultipliedImage& image, Tileset::RasterEncoding encoding);
+    /// Adopts an image already laid out as this class keeps it: `dim` + 4 texels square, the
+    /// data inset by its 2-texel border. The elevation range is not computed (it stays 0).
+    DEMData(std::shared_ptr<PremultipliedImage> borderedImage, Tileset::RasterEncoding encoding);
     void backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy);
 
     int32_t get(int32_t x, int32_t y) const;

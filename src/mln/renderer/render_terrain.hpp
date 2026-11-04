@@ -226,10 +226,11 @@ public:
     /**
      * @brief The terrain height under one tile's points, resolved to its DEM tile up front
      *
-     * Covers the tile with the same DEM tile, its own or its closest loaded ancestor with
-     * data, that getElevation reads, so each sample is O(1) with no tile search. Samples as
-     * the shaders' get_elevation() does, so a point is lifted by exactly what it is drawn at.
-     * Holds the DEM tile's bucket, so the data stays valid even if the tile reloads meanwhile.
+     * Covers the tile with the same DEM that getTerrainData binds for its drawables: its own DEM
+     * tile or its closest loaded ancestor with data, or else the DEM stitched from its loaded
+     * descendants. Each sample is then O(1) with no tile search. Samples as the shaders'
+     * get_elevation() does, so a point is lifted by exactly what it is drawn at. Holds the DEM
+     * data, so it stays valid even if the tile reloads meanwhile.
      */
     class TileElevation {
     public:
@@ -348,10 +349,12 @@ public:
     };
 
     /**
-     * @brief Get the DEM texture and coordinate mapping covering the given tile,
-     * from the matching DEM tile or its closest available ancestor
+     * @brief Get the DEM texture and coordinate mapping covering the given tile: its own DEM
+     * tile or its closest loaded ancestor with data, or else, when the DEM is finer than the
+     * tile (a 256 px DEM under 512 px vector tiles), the DEM stitched from its loaded
+     * descendants. The same DEM getTileElevation samples, so placement lifts what is drawn.
      */
-    std::optional<TerrainData> getTerrainData(const UnwrappedTileID&) const;
+    std::optional<TerrainData> getTerrainData(const UnwrappedTileID&, gfx::Context&);
 
     /**
      * @brief A 1x1 zero-elevation DEM texture bound when no DEM tile is available,
@@ -438,6 +441,24 @@ private:
         const RenderTile* demTile = nullptr;
     };
     const RenderTile* findDEMTile(const UnwrappedTileID& tileID, DEMTileMemo& memo) const;
+
+    /// A DEM for a tile that no loaded DEM tile covers, stitched from the loaded DEM tiles under
+    /// it: twice the DEM tile size, so one zoom deeper (a 256 px DEM under 512 px tiles) it holds
+    /// every child texel as is, the seams between children included, and the children's borders
+    /// around it. Deeper descendants are decimated into it; an area none covers is at 0 m.
+    struct StitchedDEM {
+        std::shared_ptr<const DEMData> dem;
+        /// The data it was stitched from, in DEM render tile order: while the same tiles hold
+        /// the same data it is still current. Held, so that no other data can take an address.
+        std::vector<std::shared_ptr<const DEMData>> sources;
+        /// Uploaded on first bind
+        std::shared_ptr<gfx::Texture2D> texture;
+        uint64_t lastUsed = 0;
+    };
+    /// The stitched DEM under `tileID`, (re)stitched when its descendants changed; null when no
+    /// loaded DEM tile under it has data. O(loaded DEM tiles) to check, O(stitched texels) to
+    /// stitch, which happens only when the descendants change.
+    StitchedDEM* findStitchedDEM(const UnwrappedTileID& tileID) const;
     /// The DEM height (not exaggerated) at a tile coordinate, as getElevation reads it, but
     /// empty where no loaded DEM tile covers the coordinate (rather than 0).
     std::optional<float> findElevation(const UnwrappedTileID& tileID, float x, float y) const;
@@ -543,6 +564,10 @@ private:
     // this, preventing unbounded growth while browsing (previously reached 2GB+)
     static constexpr size_t maxDEMTextures = 96;
     uint64_t demUpdateCounter = 0;
+
+    /// Stitched DEMs by tile (findStitchedDEM), for tiles the DEM is finer than; dropped once a
+    /// frame passes without a lookup. Filled by const lookups (placement), on the render thread.
+    mutable std::map<UnwrappedTileID, StitchedDEM> stitchedDEMs;
 
 #if MLN_RENDER_BACKEND_OPENGL
     // OpenGL-only: the same DEM tiles packed into one GL_TEXTURE_2D_ARRAY so the

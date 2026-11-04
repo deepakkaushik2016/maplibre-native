@@ -52,12 +52,21 @@ constexpr double cliffPoiMeters = plateauMeters + 0.75 * (cliffTopMeters - plate
 
 enum class Dem {
     Plateau,
-    Cliff
+    Cliff,
+    // A DEM served to z14, where the tiles with an odd x stand at `cliffTopMeters` and every
+    // other tile (any other zoom included) at `plateauMeters`. The POI at lng 10 is in z14 tile
+    // x = 8647, so it is drawn at the cliff top only if its DEM is that z14 tile.
+    Z14Stripes
 };
 enum class Symbol {
     Icon,
-    Text
+    Text,
+    Circle
 };
+
+constexpr int stripesZoom = 14;
+// The first z14 tile at the cliff top under the POI's z13 tile (x = 4323, children 8646 and 8647).
+constexpr int64_t stripeTileX = 8647;
 
 struct SceneOptions {
     /// Empty: no terrain in the style.
@@ -65,21 +74,60 @@ struct SceneOptions {
     Dem dem = Dem::Plateau;
     Symbol symbol = Symbol::Icon;
     double bearing = 0.0;
+    /// The DEM source's tile size: at 256 px its tiles are one zoom finer than the 512 px
+    /// GeoJSON tiles at the same map zoom.
+    uint32_t demTileSize = 256;
+    /// Z14Stripes only: the POI three quarters of the way across the last texel column of the
+    /// plateau child (z14 x = 8646), at the foot of the step up to the next child.
+    bool atStripeSeam = false;
 
-    double poiLng() const { return dem == Dem::Cliff ? cliffPoiLng : 10.0; }
+    double poiLng() const {
+        if (dem == Dem::Z14Stripes && atStripeSeam) {
+            return (static_cast<double>(stripeTileX) * 256.0 - 0.25) / (std::pow(2.0, stripesZoom) * 256.0) * 360.0 -
+                   180.0;
+        }
+        return dem == Dem::Cliff ? cliffPoiLng : 10.0;
+    }
     /// The terrain height the shaders lift the anchor by, before exaggeration.
-    double poiMeters() const { return dem == Dem::Cliff ? cliffPoiMeters : plateauMeters; }
+    double poiMeters() const {
+        switch (dem) {
+            case Dem::Cliff:
+                return cliffPoiMeters;
+            case Dem::Z14Stripes:
+                // At z13 a 512 px DEM is served at z13, all plateau; a 256 px one at z14.
+                if (demTileSize != 256) {
+                    return plateauMeters;
+                }
+                return atStripeSeam ? plateauMeters + 0.75 * (cliffTopMeters - plateauMeters) : cliffTopMeters;
+            case Dem::Plateau:
+                break;
+        }
+        return plateauMeters;
+    }
+    int demMaxZoom() const { return dem == Dem::Z14Stripes ? stripesZoom : demZoom; }
 };
 
 std::string symbolStyle(const SceneOptions& options) {
     const std::string terrain = options.exaggeration ? R"("terrain": {"source": "dem", "exaggeration": )" +
                                                            std::to_string(*options.exaggeration) + "},"
                                                      : "";
-    const std::string layout = options.symbol == Symbol::Icon
-                                   ? R"("icon-image": "marker", "icon-allow-overlap": true)"
-                                   : R"("text-field": "WWW", "text-font": ["Open Sans Regular"], "text-size": 24,
-                                        "text-allow-overlap": true)";
-    const std::string paint = options.symbol == Symbol::Icon ? "{}" : R"({"text-color": "#f00"})";
+    std::string type = "symbol";
+    std::string layout;
+    std::string paint = "{}";
+    switch (options.symbol) {
+        case Symbol::Icon:
+            layout = R"("icon-image": "marker", "icon-allow-overlap": true)";
+            break;
+        case Symbol::Text:
+            layout = R"("text-field": "WWW", "text-font": ["Open Sans Regular"], "text-size": 24,
+                        "text-allow-overlap": true)";
+            paint = R"({"text-color": "#f00"})";
+            break;
+        case Symbol::Circle:
+            type = "circle";
+            paint = R"({"circle-color": "#f00", "circle-radius": 8, "circle-pitch-alignment": "viewport"})";
+            break;
+    }
     return R"STYLE({
   "version": 8,
   "glyphs": "http://example.com/fonts/{fontstack}/{range}.pbf",
@@ -88,8 +136,10 @@ std::string symbolStyle(const SceneOptions& options) {
       "type": "raster-dem",
       "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
       "encoding": "mapbox",
-      "maxzoom": 10,
-      "tileSize": 256
+      "maxzoom": )STYLE" +
+           std::to_string(options.demMaxZoom()) + R"STYLE(,
+      "tileSize": )STYLE" +
+           std::to_string(options.demTileSize) + R"STYLE(
     },
     "poi": {
       "type": "geojson",
@@ -105,17 +155,18 @@ std::string symbolStyle(const SceneOptions& options) {
            R"STYLE(
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "white"}},
-    {"id": "poi", "type": "symbol", "source": "poi", "layout": {)STYLE" +
-           layout + R"STYLE(}, "paint": )STYLE" + paint + R"STYLE(}
+    {"id": "poi", "type": ")STYLE" +
+           type + R"STYLE(", "source": "poi", "layout": {)STYLE" + layout + R"STYLE(}, "paint": )STYLE" + paint +
+           R"STYLE(}
   ]
 })STYLE";
 }
 
 // A Terrain-RGB tile all at `meters`: -10000 + (R * 65536 + G * 256 + B) * 0.1.
-std::string demTile(double meters) {
+std::string demTile(double meters, uint32_t size = 256) {
     const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
-    PremultipliedImage image({256, 256});
-    for (uint32_t i = 0; i < 256 * 256; ++i) {
+    PremultipliedImage image({size, size});
+    for (uint32_t i = 0; i < size * size; ++i) {
         uint8_t* px = image.data.get() + i * 4;
         px[0] = static_cast<uint8_t>(value >> 16);
         px[1] = static_cast<uint8_t>((value >> 8) & 0xff);
@@ -174,14 +225,14 @@ struct TerrainSymbolScene {
     util::RunLoop loop;
     std::shared_ptr<StubFileSource> fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(),
                                                                                   ClientOptions());
-    std::string lowTile = demTile(plateauMeters);
-    std::string highTile = demTile(cliffTopMeters);
     HeadlessFrontend frontend{{viewSize, viewSize}, 1};
     MapAdapter map{frontend,
                    MapObserver::nullObserver(),
                    fileSource,
                    MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize())};
     SceneOptions options;
+    std::string lowTile;
+    std::string highTile;
     PremultipliedImage image;
     // Where the symbol is drawn, and where its anchor sits at sea level.
     ScreenCoordinate drawn;
@@ -190,10 +241,14 @@ struct TerrainSymbolScene {
     ScreenCoordinate onPlateau;
 
     explicit TerrainSymbolScene(SceneOptions options_)
-        : options(options_) {
+        : options(options_),
+          lowTile(demTile(plateauMeters, options.demTileSize)),
+          highTile(demTile(cliffTopMeters, options.demTileSize)) {
         fileSource->tileResponse = [this](const Resource& resource) {
             Response res;
-            const bool high = options.dem == Dem::Cliff && resource.tileData && resource.tileData->x >= cliffTileX;
+            const auto& tile = resource.tileData;
+            const bool high = tile && ((options.dem == Dem::Cliff && tile->x >= cliffTileX) ||
+                                       (options.dem == Dem::Z14Stripes && tile->z == stripesZoom && tile->x % 2 == 1));
             res.data = std::make_shared<std::string>(high ? highTile : lowTile);
             return res;
         };
@@ -245,7 +300,7 @@ struct TerrainSymbolScene {
             ASSERT_LT(p.x, viewSize);
             ASSERT_LT(p.y, viewSize);
         }
-        if (options.symbol == Symbol::Icon) {
+        if (options.symbol != Symbol::Text) {
             ASSERT_EQ(redAround(drawn), 49) << "the icon is not drawn at its elevated projection";
         } else {
             // Text is glyph strokes, not a solid square: count over its middle.
@@ -333,4 +388,49 @@ TEST(TerrainSymbolQuery, TerrainOffQueriesAtSeaLevel) {
     ASSERT_EQ(scene.redAround(scene.seaLevel), 49) << "the icon is not drawn at its sea-level projection";
     EXPECT_EQ(scene.query(scene.seaLevel), 1u) << "a tap on the icon misses it";
     EXPECT_EQ(scene.queryBox(scene.seaLevel, 20.0), 1u) << "a box around the icon misses it";
+}
+
+// A 256 px DEM is one zoom finer than the 512 px GeoJSON tiles at the same map zoom: the z13
+// symbol tile has no DEM tile of its own or above it, only its z14 children. The icon must still
+// be drawn on the terrain, at the height of the child it stands in (1600 m, not the 1000 m of its
+// neighbour or of any coarser DEM), and a tap there must find it.
+TEST(TerrainSymbolQuery, IconOverFinerDEMHitsWhereDrawn) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .dem = Dem::Z14Stripes});
+    scene.expectDrawnAt(scene.onPlateau);
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(scene.seaLevel), 0u)
+        << "a tap where the icon would sit at sea level (nothing is drawn there) hits it";
+    EXPECT_EQ(scene.queryBox(scene.drawn, 20.0), 1u) << "a box around the drawn icon misses it";
+}
+
+// Across the seam between two children the stitched DEM runs from one child's last texel into the
+// other's first, as the shaders do on the terrain mesh through the child's backfilled border: the
+// icon is drawn 450 m above the plateau, and its box must be there too.
+TEST(TerrainSymbolQuery, IconAtFinerDEMSeamHitsWhereDrawn) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .dem = Dem::Z14Stripes, .atStripeSeam = true});
+    scene.expectDrawnAt(scene.onPlateau);
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(scene.onPlateau), 0u)
+        << "a tap where the icon would sit on the plateau (nothing is drawn there) hits it";
+}
+
+// Circles bind the DEM the same way (as do fill extrusions and heatmaps).
+TEST(TerrainSymbolQuery, CircleOverFinerDEMDrawnElevated) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .dem = Dem::Z14Stripes, .symbol = Symbol::Circle});
+    scene.expectDrawnAt(scene.onPlateau);
+    scene.expectDrawnAboveSeaLevel();
+}
+
+// A 512 px DEM sits at the GeoJSON tiles' zoom and covers the symbol tile itself: unchanged.
+TEST(TerrainSymbolQuery, IconOverSameZoomDEMHitsWhereDrawn) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .dem = Dem::Z14Stripes, .demTileSize = 512});
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(scene.seaLevel), 0u)
+        << "a tap where the icon would sit at sea level (nothing is drawn there) hits it";
 }

@@ -2,6 +2,8 @@
 #include <mln/math/clamp.hpp>
 
 #include <algorithm>
+#include <stdexcept>
+#include <utility>
 
 namespace mln {
 
@@ -65,6 +67,16 @@ DEMData::DEMData(const PremultipliedImage& _image, Tileset::RasterEncoding _enco
                 maxElevation = std::max(maxElevation, value);
             }
         }
+    }
+}
+
+DEMData::DEMData(std::shared_ptr<PremultipliedImage> borderedImage, Tileset::RasterEncoding _encoding)
+    : dim(borderedImage ? static_cast<int32_t>(borderedImage->size.height) - 4 : 0),
+      stride(dim + 4),
+      encoding(_encoding),
+      image(std::move(borderedImage)) {
+    if (!image || image->size.width != image->size.height || dim <= 0) {
+        throw std::runtime_error("raster-dem data must be square, with a 2-texel border.");
     }
 }
 
