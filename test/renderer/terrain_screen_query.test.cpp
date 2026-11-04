@@ -167,8 +167,11 @@ struct HillsScene {
                 res.noContent = true;
                 return res;
             }
+            // Keyed by the whole origin: the hills are laid out from it, so two scenes at the
+            // same latitude but different longitudes ask for the same tiles with different hills.
             static std::unordered_map<std::string, std::string> cache;
-            const std::string key = std::to_string(origin.latitude()) + resource.url;
+            const std::string key = std::to_string(origin.latitude()) + "," + std::to_string(origin.longitude()) +
+                                    resource.url;
             auto it = cache.find(key);
             if (it == cache.end()) {
                 it = cache.emplace(key, hillsTile(origin, resource.url)).first;
