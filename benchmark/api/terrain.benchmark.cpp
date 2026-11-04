@@ -515,6 +515,9 @@ void Terrain_DemTileUpdate(::benchmark::State& state) {
 // 6. Per-frame cost of the centre clamp and eye-clearance reporting: Continuous frames while the
 //    centre circles 400 m round the scene centre over the relief. Arg 0: terrain off; 1: terrain on,
 //    clamp off; 2: terrain on, clamp on (Map::setCenterClampedToGround).
+//    Arg 2 minus arg 1 is not the clamp's own cost (one elevation sample per frame): clamping
+//    moves the centre altitude with the ground, so more drape targets re-render each frame (see
+//    the drapesRendered/frame counter), and the delta is mostly those extra drape re-renders.
 void Terrain_CameraClampFrame(::benchmark::State& state) {
     const bool terrain = state.range(0) != 0;
     TerrainScene scene({.terrain = terrain, .mode = MapMode::Continuous}, /*invalidateOnUpdate=*/false);
