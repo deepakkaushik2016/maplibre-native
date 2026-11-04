@@ -181,9 +181,11 @@ struct HillsScene {
     // renderer draws the terrain with, which takes heights in metres. Independent of the API.
     ScreenCoordinate project(const LatLng& location, double meters) const {
         const TransformState s = state();
-        LatLng unwrapped = location;
-        unwrapped.unwrapForShortestPath(s.getLatLng());
-        const Point<double> world = Projection::project(unwrapped, s.getScale());
+        // In the world copy nearest the centre, which may itself lie turns round the world.
+        const double longitude = location.wrapped().longitude();
+        const double turns = std::round((s.getLatLng(LatLng::Unwrapped).longitude() - longitude) / 360.0);
+        const LatLng copy{location.latitude(), longitude + 360.0 * turns};
+        const Point<double> world = Projection::project(copy, s.getScale());
         vec4 clip;
         matrix::transformMat4(clip, vec4{{world.x, world.y, meters, 1.0}}, s.getProjectionMatrix());
         const Size size = s.getSize();
@@ -352,6 +354,37 @@ TEST(TerrainScreenQuery, TheTappedGroundHasItsHeightAcrossTheAntimeridian) {
         EXPECT_NEAR(*meters, hillsMeters(camera.center, *ground) * 1.5, 1.0);
     }
     EXPECT_GT(east, 5) << "no ground beyond the antimeridian";
+}
+
+// LatLngBounds can hold the camera's centre a turn or more round the world (541 E here), and the
+// frame draws the world copy there. A longitude given in [-180, 180] is read, and drawn, in that
+// copy: the tap round trips, and the tapped ground has its height.
+TEST(TerrainScreenQuery, ACentreTurnsRoundTheWorldUsesTheCopyItDraws) {
+    for (const std::optional<double> exaggeration : {std::optional<double>{1.5}, std::optional<double>{}}) {
+        SCOPED_TRACE(exaggeration ? "terrain" : "no terrain");
+        HillsScene scene({.center = {0.3, 179.0}, .pitch = 60.0, .bearing = 90.0}, exaggeration);
+        scene.map.setBounds(
+            BoundOptions().withMaxPitch(85.0).withLatLngBounds(LatLngBounds::hull({-10.0, 530.0}, {10.0, 560.0})));
+        scene.map.jumpTo(CameraOptions().withCenter(LatLng{0.3, 541.0}));
+        scene.render();
+        ASSERT_EQ(scene.state().getLatLng(LatLng::Unwrapped).longitude(), 541.0);
+        int east = 0;
+        for (const auto& finger : screenGrid()) {
+            SCOPED_TRACE(::testing::Message() << "finger (" << finger.x << ", " << finger.y << ")");
+            const auto ground = scene.renderer().queryTerrainLatLng(finger);
+            ASSERT_TRUE(ground);
+            east += ground->longitude() < 0.0 ? 1 : 0;
+            const auto pixel = scene.renderer().queryTerrainPixel(*ground);
+            if (!pixel) {
+                ADD_FAILURE() << "no pixel for the ground at " << ground->longitude();
+                continue;
+            }
+            EXPECT_LT(distance(pixel->point, finger), 0.5);
+            const double meters = exaggeration ? scene.renderer().queryTerrainElevation(*ground).value_or(-1e9) : 0.0;
+            EXPECT_LT(distance(scene.project(*ground, meters), finger), 0.5) << "no height, or not drawn there";
+        }
+        EXPECT_GT(east, 5) << "no ground beyond the antimeridian";
+    }
 }
 
 // A patch of ground marked at the LatLng the tap returned is drawn under the finger: a pixel proof

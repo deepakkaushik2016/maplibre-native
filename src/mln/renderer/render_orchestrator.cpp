@@ -27,6 +27,7 @@
 #include <mln/style/transition_options.hpp>
 #include <mln/text/glyph_manager.hpp>
 #include <mln/tile/tile.hpp>
+#include <mln/util/constants.hpp>
 #include <mln/util/instrumentation.hpp>
 #include <mln/util/math.hpp>
 #include <mln/util/string.hpp>
@@ -832,15 +833,24 @@ ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineStri
     return result;
 }
 
+LatLng RenderOrchestrator::drawnWorldCopy(const LatLng& latLng) const {
+    // LatLng::unwrapForShortestPath gives up a turn or more from the centre, which LatLngBounds can
+    // hold outside [-180, 180]; take the nearest copy by whole turns instead (the same answer
+    // within less than a turn).
+    const LatLng wrapped = latLng.wrapped();
+    const double delta = transformState.getLatLng(LatLng::Unwrapped).longitude() - wrapped.longitude();
+    if (std::abs(delta) <= util::LONGITUDE_MAX) {
+        return wrapped;
+    }
+    return {wrapped.latitude(), wrapped.longitude() + util::DEGREES_MAX * std::round(delta / util::DEGREES_MAX)};
+}
+
 std::optional<double> RenderOrchestrator::queryTerrainElevation(const LatLng& latLng) const {
     if (!renderTerrain || !renderTerrain->isEnabled()) {
         return std::nullopt;
     }
-    // On the side of the antimeridian nearer the centre, where the frame draws it: the DEM tiles
-    // drawn across the antimeridian are held at the world copy they are drawn in.
-    LatLng unwrapped = latLng.wrapped();
-    unwrapped.unwrapForShortestPath(transformState.getLatLng());
-    return renderTerrain->findElevationForLatLng(unwrapped);
+    // The DEM tiles drawn across the antimeridian are held at the world copy they are drawn in.
+    return renderTerrain->findElevationForLatLng(drawnWorldCopy(latLng));
 }
 
 std::optional<LatLng> RenderOrchestrator::queryTerrainLatLng(const ScreenCoordinate& point) const {
@@ -870,10 +880,7 @@ std::optional<Renderer::TerrainPixel> RenderOrchestrator::queryTerrainPixel(cons
     if (size.isEmpty()) {
         return std::nullopt;
     }
-    // As Map::pixelForLatLng: on the side of the antimeridian nearer the centre, which is also
-    // where the DEM tiles drawn around the centre are.
-    LatLng unwrapped = latLng.wrapped();
-    unwrapped.unwrapForShortestPath(transformState.getLatLng());
+    const LatLng unwrapped = drawnWorldCopy(latLng);
     if (!renderTerrain || !renderTerrain->isEnabled()) {
         vec4 clip;
         ScreenCoordinate pixel = transformState.latLngToScreenCoordinate(unwrapped, clip);

@@ -205,6 +205,10 @@ private:
     /// point (and points along each edge) moved to where the terrain point under it would sit at
     /// sea level.
     ScreenLineString queryGeometryOnTerrain(const ScreenLineString&) const;
+    /// `latLng` in the world copy nearest the last frame's centre, the copy the frame draws there.
+    /// LatLng::unwrapForShortestPath from the unwrapped centre, but also where that gives up: a
+    /// longitude a turn or more from a centre LatLngBounds hold outside [-180, 180].
+    LatLng drawnWorldCopy(const LatLng& latLng) const;
 
     // GlyphManagerObserver implementation.
     void onGlyphsLoaded(const FontStack&, const GlyphRange&) override;

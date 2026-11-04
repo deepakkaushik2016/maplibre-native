@@ -69,8 +69,8 @@ public:
      * Metres above sea level with the style's terrain exaggeration applied, i.e. the height the
      * terrain surface is rendered at (a 1000 m peak under exaggeration 2 reads 2000). Sampled
      * bilinearly from the finest DEM tile currently loaded, or its closest loaded ancestor.
-     * Longitudes are taken on the side of the antimeridian nearer the map's centre, where the
-     * last rendered frame draws them.
+     * Longitudes are taken in the world copy nearest the map's centre, where the last rendered
+     * frame draws them.
      *
      * @return std::nullopt when the style has no terrain, or no loaded DEM tile covers the point
      * (for instance before the first DEM tile arrives).
@@ -112,11 +112,13 @@ public:
      * terrain is drawn at there (queryTerrainElevation), projected with the transform of the
      * last rendered frame. The point is `occluded` when the line of sight through its pixel
      * meets the ground more than one world pixel (a pixel of the map at its zoom) nearer the
-     * camera than the point itself. Longitudes are taken on the side of the antimeridian nearer
-     * the map's centre, as `Map::pixelForLatLng` takes them.
+     * camera than the point itself. Longitudes are taken in the world copy nearest the map's
+     * centre, where the frame draws them.
      *
      * Without terrain in the style, `point` is `Map::pixelForLatLng` for the last rendered
-     * frame's transform, bit for bit, and `occluded` is false.
+     * frame's transform, bit for bit, and `occluded` is false. (Unless LatLngBounds hold the
+     * centre outside [-180, 180]: `Map::pixelForLatLng` can then project a world copy that is
+     * not drawn, while this projects the one that is.)
      *
      * @return std::nullopt before the first frame (no transform to read), when the point is
      * behind the camera (no pixel draws it; `Map::pixelForLatLng` answers a mirrored point
