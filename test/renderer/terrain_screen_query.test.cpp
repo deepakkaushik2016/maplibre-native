@@ -2,6 +2,7 @@
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
 
+#include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/headless_frontend.hpp>
 #include <mln/map/bound_options.hpp>
 #include <mln/map/camera.hpp>
@@ -21,7 +22,9 @@
 #include <mln/util/run_loop.hpp>
 
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -152,6 +155,12 @@ struct HillsScene {
     CameraCase camera;
     std::optional<double> exaggeration;
     PremultipliedImage image;
+    /// Every tile requested, in order.
+    std::vector<Resource::TileData> requested;
+    /// Tiles past this many are answered with no content.
+    static constexpr size_t tileBudget = 1000;
+    bool stillDone = false;
+    std::exception_ptr stillError;
 
     /// A DEM tile `withheld` answers with no content, leaving a hole no DEM covers.
     using Withheld = std::function<bool(const Resource::TileData&)>;
@@ -163,9 +172,14 @@ struct HillsScene {
         : camera(camera_),
           exaggeration(exaggeration_) {
         const LatLng origin = camera.center;
-        fileSource->tileResponse = [origin, withheld](const Resource& resource) {
+        fileSource->tileResponse = [this, origin, withheld](const Resource& resource) {
             Response res;
-            if (withheld && resource.tileData && withheld(*resource.tileData)) {
+            if (resource.tileData) {
+                requested.push_back(*resource.tileData);
+            }
+            // Past the budget a tile costs nothing to answer, so a cover that runs away fails the
+            // test within the frame's bound rather than spending minutes drawing tiles.
+            if ((withheld && resource.tileData && withheld(*resource.tileData)) || requested.size() > tileBudget) {
                 res.noContent = true;
                 return res;
             }
@@ -192,7 +206,32 @@ struct HillsScene {
         render();
     }
 
-    void render() { image = frontend.render(map).image; }
+    // A still frame, waited for at most `limit`: one that never finishes fails the test rather than
+    // stalling the run. Returns whether it finished.
+    bool render(std::chrono::milliseconds limit = std::chrono::seconds(30)) {
+        stillDone = false;
+        stillError = nullptr;
+        gfx::BackendScope guard{*frontend.getBackend()};
+        map.renderStill([this](const std::exception_ptr& e) {
+            stillError = e;
+            if (!e) {
+                image = frontend.readStillImage();
+            }
+            stillDone = true;
+        });
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        while (!stillDone && std::chrono::steady_clock::now() < deadline) {
+            loop.runOnce();
+        }
+        if (!stillDone) {
+            ADD_FAILURE() << "the still frame did not finish within " << limit.count() << " ms";
+            return false;
+        }
+        if (stillError) {
+            std::rethrow_exception(stillError);
+        }
+        return true;
+    }
 
     Renderer& renderer() { return *frontend.getRenderer(); }
 
