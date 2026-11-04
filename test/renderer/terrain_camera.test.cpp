@@ -1899,3 +1899,34 @@ TEST(TerrainGesture, GroundNoDEMCoversIsRaycastOnlyWhenTheDEMChanges) {
     EXPECT_LE(raycasts, 3) << "over " << moves << " frames";
     EXPECT_LT(test.distance(test.project(onPlane), finger), 2.0) << "the drag carries on on the centre's plane";
 }
+
+// A drag's first move can come before any frame has rendered since the grab, so before the
+// renderer has reported the grabbed ground's height: that move pans the centre's plane. The frame
+// that brings the height puts the ground back under the finger.
+TEST(TerrainGesture, AMoveBeforeTheGrabbedGroundsHeightIsCorrectedByTheNextFrame) {
+    for (const double exaggeration : {1.0, 1.5}) {
+        AlpsGestureTest test(exaggeration);
+        ASSERT_TRUE(test.settle());
+        ScreenCoordinate finger{120, 560};
+        test.map.anchorCenterOnTerrain();
+        test.map.setGestureInProgress(true);
+        const auto grabbed = test.groundUnder(finger);
+        ASSERT_TRUE(grabbed);
+        // A long first step, as a fast flick's first event can be: on the centre's plane it leaves
+        // the ground well away from the finger.
+        test.map.moveBy({40, -150}, {}, finger);
+        finger = {finger.x + 40, finger.y - 150};
+        test.frame();
+        test.frame();
+        EXPECT_LT(test.distance(test.project(*grabbed), finger), 2.0) << "exaggeration " << exaggeration;
+    }
+}
+
+// The drag at a bearing: the camera looks north-east, so the ridge runs across the view at an angle.
+TEST(TerrainGesture, ADragAtABearingKeepsTheGroundItGrabbedUnderTheFinger) {
+    AlpsGestureTest test(1.5, 30.0);
+    ASSERT_TRUE(test.settle());
+    const auto drift = test.drag({120, 560}, {60, -190}, 40, AlpsGestureTest::Pan::Anchored);
+    EXPECT_LT(drift.held, 2.0);
+    EXPECT_LT(drift.released, 2.0);
+}
