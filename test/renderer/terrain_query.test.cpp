@@ -13,6 +13,7 @@
 #include <mln/util/projection.hpp>
 #include <mln/util/run_loop.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -127,11 +128,13 @@ bool isRed(const PremultipliedImage& image, int x, int y) {
     return px[0] > 150 && px[1] < 100 && px[2] < 100;
 }
 
-// Red pixels within `radius` of p (the line is 6 px wide, so a hit has several).
-int redAround(const PremultipliedImage& image, const ScreenCoordinate& p, int radius = 3) {
+// Red pixels within `radius` of p (the line is 6 px wide, so a hit has several), or within
+// `radiusX` across for a window wider than it is tall.
+int redAround(const PremultipliedImage& image, const ScreenCoordinate& p, int radius = 3, int radiusX = 0) {
+    radiusX = std::max(radius, radiusX);
     int count = 0;
     for (int dy = -radius; dy <= radius; ++dy) {
-        for (int dx = -radius; dx <= radius; ++dx) {
+        for (int dx = -radiusX; dx <= radiusX; ++dx) {
             const int x = static_cast<int>(std::lround(p.x)) + dx;
             const int y = static_cast<int>(std::lround(p.y)) + dy;
             if (x >= 0 && y >= 0 && std::cmp_less(x, image.size.width) && std::cmp_less(y, image.size.height)) {
@@ -433,7 +436,10 @@ TEST(TerrainQuery, RaycastAcrossDEMTilesAndAncestorsHitsWhereDrawn) {
                      << "trail " << i << " at " << meters << " m, drawn at (" << drawn.x << ", " << drawn.y << ")");
         ASSERT_GT(drawn.y, 0);
         ASSERT_LT(drawn.y, viewSize);
-        ASSERT_GT(redAround(image, drawn), 10) << "the trail is not drawn at its height on the ramp";
+        // Rows within 3 px of the trail's height, along the east-west trail: the farthest is
+        // foreshortened to a row or two, which a sub-pixel shift splits between 7 and 14 pixels of
+        // a square window.
+        ASSERT_GT(redAround(image, drawn, 3, 10), 10) << "the trail is not drawn at its height on the ramp";
         const auto hits = frontend.getRenderer()->queryRenderedFeatures(drawn, options);
         ASSERT_EQ(hits.size(), 1u) << "a tap on the drawn trail does not find exactly one trail";
         EXPECT_EQ(hits[0].properties.at("name"), mapbox::feature::value(std::to_string(i)))

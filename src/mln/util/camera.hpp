@@ -16,8 +16,10 @@ public:
     Camera() noexcept;
 
     vec3 getPosition() const noexcept;
-    mat4 getCameraToWorld(double scale, bool flippedY) const noexcept;
-    mat4 getWorldToCamera(double scale, bool flippedY) const noexcept;
+    /// `pixelsPerMeter` converts the metres renderables give as heights into world pixels at
+    /// `scale`: the map centre's, as the transform keeps the centre's altitude in pixels with it.
+    mat4 getCameraToWorld(double scale, double pixelsPerMeter, bool flippedY) const noexcept;
+    mat4 getWorldToCamera(double scale, double pixelsPerMeter, bool flippedY) const noexcept;
     mat4 getCameraToClipPerspective(double fovy, double aspectRatio, double nearZ, double farZ) const noexcept;
 
     vec3 forward() const noexcept;

@@ -238,6 +238,33 @@ TEST(Transform, MoveByKeepsAnElevatedCenterOnItsPlane) {
     EXPECT_NEAR(metersBetween(elevatedBefore, transform.getLatLng()), seaLevelMove, seaLevelMove * 0.01);
 }
 
+// A pan step is unprojected onto the plane at the centre's altitude, which has to be the plane the
+// centre sits on in the projection. The projection converted heights to pixels at the camera's
+// latitude and the centre's altitude at the centre's, so over a 2,300 m ridge at z13 and pitch 60
+// (a phone held at a trailhead) every step, even an empty one, moved the centre about 10 m along
+// the view: a 200 px drag made of 40 steps slid the ground 15 px from under the finger.
+TEST(Transform, PanStepsOverAnElevatedCenterDoNotCreep) {
+    Transform transform;
+    transform.resize({390, 844});
+    const LatLng start{47.265, 11.404};
+    transform.jumpTo(CameraOptions().withCenter(start).withZoom(13.0).withPitch(60.0).withCenterAltitude(2300.0));
+
+    for (int i = 0; i < 40; ++i) {
+        transform.moveBy({0, 0});
+    }
+    EXPECT_LT(metersBetween(start, transform.getLatLng()), 0.01) << "empty steps moved the centre";
+
+    // A drag across the view and back lands where it started: on the centre's plane, every point
+    // of the centre's row moves the same distance.
+    for (int i = 0; i < 40; ++i) {
+        transform.moveBy({5, 0});
+    }
+    for (int i = 0; i < 40; ++i) {
+        transform.moveBy({-5, 0});
+    }
+    EXPECT_LT(metersBetween(start, transform.getLatLng()), 0.01) << "a drag out and back crept";
+}
+
 TEST(Transform, ZoomAnchoredAtTheCenterKeepsAnElevatedCenter) {
     Transform transform;
     placeElevatedCamera(transform);

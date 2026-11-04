@@ -6,11 +6,15 @@
 #include <mln/map/bound_options.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
+#include <mln/map/transform_state.hpp>
+#include <mln/renderer/renderer.hpp>
 #include <mln/math/angles.hpp>
 #include <mln/style/style.hpp>
 #include <mln/style/terrain.hpp>
 #include <mln/util/constants.hpp>
 #include <mln/util/image.hpp>
+#include <mln/util/mat4.hpp>
+#include <mln/util/projection.hpp>
 #include <mln/util/run_loop.hpp>
 
 #include <algorithm>
@@ -20,6 +24,7 @@
 #include <functional>
 #include <limits>
 #include <thread>
+#include <unordered_map>
 
 using namespace mln;
 
@@ -1364,4 +1369,244 @@ TEST(TerrainCamera, AJumpIntoAValleyLiftsTheEyeOutOfTheGroundBehindIt) {
     }
     EXPECT_TRUE(eyeClear()) << "the eye is above the ground under it, by the clearance: " << eye().altitude << " m";
     EXPECT_GT(greenShare(frontend.readStillImage()), 0.5) << "the frame shows the ground";
+}
+
+namespace {
+
+// Plan 02's Alps fixture: an east-west ridge whose crest runs along 47.265° N, 2,300 m on the crest
+// at the camera and every 12 km east and west of it, 2,070 m between, falling to a 575 m valley
+// floor about 10 km north and south.
+constexpr double alpsLatitude = 47.265;
+constexpr double alpsLongitude = 11.404;
+double alpsMeters(double latitude, double longitude) {
+    const double northKm = (latitude - alpsLatitude) * 111.32;
+    const double eastKm = (longitude - alpsLongitude) * 111.32 * std::cos(util::deg2rad(alpsLatitude));
+    return 575.0 +
+           1725.0 * std::exp(-std::pow(northKm / 4.0, 2.0)) * (0.9 + 0.1 * std::cos(2.0 * M_PI * eastKm / 12.0));
+}
+
+constexpr uint32_t alpsTileSize = 256;
+
+std::string makeAlpsDEMTile(const std::string& url) {
+    // The tests ask for the same few dozen tiles again and again.
+    static std::unordered_map<std::string, std::string> cache;
+    if (const auto it = cache.find(url); it != cache.end()) {
+        return it->second;
+    }
+    int z = 0, x = 0, y = 0;
+    const auto name = url.substr(url.rfind('/') + 1);
+    std::sscanf(name.c_str(), "%d-%d-%d.png", &z, &x, &y);
+    const double n = std::pow(2.0, z);
+    PremultipliedImage image({alpsTileSize, alpsTileSize});
+    for (uint32_t row = 0; row < alpsTileSize; ++row) {
+        const double mercatorY = (y + (row + 0.5) / alpsTileSize) / n;
+        const double latitude = util::rad2deg(std::atan(std::sinh(M_PI * (1.0 - 2.0 * mercatorY))));
+        for (uint32_t col = 0; col < alpsTileSize; ++col) {
+            const double longitude = (x + (col + 0.5) / alpsTileSize) / n * 360.0 - 180.0;
+            const auto encoded = static_cast<uint32_t>(std::lround((alpsMeters(latitude, longitude) + 10000.0) * 10.0));
+            uint8_t* px = image.data.get() + (row * alpsTileSize + col) * 4;
+            px[0] = static_cast<uint8_t>(encoded >> 16);
+            px[1] = static_cast<uint8_t>((encoded >> 8) & 0xFF);
+            px[2] = static_cast<uint8_t>(encoded & 0xFF);
+            px[3] = 255;
+        }
+    }
+    return cache[url] = encodePNG(image);
+}
+
+std::string alpsStyle(double exaggeration) {
+    return R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 11,
+      "tileSize": 256
+    }
+  },
+  "terrain": {"source": "dem", "exaggeration": )STYLE" +
+           std::to_string(exaggeration) + R"STYLE(},
+  "layers": []
+})STYLE";
+}
+
+// A point on the ground, with its height as drawn (exaggeration applied).
+struct GroundPoint {
+    LatLng location;
+    double altitude = 0.0;
+};
+
+// A phone-sized map over the Alps fixture with the clamp on, as the app opens it: z13, pitch 60.
+// Continuous, so animations run on the clock; frames are stepped, with no sleeps.
+struct AlpsGestureTest {
+    util::RunLoop loop;
+    std::shared_ptr<StubFileSource> fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(),
+                                                                                  ClientOptions());
+    HeadlessFrontend frontend{{390, 844}, 1};
+    MapAdapter map;
+
+    explicit AlpsGestureTest(double exaggeration, double bearing = 0.0)
+        : map(frontend,
+              MapObserver::nullObserver(),
+              fileSource,
+              MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())) {
+        fileSource->tileResponse = [](const Resource& resource) {
+            Response res;
+            res.data = std::make_shared<std::string>(makeAlpsDEMTile(resource.url));
+            return res;
+        };
+        map.setCenterClampedToGround(true);
+        map.getStyle().loadJSON(alpsStyle(exaggeration));
+        map.jumpTo(CameraOptions()
+                       .withCenter(LatLng{alpsLatitude, alpsLongitude})
+                       .withZoom(13.0)
+                       .withPitch(60.0)
+                       .withBearing(bearing));
+    }
+
+    void frame() {
+        loop.runOnce();
+        frontend.renderFrame();
+    }
+
+    std::optional<double> elevation(const LatLng& location) {
+        return frontend.getRenderer()->queryTerrainElevation(location);
+    }
+
+    // How far the centre is above (or below) the ground under it, in metres.
+    std::optional<double> centerOffGround() {
+        const auto camera = map.getCameraOptions();
+        const auto ground = elevation(*camera.center);
+        if (!ground) return std::nullopt;
+        return *camera.centerAltitude - *ground;
+    }
+
+    // Frames until `done`, with no sleeps: each frame takes whatever the workers have finished.
+    bool renderUntil(const std::function<bool()>& done, int extraFrames = 0) {
+        const auto deadline = Clock::now() + Seconds(20);
+        while (Clock::now() < deadline && !done()) {
+            frame();
+        }
+        for (int i = 0; i < extraFrames; ++i) {
+            frame();
+        }
+        return done();
+    }
+
+    // Until the clamp has put the centre on the ground under it and the frames stopped changing it.
+    bool settle() {
+        int still = 0;
+        double last = std::numeric_limits<double>::quiet_NaN();
+        return renderUntil([&] {
+            const auto off = centerOffGround();
+            const double altitude = map.getCameraOptions().centerAltitude.value_or(0.0);
+            still = (off && std::abs(*off) < 1.0 && std::abs(altitude - last) < 1e-6) ? still + 1 : 0;
+            last = altitude;
+            return still >= 5;
+        });
+    }
+
+    // Where `point` (metres above sea level) is drawn on the screen, top-left origin: the projection
+    // the renderer draws the terrain with, which takes heights in metres.
+    ScreenCoordinate project(const GroundPoint& point) const {
+        const TransformState state = map.getTransformState();
+        LatLng location = point.location;
+        location.unwrapForShortestPath(state.getLatLng());
+        const Point<double> world = Projection::project(location, state.getScale());
+        const vec4 in = {{world.x, world.y, point.altitude, 1.0}};
+        vec4 clip;
+        matrix::transformMat4(clip, in, state.getProjectionMatrix());
+        const Size size = state.getSize();
+        return {(clip[0] / clip[3] + 1.0) * size.width / 2.0, (1.0 - clip[1] / clip[3]) * size.height / 2.0};
+    }
+
+    // The ground the line of sight through `point` (top-left origin) meets first, from the camera.
+    std::optional<GroundPoint> groundUnder(const ScreenCoordinate& point) {
+        const TransformState state = map.getTransformState();
+        const ScreenCoordinate flipped{point.x, state.getSize().height - point.y};
+        const auto at = [&](double altitude) {
+            return state.screenCoordinateToLatLng(flipped, altitude);
+        };
+        // Above the ground at the top, below it at the bottom; the first crossing on the way down.
+        const auto aboveGround = [&](double altitude) -> std::optional<bool> {
+            const auto ground = elevation(at(altitude));
+            if (!ground) return std::nullopt;
+            return altitude > *ground;
+        };
+        double high = 6000.0;
+        for (double low = high - 10.0; low > -500.0; high = low, low -= 10.0) {
+            const auto above = aboveGround(low);
+            if (!above) return std::nullopt;
+            if (!*above) {
+                for (int i = 0; i < 50; ++i) {
+                    const double mid = (low + high) / 2.0;
+                    const auto midAbove = aboveGround(mid);
+                    if (!midAbove) return std::nullopt;
+                    (*midAbove ? high : low) = mid;
+                }
+                const double altitude = (low + high) / 2.0;
+                return GroundPoint{.location = at(altitude), .altitude = altitude};
+            }
+        }
+        return std::nullopt;
+    }
+
+    double distance(const ScreenCoordinate& a, const ScreenCoordinate& b) const {
+        return std::hypot(a.x - b.x, a.y - b.y);
+    }
+
+    // A drag as the app's gesture layer sends it: the centre anchored on the ground at the start,
+    // then `moves` equal pan steps adding up to `drag`, a frame after each. Returns the largest
+    // distance between the ground grabbed at `grab` and the finger, while held and after release.
+    struct DragResult {
+        double held = std::numeric_limits<double>::infinity();
+        double released = std::numeric_limits<double>::infinity();
+    };
+    DragResult drag(const ScreenCoordinate& grab, const ScreenCoordinate& drag, int moves) {
+        DragResult result;
+        map.anchorCenterOnTerrain();
+        map.setGestureInProgress(true);
+        frame();
+        const auto grabbed = groundUnder(grab);
+        if (!grabbed) {
+            ADD_FAILURE() << "no ground under the finger";
+            return result;
+        }
+        result.held = 0.0;
+        ScreenCoordinate finger = grab;
+        const ScreenCoordinate step{drag.x / moves, drag.y / moves};
+        for (int i = 0; i < moves; ++i) {
+            map.moveBy(step);
+            finger = {finger.x + step.x, finger.y + step.y};
+            frame();
+            result.held = std::max(result.held, distance(project(*grabbed), finger));
+        }
+        map.setGestureInProgress(false);
+        for (int i = 0; i < 30; ++i) {
+            frame();
+        }
+        result.released = distance(project(*grabbed), finger);
+        return result;
+    }
+};
+
+} // namespace
+
+// The app's drag over the Alps: the centre anchored on the ground when the finger goes down, then
+// the drag in equal steps, each a plain pan by the finger's movement. Grabbed at the centre and
+// dragged along the ridge, the ground under the finger stays under it, however many steps the
+// drag is made of: a pan step crept about 10 m along the view, so 200 px made of 40 steps slid
+// the ground 15 px from under the finger, and 100 steps 40 px.
+TEST(TerrainGesture, PanStepsKeepTheGroundGrabbedAtTheCentreUnderTheFinger) {
+    for (const double exaggeration : {1.0, 1.5}) {
+        for (const int moves : {10, 40, 100}) {
+            AlpsGestureTest test(exaggeration);
+            ASSERT_TRUE(test.settle());
+            const auto drift = test.drag({195, 422}, {200, 0}, moves);
+            EXPECT_LT(drift.held, 2.0) << "exaggeration " << exaggeration << ", " << moves << " steps";
+            EXPECT_LT(drift.released, 2.0) << "exaggeration " << exaggeration << ", " << moves << " steps";
+        }
+    }
 }

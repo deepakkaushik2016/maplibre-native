@@ -157,7 +157,9 @@ void TransformState::getProjMatrix(mat4& projMatrix, uint16_t nearZ, bool aligne
     // Make sure the camera state is up-to-date
     updateCameraState();
 
-    mat4 worldToCamera = camera.getWorldToCamera(scale, viewportMode == ViewportMode::FlippedY);
+    // Heights in metres become pixels at the centre's latitude, as z (the centre's altitude) does.
+    const double pixelsPerMeter = 1.0 / Projection::getMetersPerPixelAtLatitude(getLatLng().latitude(), getZoom());
+    mat4 worldToCamera = camera.getWorldToCamera(scale, pixelsPerMeter, viewportMode == ViewportMode::FlippedY);
     mat4 cameraToClip = camera.getCameraToClipPerspective(
         getFieldOfView(), static_cast<double>(size.width) / size.height, nearZ, farZ);
 
@@ -183,7 +185,6 @@ void TransformState::getProjMatrix(mat4& projMatrix, uint16_t nearZ, bool aligne
         projMatrix[11] = 0.0;
 
         // mat[8], mat[9] control x-skew, y-skew
-        double pixelsPerMeter = 1.0 / Projection::getMetersPerPixelAtLatitude(getLatLng().latitude(), getZoom());
         projMatrix[8] = xSkew * pixelsPerMeter;
         projMatrix[9] = ySkew * pixelsPerMeter;
     }

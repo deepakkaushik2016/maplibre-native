@@ -93,13 +93,13 @@ vec3 Camera::getPosition() const noexcept {
     return {{p[0], p[1], p[2]}};
 }
 
-mat4 Camera::getCameraToWorld(double scale, bool flippedY) const noexcept {
+mat4 Camera::getCameraToWorld(double scale, double pixelsPerMeter, bool flippedY) const noexcept {
     mat4 cameraToWorld;
-    matrix::invert(cameraToWorld, getWorldToCamera(scale, flippedY));
+    matrix::invert(cameraToWorld, getWorldToCamera(scale, pixelsPerMeter, flippedY));
     return cameraToWorld;
 }
 
-mat4 Camera::getWorldToCamera(double scale, bool flippedY) const noexcept {
+mat4 Camera::getWorldToCamera(double scale, double pixelsPerMeter, bool flippedY) const noexcept {
     // transformation chain from world space to camera space:
     // 1. Height value (z) of renderables is in meters. Scale z coordinate by pixelsPerMeter
     // 2. Transform from pixel coordinates to camera space with cameraMatrix^-1
@@ -107,9 +107,12 @@ mat4 Camera::getWorldToCamera(double scale, bool flippedY) const noexcept {
 
     // worldToCamera: flip * cam^-1 * zScale
     // cameraToWorld: (flip * cam^-1 * zScale)^-1 => (zScale^-1 * cam * flip^-1)
+    // The caller's pixelsPerMeter, not one at the camera's own latitude: the transform keeps the
+    // centre's altitude in pixels at the centre's latitude, so converting heights at the camera's
+    // put a centre `h` metres up h * (1 - cos(centre) / cos(camera)) away from the plane drawn at
+    // `h` (5.5 m at 2,300 m, z13, pitch 60), and every pan step unprojected onto that plane moved
+    // the map h * tan(pitch) further than asked (gl-js takes the centre's: Transform._pixelPerMeter).
     const double worldSize = Projection::worldSize(scale);
-    const double latitude = latFromMercatorY(getColumn(transform, 3)[1]);
-    const double pixelsPerMeter = worldSize / (std::cos(util::deg2rad(latitude)) * util::M2PI * util::EARTH_RADIUS_M);
 
     // Compute inverse of the camera matrix
     mat4 result = orientation.conjugate().toRotationMatrix();
