@@ -170,6 +170,14 @@ fn main(in: VertexInput) -> VertexOutput {
         position = vec4<f32>(position.x + delta.x, position.y + delta.y, position.z, position.w);
     }
 
+    // Still and tile renders keep the points in a tile's buffer (CircleLayout), which the tile
+    // they lie in draws too. Over terrain this tile would read their height off its DEM beyond
+    // its edge, clamped there, and draw them off the ground: leave them to their own tile.
+    if (drawable.dem_enabled != 0.0 &&
+        (any(circle_center < vec2<f32>(0.0, 0.0)) || any(circle_center >= vec2<f32>(8192.0, 8192.0)))) {
+        position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    }
+
     let antialiasblur = 1.0 / max(paintParams.pixel_ratio * radius_with_stroke, 1e-6);
 
     out.position = position;

@@ -9,6 +9,7 @@
 #include <mln/map/transform_state.hpp>
 #include <mln/math/angles.hpp>
 #include <mln/renderer/renderer.hpp>
+#include <mln/style/layers/circle_layer.hpp>
 #include <mln/style/sources/geojson_source.hpp>
 #include <mln/style/style.hpp>
 #include <mln/util/chrono.hpp>
@@ -25,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -221,6 +223,25 @@ struct HillsScene {
                                 {sw.longitude(), ne.latitude()},
                                 {sw.longitude(), sw.latitude()}}};
         map.getStyle().getSource("patch")->as<style::GeoJSONSource>()->setGeoJSON(Geometry<double>{square});
+    }
+
+    // A circle marker of `radius` px at `location`, as the app draws trail markers and the
+    // elevation scrubber's dot: red, no stroke, aligned to the viewport or to the map.
+    void setMarker(const LatLng& location, float radius, style::AlignmentType alignment) {
+        auto& style = map.getStyle();
+        if (!style.getSource("marker")) {
+            style.addSource(std::make_unique<style::GeoJSONSource>("marker"));
+        }
+        style.getSource("marker")->as<style::GeoJSONSource>()->setGeoJSON(
+            Geometry<double>{Point<double>{location.longitude(), location.latitude()}});
+        if (style.getLayer("marker")) {
+            style.removeLayer("marker");
+        }
+        auto layer = std::make_unique<style::CircleLayer>("marker", "marker");
+        layer->setCircleColor(Color::red());
+        layer->setCircleRadius(radius);
+        layer->setCirclePitchAlignment(alignment);
+        style.addLayer(std::move(layer));
     }
 
     // The centre of the patch drawn within `radius` of `around`, in screen coordinates (a pixel's
@@ -579,4 +600,86 @@ TEST(TerrainScreenQuery, NoAnswerWithoutDEMOrBeforeTheFirstFrame) {
     ASSERT_TRUE(frontend.getTransformState()) << "no frame was rendered";
     EXPECT_FALSE(renderer.queryTerrainLatLng({195.0, 600.0})) << "ground read with no DEM loaded";
     EXPECT_FALSE(renderer.queryTerrainPixel(center)) << "a pixel with no DEM loaded";
+}
+
+// A circle marker is drawn on the ground at its LatLng, where queryTerrainPixel puts it and a
+// fill draped there is drawn, from any camera: pitched, centred on it or not, viewport- or
+// map-aligned, at the trail marker's and scrubber dot's radii.
+//
+// The point lies a fifth of a z13 tile from its tile's east edge, so the tile buffer of its eastern
+// neighbour holds it too. A still render keeps buffer points (circles are not clipped to their
+// tile), and with terrain the neighbour read the point's height off its own DEM beyond its west
+// edge: a second circle, metres off the ground, whenever the neighbour is on screen.
+TEST(TerrainScreenQuery, ACircleIsDrawnOnTheGroundAtItsLatLng) {
+    const LatLng origin{46.0, 10.0};
+    const LatLng point{46.000197, 10.011712};
+    struct View {
+        const char* name;
+        LatLng hillsOrigin; // where the hills are laid out from, and the scene's first centre
+        bool centred;       // then jump to centre the camera on the point
+    };
+    for (const View& view : {View{.name = "off-centre", .hillsOrigin = origin, .centred = false},
+                             View{.name = "centred", .hillsOrigin = origin, .centred = true},
+                             View{.name = "centred, hills laid out from it", .hillsOrigin = point, .centred = true}}) {
+        for (const double pitch : {0.0, 60.0, 75.0}) {
+            HillsScene scene({.center = view.hillsOrigin, .pitch = pitch, .bearing = 0.0});
+            if (view.centred) {
+                scene.map.jumpTo(CameraOptions().withCenter(point).withCenterAltitude(
+                    hillsMeters(view.hillsOrigin, point) * *scene.exaggeration));
+            }
+            for (const auto alignment : {style::AlignmentType::Viewport, style::AlignmentType::Map}) {
+                for (const float radius : {4.0f, 10.0f}) {
+                    SCOPED_TRACE(::testing::Message() << view.name << ", pitch " << pitch << ", "
+                                                      << (alignment == style::AlignmentType::Map ? "map" : "viewport")
+                                                      << "-aligned, radius " << radius);
+                    scene.setMarker(point, radius, alignment);
+                    scene.render();
+                    const auto pixel = scene.renderer().queryTerrainPixel(point);
+                    ASSERT_TRUE(pixel);
+                    ASSERT_FALSE(pixel->occluded);
+                    const auto [centre, count] = scene.redCentroid(pixel->point, 30);
+                    ASSERT_GT(count, 2) << "no circle drawn near the point";
+                    EXPECT_LT(distance(centre, pixel->point), 0.3)
+                        << "the circle is drawn at (" << centre.x << ", " << centre.y << "), the ground at ("
+                        << pixel->point.x << ", " << pixel->point.y << ")";
+                }
+            }
+        }
+    }
+}
+
+// The same from each side: a point a fifth of a tile in from an edge of its z13 tile, so the
+// neighbour across that edge holds it in its buffer, beyond its west, east, south or north edge.
+// Each such edge is also an edge of the z11 DEM tiles (the DEM's maxzoom), so the neighbour's own
+// DEM ends there: within one DEM tile the neighbour read the right height.
+TEST(TerrainScreenQuery, ACircleNearAnyEdgeOfItsTileIsDrawnOnTheGround) {
+    const LatLng origin{46.0, 10.0};
+    constexpr int zoom = 13;
+    constexpr int demZoom = 11;
+    constexpr int perDEMTile = 1 << (zoom - demZoom);
+    const Point<double> originTile = Projection::project(origin, 1.0) / util::tileSize_D * double(1 << zoom);
+    // The z13 tiles at the south-east and north-west corners of the origin's z11 DEM tile.
+    const double west = std::floor(originTile.x / perDEMTile) * perDEMTile;
+    const double north = std::floor(originTile.y / perDEMTile) * perDEMTile;
+    const Point<double> southEast{west + perDEMTile - 1, north + perDEMTile - 1};
+    const Point<double> northWest{west, north};
+    for (const auto& [side, tile, inTile] : {std::tuple{"east", southEast, Point<double>{0.8, 0.5}},
+                                             std::tuple{"south", southEast, Point<double>{0.5, 0.8}},
+                                             std::tuple{"west", northWest, Point<double>{0.2, 0.5}},
+                                             std::tuple{"north", northWest, Point<double>{0.5, 0.2}}}) {
+        SCOPED_TRACE(side);
+        const LatLng point = Projection::unproject((tile + inTile) * util::tileSize_D / double(1 << zoom), 1.0);
+        HillsScene scene({.center = origin, .pitch = 60.0, .bearing = 0.0});
+        scene.map.jumpTo(
+            CameraOptions().withCenter(point).withCenterAltitude(hillsMeters(origin, point) * *scene.exaggeration));
+        scene.setMarker(point, 6.0f, style::AlignmentType::Viewport);
+        scene.render();
+        const auto pixel = scene.renderer().queryTerrainPixel(point);
+        ASSERT_TRUE(pixel);
+        const auto [centre, count] = scene.redCentroid(pixel->point, 30);
+        ASSERT_GT(count, 2) << "no circle drawn near the point";
+        EXPECT_LT(distance(centre, pixel->point), 0.3)
+            << "the circle is drawn at (" << centre.x << ", " << centre.y << "), the ground at (" << pixel->point.x
+            << ", " << pixel->point.y << ")";
+    }
 }

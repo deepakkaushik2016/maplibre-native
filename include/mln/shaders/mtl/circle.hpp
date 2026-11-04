@@ -187,6 +187,13 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         position.xy += scaled_extrude * (radius + stroke_width) * factor;
     }
 
+    // Still and tile renders keep the points in a tile's buffer (CircleLayout), which the tile
+    // they lie in draws too. Over terrain this tile would read their height off its DEM beyond
+    // its edge, clamped there, and draw them off the ground: leave them to their own tile.
+    if (drawable.dem_enabled != 0.0 && (any(circle_center < 0.0) || any(circle_center >= 8192.0))) {
+        position = float4(2.0, 2.0, 2.0, 1.0);
+    }
+
     // This is a minimum blur distance that serves as a faux-antialiasing for
     // the circle. since blur is a ratio of the circle's size and the intent is
     // to keep the blur at roughly 1px, the two are inversely related.

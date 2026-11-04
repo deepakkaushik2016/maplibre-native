@@ -176,6 +176,14 @@ void main() {
         gl_Position.xy += scaled_extrude * (radius + stroke_width) * factor;
     }
 
+    // Still and tile renders keep the points in a tile's buffer (CircleLayout), which the tile
+    // they lie in draws too. Over terrain this tile would read their height off its DEM beyond
+    // its edge, clamped there, and draw them off the ground: leave them to their own tile.
+    if (drawable.dem_enabled != 0.0 &&
+        (any(lessThan(circle_center, vec2(0.0))) || any(greaterThanEqual(circle_center, vec2(8192.0))))) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    }
+
     applySurfaceTransform();
 
     // This is a minimum blur distance that serves as a faux-antialiasing for
