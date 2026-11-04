@@ -253,6 +253,18 @@ public:
     /// terrain is flat (exaggeration 0), where every point sits at sea level.
     std::optional<TileElevation> getTileElevation(const UnwrappedTileID& tileID) const;
 
+    /// A loaded DEM tile under the tile a StitchedDEM is made for.
+    struct StitchSource {
+        CanonicalTileID id;
+        const DEMData* dem;
+    };
+    /// The DEM of `tile` stitched from DEM tiles under it (StitchedDEM), painted in the order
+    /// given, so `sources` goes coarse to fine. Twice the DEM tile size, so a child copies in
+    /// pixel for pixel, out into the 2-pixel border where it lies on the edge. A deeper
+    /// descendant is resampled into it; anything none covers stays at 0 m.
+    static std::shared_ptr<const DEMData> stitchDEM(const CanonicalTileID& tile,
+                                                    const std::vector<StitchSource>& sources);
+
     /// What every raycast through one transform shares, over the DEM loaded at the time.
     struct RaycastSetup {
         /// Inverse of the transform's projection matrix (world pixels, z in metres -> clip)

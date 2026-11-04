@@ -9,6 +9,7 @@
 #include <mln/renderer/renderer.hpp>
 #include <mln/style/image.hpp>
 #include <mln/style/style.hpp>
+#include <mln/util/constants.hpp>
 #include <mln/util/image.hpp>
 #include <mln/util/io.hpp>
 #include <mln/util/projection.hpp>
@@ -70,7 +71,12 @@ enum class Dem {
     // A DEM served to z14, where the tiles with an odd x stand at `cliffTopMeters` and every
     // other tile (any other zoom included) at `plateauMeters`. The POI at lng 10 is in z14 tile
     // x = 8647, so it is drawn at the cliff top only if its DEM is that z14 tile.
-    Z14Stripes
+    Z14Stripes,
+    // A slope served at the zoom where `demTileSize` px tiles match the map: two zooms finer than
+    // the 512 px GeoJSON tiles for 128 px tiles, three for 64 px ones, so the z13 symbol tile is
+    // lifted by a DEM stitched from descendants two or three zooms deeper. Every coarser tile
+    // holds the slope `slopeAncestorMeters` higher, so a symbol lifted by one of them shows.
+    Slope
 };
 enum class Symbol {
     Icon,
@@ -113,6 +119,8 @@ struct SceneOptions {
                 return cliffPoiMeters;
             case Dem::Ridge:
                 return cliffTopMeters;
+            case Dem::Slope:
+                return plateauMeters;
             case Dem::Z14Stripes:
                 // At z13 a 512 px DEM is served at z13, all plateau; a 256 px one at z14.
                 if (demTileSize != 256) {
@@ -124,7 +132,12 @@ struct SceneOptions {
         }
         return plateauMeters;
     }
-    int demMaxZoom() const { return dem == Dem::Z14Stripes ? stripesZoom : demZoom; }
+    int demMaxZoom() const {
+        if (dem == Dem::Slope) {
+            return 13 + static_cast<int>(std::lround(std::log2(512.0 / demTileSize)));
+        }
+        return dem == Dem::Z14Stripes ? stripesZoom : demZoom;
+    }
 };
 
 std::string symbolStyle(const SceneOptions& options) {
@@ -205,6 +218,35 @@ std::string demTile(double meters,
     return encodePNG(image);
 }
 
+constexpr double slopeAncestorMeters = 300.0;
+
+// The slope DEM's tile `id` (`size` px, served up to `maxZoom`): in pixels of the `maxZoom` tiles,
+// counted from the POI at lng 10, lat 46.01, the terrain is plateauMeters + 2 east + 3 north,
+// and each pixel holds it at its centre.
+std::string slopeTile(const CanonicalTileID& id, uint32_t size, int maxZoom) {
+    const double scale = std::pow(2.0, maxZoom - id.z);
+    const double pixels = std::pow(2.0, maxZoom) * size;
+    const Point<double> poi = Projection::project(LatLng{46.01, 10.0}, 1.0);
+    const double poiX = poi.x / util::tileSize_D * pixels;
+    const double poiY = poi.y / util::tileSize_D * pixels;
+    const double offset = std::cmp_less(id.z, maxZoom) ? slopeAncestorMeters : 0.0;
+    PremultipliedImage image({size, size});
+    for (uint32_t y = 0; y < size; ++y) {
+        for (uint32_t x = 0; x < size; ++x) {
+            const double u = (static_cast<double>(id.x) * size + x + 0.5) * scale - poiX;
+            const double v = (static_cast<double>(id.y) * size + y + 0.5) * scale - poiY;
+            const double meters = plateauMeters + 2.0 * u - 3.0 * v + offset;
+            const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
+            uint8_t* px = image.data.get() + (static_cast<size_t>(y) * size + x) * 4;
+            px[0] = static_cast<uint8_t>(value >> 16);
+            px[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+            px[2] = static_cast<uint8_t>(value & 0xff);
+            px[3] = 255;
+        }
+    }
+    return encodePNG(image);
+}
+
 PremultipliedImage redSquare() {
     PremultipliedImage image({iconSize, iconSize});
     for (uint32_t i = 0; i < iconSize * iconSize; ++i) {
@@ -278,6 +320,12 @@ struct TerrainSymbolScene {
         fileSource->tileResponse = [this](const Resource& resource) {
             Response res;
             const auto& tile = resource.tileData;
+            if (tile && options.dem == Dem::Slope) {
+                const CanonicalTileID id{
+                    static_cast<uint8_t>(tile->z), static_cast<uint32_t>(tile->x), static_cast<uint32_t>(tile->y)};
+                res.data = std::make_shared<std::string>(slopeTile(id, options.demTileSize, options.demMaxZoom()));
+                return res;
+            }
             if (tile && options.dem == Dem::Ridge && tile->z == demZoom && tile->x == ridgeTileX) {
                 res.data = std::make_shared<std::string>(ridgeTile);
                 return res;
@@ -471,6 +519,32 @@ TEST(TerrainSymbolQuery, IconOnARidgeOnePixelWideIsDrawnOnItsCrest) {
                                            << onFlank.x << ", " << onFlank.y << ")";
     EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
     EXPECT_EQ(scene.query(onFlank), 0u) << "a tap on the ridge's flank (nothing is drawn there) hits the icon";
+}
+
+// 128 px DEM tiles are served two zooms finer than the 512 px GeoJSON tiles, 64 px ones three: the
+// z13 symbol tile is lifted by a DEM resampled from descendants two or three zooms deeper. The icon
+// must be drawn on the slope at its own height (not on a coarser tile, 300 m higher), and a tap
+// there must find it: the CPU reads the same stitched DEM the shaders draw it with.
+void expectDrawnOnSlopeOfDescendants(uint32_t demTileSize) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .dem = Dem::Slope, .demTileSize = demTileSize});
+    const auto state = scene.frontend.getTransformState();
+    ASSERT_TRUE(state);
+    const ScreenCoordinate onAncestor = project(*state,
+                                                LatLng{46.01, scene.options.poiLng()},
+                                                (plateauMeters + slopeAncestorMeters) * *scene.options.exaggeration);
+    scene.expectDrawnAt(onAncestor);
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(onAncestor), 0u) << "a tap where a coarser DEM would lift the icon hits it";
+}
+
+TEST(TerrainSymbolQuery, IconOverDEMTwoZoomsFinerHitsWhereDrawn) {
+    expectDrawnOnSlopeOfDescendants(128);
+}
+
+TEST(TerrainSymbolQuery, IconOverDEMThreeZoomsFinerHitsWhereDrawn) {
+    expectDrawnOnSlopeOfDescendants(64);
 }
 
 // Circles bind the DEM the same way (as do fill extrusions and heatmaps).

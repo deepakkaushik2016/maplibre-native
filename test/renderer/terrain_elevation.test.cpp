@@ -3,6 +3,7 @@
 #include <mln/test/map_adapter.hpp>
 
 #include <mln/gfx/headless_frontend.hpp>
+#include <mln/geometry/dem_data.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
 #include <mln/renderer/render_terrain.hpp>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace mln;
 
@@ -407,4 +409,100 @@ TEST(TerrainElevation, RendererQueryNulloptWhenTileHasNoData) {
     ASSERT_GT(wipes, 0) << "the z10 tile was never refetched";
 
     EXPECT_EQ(query(), std::nullopt);
+}
+
+namespace {
+
+// A plane across a z10 tile, held by its DEM descendants `dz` zooms deeper (128 px each): in their
+// pixels, counted across the whole tile, the terrain is 500 + 2 u + 3 v metres, and each pixel
+// holds the plane at its centre. The stitched DEM has 256 px across, so a stitched pixel spans
+// 2^(dz - 1) descendant pixels and its centre falls on a descendant pixel corner: integer
+// metres, which DEMData::get reads exactly. A stitched pixel taken from one descendant pixel
+// instead of resampled is half a descendant pixel off, 2.5 m.
+constexpr int32_t stitchDescendantDim = 128;
+const CanonicalTileID stitchTile{10, 540, 360};
+
+double stitchPlane(double u, double v) {
+    return 500.0 + 2.0 * u + 3.0 * v;
+}
+
+void expectStitchedPlane(int dz) {
+    const int32_t n = 1 << dz;
+    std::vector<std::shared_ptr<DEMData>> dems;
+    for (int32_t cy = 0; cy < n; ++cy) {
+        for (int32_t cx = 0; cx < n; ++cx) {
+            PremultipliedImage image({stitchDescendantDim, stitchDescendantDim});
+            for (int32_t y = 0; y < stitchDescendantDim; ++y) {
+                for (int32_t x = 0; x < stitchDescendantDim; ++x) {
+                    const double meters = stitchPlane(cx * stitchDescendantDim + x + 0.5,
+                                                      cy * stitchDescendantDim + y + 0.5);
+                    const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
+                    uint8_t* px = image.data.get() + (static_cast<size_t>(y) * stitchDescendantDim + x) * 4;
+                    px[0] = static_cast<uint8_t>((value >> 16) & 0xFF);
+                    px[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+                    px[2] = static_cast<uint8_t>(value & 0xFF);
+                    px[3] = 255;
+                }
+            }
+            dems.push_back(std::make_shared<DEMData>(image, Tileset::RasterEncoding::Mapbox));
+        }
+    }
+    // Each descendant's border is backfilled from its neighbours, as the DEM source does.
+    for (int32_t cy = 0; cy < n; ++cy) {
+        for (int32_t cx = 0; cx < n; ++cx) {
+            for (int32_t dy = -1; dy <= 1; ++dy) {
+                for (int32_t dx = -1; dx <= 1; ++dx) {
+                    if ((dx || dy) && cx + dx >= 0 && cx + dx < n && cy + dy >= 0 && cy + dy < n) {
+                        dems[cy * n + cx]->backfillBorder(*dems[(cy + dy) * n + cx + dx], dx, dy);
+                    }
+                }
+            }
+        }
+    }
+    std::vector<RenderTerrain::StitchSource> sources;
+    for (int32_t cy = 0; cy < n; ++cy) {
+        for (int32_t cx = 0; cx < n; ++cx) {
+            sources.push_back(
+                {.id = CanonicalTileID(
+                     static_cast<uint8_t>(stitchTile.z + dz), (stitchTile.x << dz) + cx, (stitchTile.y << dz) + cy),
+                 .dem = dems[cy * n + cx].get()});
+        }
+    }
+    const auto stitched = RenderTerrain::stitchDEM(stitchTile, sources);
+    ASSERT_EQ(stitched->dim, 2 * stitchDescendantDim);
+    const RenderTerrain::TileElevation elevation(stitched, 1.0f, 0.0f, 0.0f, 1.0f);
+
+    // Fractions of the tile: a spread across it, and either side of every seam between
+    // descendants, all at least a stitched pixel inside the tile (its outer border only repeats
+    // the outermost descendants here).
+    std::vector<double> at;
+    for (int k = 0; k < 17; ++k) {
+        at.push_back((k + 0.37) / 17.0);
+    }
+    for (int32_t c = 1; c < n; ++c) {
+        at.push_back((c - 0.3 / stitched->dim) / n);
+        at.push_back((c + 0.3 / stitched->dim) / n);
+    }
+    const double across = static_cast<double>(n) * stitchDescendantDim;
+    for (const double fx : at) {
+        for (const double fy : at) {
+            const float h = elevation.height(static_cast<float>(fx * extent), static_cast<float>(fy * extent));
+            const double expected = stitchPlane(fx * across, fy * across);
+            EXPECT_NEAR(h, expected, 0.05) << "dz " << dz << " at (" << fx << ", " << fy << ")";
+        }
+    }
+}
+
+} // namespace
+
+// A tile with no DEM of its own or above it is lifted by a DEM stitched from its descendants.
+// Two and three zooms deeper (128 px DEM tiles under 512 px tiles, or 64 px ones) each stitched
+// pixel spans several descendant pixels; it must hold the descendants' surface at its own
+// centre, so the stitched terrain is the descendants' terrain.
+TEST(TerrainElevation, StitchedDEMResamplesDescendantsTwoZoomsDeeper) {
+    expectStitchedPlane(2);
+}
+
+TEST(TerrainElevation, StitchedDEMResamplesDescendantsThreeZoomsDeeper) {
+    expectStitchedPlane(3);
 }

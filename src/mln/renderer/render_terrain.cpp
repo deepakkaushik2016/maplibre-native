@@ -144,40 +144,59 @@ float sampleDEM(const DEMData& dem, const DEMSubTileOffset& off, float x, float 
     return top + (bottom - top) * fy;
 }
 
-// One texel at 0 m in a DEM encoding: the shader decodes dot(rgb * 255, unpack.xyz) - unpack.w, so
-// an all-zero texel is -unpack.w (-10 km for Mapbox, -32 km for Terrarium), which sinks whatever
-// samples it out of view. Split unpack.w into the R, G, B digits (Mapbox: 1, 134, 160; Terrarium:
-// 128, 0, 0).
-std::array<uint8_t, 4> zeroElevationTexel(const std::array<float, 4>& unpack) {
-    std::array<uint8_t, 4> texel{};
-    double rest = unpack[3];
-    for (size_t i = 0; i < 3; ++i) {
-        const double digit = rest / unpack[i];
-        const double value = std::clamp(i < 2 ? std::floor(digit) : std::round(digit), 0.0, 255.0);
-        texel[i] = static_cast<uint8_t>(value);
-        rest -= value * unpack[i];
-    }
-    texel[3] = 255;
-    return texel;
+// The texel holding `meters` in a DEM encoding, to the encoding's step (0.1 m for Mapbox, 1/256 m
+// for Terrarium). The shader decodes dot(rgb * 255, unpack.xyz) - unpack.w, and in both encodings
+// R, G and B are the base-256 digits of (meters + unpack.w) / unpack.z. At 0 m that is
+// (1, 134, 160) for Mapbox and (128, 0, 0) for Terrarium; an all-zero texel would instead be
+// -unpack.w (-10 km, -32 km), which sinks whatever samples it out of view.
+std::array<uint8_t, 4> elevationTexel(const std::array<float, 4>& unpack, double meters) {
+    const double steps = std::round((meters + unpack[3]) / unpack[2]);
+    const auto value = static_cast<uint32_t>(std::clamp(steps, 0.0, double{0xFFFFFF}));
+    return {{static_cast<uint8_t>(value >> 16),
+             static_cast<uint8_t>((value >> 8) & 0xFF),
+             static_cast<uint8_t>(value & 0xFF),
+             255}};
 }
 
-struct StitchSource {
-    CanonicalTileID id;
-    const DEMData* dem;
-};
+// A DEM texel's height in metres, decoded as the shaders' dem_texel() does: not rounded to whole
+// metres, as DEMData::get is. Terrarium's no-data value reads 0 m, as in DEMData::get.
+double texelMeters(const DEMData& dem, const uint32_t& texel) {
+    std::array<uint8_t, 4> rgba{};
+    std::memcpy(rgba.data(), &texel, rgba.size());
+    const auto& unpack = dem.getUnpackVector();
+    const double meters = rgba[0] * double{unpack[0]} + rgba[1] * double{unpack[1]} + rgba[2] * double{unpack[2]} -
+                          unpack[3];
+    return dem.encoding == Tileset::RasterEncoding::Terrarium && meters == -32768.0 ? 0.0 : meters;
+}
 
-// The DEM of `tile` stitched from DEM tiles under it (RenderTerrain::StitchedDEM), painted coarse
-// to fine: `sources` is sorted by zoom. Twice the DEM tile size, so a child copies in texel for
-// texel, out into the 2-texel border where it lies on the edge; a deeper descendant is decimated
-// (the texel under each stitched texel's centre), and anything none covers stays at 0 m.
-std::shared_ptr<const DEMData> stitchDEM(const CanonicalTileID& tile, const std::vector<StitchSource>& sources) {
+// Where a stitched pixel's centre falls in a descendant `ratio` times finer, along one axis: the
+// two descendant pixels either side of it (clamped to the data plus its 2-pixel border) and the
+// weight of the second. `t` is the stitched pixel's offset from the descendant's origin.
+struct ResampleTap {
+    int32_t first;
+    int32_t second;
+    double weight;
+};
+ResampleTap resampleTap(int32_t t, double ratio, int32_t dim) {
+    // DEM pixel i describes the cell centred at i + 0.5, in both the stitched DEM and the descendant.
+    const double p = (t + 0.5) * ratio - 0.5;
+    const double i = std::floor(p);
+    const auto first = static_cast<int32_t>(i);
+    return {.first = util::clamp(first, -2, dim + 1), .second = util::clamp(first + 1, -2, dim + 1), .weight = p - i};
+}
+
+} // namespace
+
+std::shared_ptr<const DEMData> RenderTerrain::stitchDEM(const CanonicalTileID& tile,
+                                                        const std::vector<StitchSource>& sources) {
     const DEMData& first = *sources.front().dem;
     const int32_t dim = first.dim * 2;
     const int32_t stride = dim + 4;
     auto image = std::make_shared<PremultipliedImage>(
         Size(static_cast<uint32_t>(stride), static_cast<uint32_t>(stride)));
     auto* out = reinterpret_cast<uint32_t*>(image->data.get());
-    const auto zero = zeroElevationTexel(first.getUnpackVector());
+    const auto& unpack = first.getUnpackVector();
+    const auto zero = elevationTexel(unpack, 0.0);
     uint32_t zeroBits = 0;
     std::memcpy(&zeroBits, zero.data(), sizeof(zeroBits));
     std::fill(out, out + static_cast<size_t>(stride) * stride, zeroBits);
@@ -196,32 +215,47 @@ std::shared_ptr<const DEMData> stitchDEM(const CanonicalTileID& tile, const std:
         const int32_t xb = x0 + size == dim ? dim + 2 : x0 + size;
         const int32_t ya = y0 == 0 ? -2 : y0;
         const int32_t yb = y0 + size == dim ? dim + 2 : y0 + size;
-        const bool exact = size == dem.dim;
-        // This descendant's texel at stitched offset t from its origin (t may run into the border)
-        const auto local = [&](int32_t t) {
-            if (exact) {
-                return t;
-            }
-            const auto texel = static_cast<int32_t>(std::floor((t + 0.5) * dem.dim / size));
-            return util::clamp(texel, -2, dem.dim + 1);
-        };
         const auto* in = reinterpret_cast<const uint32_t*>(dem.getImage()->data.get());
+        const auto inRow = [&](int32_t y) {
+            return in + static_cast<ptrdiff_t>(y + 2) * dem.stride + 2;
+        };
+        if (size == dem.dim) {
+            // A child: pixel for pixel (t may run into the border).
+            for (int32_t y = ya; y < yb; ++y) {
+                uint32_t* row = out + static_cast<ptrdiff_t>(y + 2) * stride + 2;
+                std::memcpy(row + xa, inRow(y - y0) + (xa - x0), static_cast<size_t>(xb - xa) * sizeof(uint32_t));
+            }
+            continue;
+        }
+        // A deeper descendant: each stitched pixel holds the descendant's surface at its centre,
+        // bilinear between the descendant pixels around it, as get_elevation() reads that
+        // descendant there. Decoded and encoded again, since packed heights do not interpolate.
+        const double ratio = static_cast<double>(dem.dim) / size;
+        std::vector<ResampleTap> columns;
+        columns.reserve(static_cast<size_t>(xb - xa));
+        for (int32_t x = xa; x < xb; ++x) {
+            columns.push_back(resampleTap(x - x0, ratio, dem.dim));
+        }
         for (int32_t y = ya; y < yb; ++y) {
+            const ResampleTap rowTap = resampleTap(y - y0, ratio, dem.dim);
+            const uint32_t* top = inRow(rowTap.first);
+            const uint32_t* bottom = inRow(rowTap.second);
             uint32_t* row = out + static_cast<ptrdiff_t>(y + 2) * stride + 2;
-            const uint32_t* inRow = in + static_cast<ptrdiff_t>(local(y - y0) + 2) * dem.stride + 2;
-            if (exact) {
-                std::memcpy(row + xa, inRow + (xa - x0), static_cast<size_t>(xb - xa) * sizeof(uint32_t));
-            } else {
-                for (int32_t x = xa; x < xb; ++x) {
-                    row[x] = inRow[local(x - x0)];
-                }
+            for (int32_t x = xa; x < xb; ++x) {
+                const ResampleTap& col = columns[static_cast<size_t>(x - xa)];
+                const double t0 = texelMeters(dem, top[col.first]);
+                const double t1 = texelMeters(dem, top[col.second]);
+                const double b0 = texelMeters(dem, bottom[col.first]);
+                const double b1 = texelMeters(dem, bottom[col.second]);
+                const double upper = t0 + (t1 - t0) * col.weight;
+                const double lower = b0 + (b1 - b0) * col.weight;
+                const auto texel = elevationTexel(unpack, upper + (lower - upper) * rowTap.weight);
+                std::memcpy(&row[x], texel.data(), sizeof(uint32_t));
             }
         }
     }
     return std::make_shared<const DEMData>(std::move(image), first.encoding);
 }
-
-} // namespace
 
 RenderTerrain::RenderTerrain(Immutable<style::Terrain::Impl> impl_)
     : impl(std::move(impl_)) {}
@@ -1360,7 +1394,7 @@ const std::shared_ptr<gfx::Texture2D>& RenderTerrain::getPlaceholderDEMTexture(g
     if (!placeholderDEMTexture || placeholderDEMUnpack != demUnpackVector) {
         // One texel at 0 m in the current encoding: an all-zero one would sink a tile without
         // DEM out of view, leaving its drape undrawn.
-        const auto zero = zeroElevationTexel(demUnpackVector);
+        const auto zero = elevationTexel(demUnpackVector, 0.0);
         auto image = std::make_shared<PremultipliedImage>(Size{1, 1}, zero.data(), zero.size());
         placeholderDEMUnpack = demUnpackVector;
         placeholderDEMTexture = context.createTexture2D();
