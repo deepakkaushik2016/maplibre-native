@@ -2,6 +2,7 @@ add_library(
     mbgl-benchmark STATIC EXCLUDE_FROM_ALL
     ${PROJECT_SOURCE_DIR}/benchmark/api/query.benchmark.cpp
     ${PROJECT_SOURCE_DIR}/benchmark/api/render.benchmark.cpp
+    ${PROJECT_SOURCE_DIR}/benchmark/api/terrain.benchmark.cpp
     ${PROJECT_SOURCE_DIR}/benchmark/function/camera_function.benchmark.cpp
     ${PROJECT_SOURCE_DIR}/benchmark/function/composite_function.benchmark.cpp
     ${PROJECT_SOURCE_DIR}/benchmark/function/source_function.benchmark.cpp
