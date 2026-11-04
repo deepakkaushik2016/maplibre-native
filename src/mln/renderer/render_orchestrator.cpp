@@ -832,6 +832,17 @@ ScreenLineString RenderOrchestrator::queryGeometryOnTerrain(const ScreenLineStri
     return result;
 }
 
+std::optional<double> RenderOrchestrator::queryTerrainElevation(const LatLng& latLng) const {
+    if (!renderTerrain || !renderTerrain->isEnabled()) {
+        return std::nullopt;
+    }
+    // On the side of the antimeridian nearer the centre, where the frame draws it: the DEM tiles
+    // drawn across the antimeridian are held at the world copy they are drawn in.
+    LatLng unwrapped = latLng.wrapped();
+    unwrapped.unwrapForShortestPath(transformState.getLatLng());
+    return renderTerrain->findElevationForLatLng(unwrapped);
+}
+
 std::optional<LatLng> RenderOrchestrator::queryTerrainLatLng(const ScreenCoordinate& point) const {
     const Size size = transformState.getSize();
     // Before the first frame there is no transform to read.

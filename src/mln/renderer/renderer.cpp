@@ -6,7 +6,6 @@
 #include <mln/gfx/renderer_backend.hpp>
 #include <mln/layermanager/layer_manager.hpp>
 #include <mln/renderer/renderer_impl.hpp>
-#include <mln/renderer/render_terrain.hpp>
 #include <mln/renderer/render_static_data.hpp>
 #include <mln/renderer/render_tree.hpp>
 #include <mln/renderer/update_parameters.hpp>
@@ -80,11 +79,7 @@ AnnotationIDs Renderer::queryPointAnnotations(const ScreenBox& box) const {
 }
 
 std::optional<double> Renderer::queryTerrainElevation(const LatLng& point) const {
-    const RenderTerrain* terrain = impl->orchestrator.getRenderTerrain();
-    if (!terrain || !terrain->isEnabled()) {
-        return std::nullopt;
-    }
-    return terrain->findElevationForLatLng(point);
+    return impl->orchestrator.queryTerrainElevation(point);
 }
 
 std::optional<LatLng> Renderer::queryTerrainLatLng(const ScreenCoordinate& point) const {

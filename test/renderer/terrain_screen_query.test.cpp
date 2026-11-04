@@ -61,8 +61,10 @@ LatLng offset(const LatLng& origin, double northKm, double eastKm) {
 
 double hillsMeters(const LatLng& origin, const LatLng& point) {
     const double northKm = (point.latitude() - origin.latitude()) * kmPerDegree;
-    const double eastKm = (point.longitude() - origin.longitude()) * kmPerDegree *
-                          std::cos(util::deg2rad(origin.latitude()));
+    // The shorter way round, so the hills run on across the antimeridian.
+    double eastDegrees = point.longitude() - origin.longitude();
+    eastDegrees -= 360.0 * std::round(eastDegrees / 360.0);
+    const double eastKm = eastDegrees * kmPerDegree * std::cos(util::deg2rad(origin.latitude()));
     return hillsMeters(northKm, eastKm);
 }
 
@@ -330,6 +332,26 @@ TEST(TerrainScreenQuery, RoundTripsAcrossTheAntimeridian) {
     // Both sides of the antimeridian are on the screen.
     EXPECT_GT(east, 5);
     EXPECT_GT(west, 5);
+}
+
+// Tap -> LatLng -> elevation, the "what is the ground here?" flow: beyond the antimeridian the tap
+// reads a wrapped longitude, and the height there is the height drawn there.
+TEST(TerrainScreenQuery, TheTappedGroundHasItsHeightAcrossTheAntimeridian) {
+    const CameraCase camera{.center = {0.3, 179.99}, .pitch = 60.0, .bearing = 90.0};
+    HillsScene scene(camera);
+    int east = 0;
+    for (const auto& finger : screenGrid()) {
+        SCOPED_TRACE(::testing::Message() << "finger (" << finger.x << ", " << finger.y << ")");
+        const auto ground = scene.renderer().queryTerrainLatLng(finger);
+        ASSERT_TRUE(ground);
+        east += ground->longitude() < 0.0 ? 1 : 0;
+        const auto meters = scene.renderer().queryTerrainElevation(*ground);
+        ASSERT_TRUE(meters) << "no height at " << ground->longitude();
+        // The DEM holds the hills to its 0.1 m steps, and bilinear interpolation between its
+        // pixels departs from them by well under a metre on these slopes.
+        EXPECT_NEAR(*meters, hillsMeters(camera.center, *ground) * 1.5, 1.0);
+    }
+    EXPECT_GT(east, 5) << "no ground beyond the antimeridian";
 }
 
 // A patch of ground marked at the LatLng the tap returned is drawn under the finger: a pixel proof

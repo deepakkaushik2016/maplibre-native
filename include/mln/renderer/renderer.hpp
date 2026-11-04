@@ -69,6 +69,8 @@ public:
      * Metres above sea level with the style's terrain exaggeration applied, i.e. the height the
      * terrain surface is rendered at (a 1000 m peak under exaggeration 2 reads 2000). Sampled
      * bilinearly from the finest DEM tile currently loaded, or its closest loaded ancestor.
+     * Longitudes are taken on the side of the antimeridian nearer the map's centre, where the
+     * last rendered frame draws them.
      *
      * @return std::nullopt when the style has no terrain, or no loaded DEM tile covers the point
      * (for instance before the first DEM tile arrives).
