@@ -1,3 +1,7 @@
+#ifdef GL_ES
+precision highp float;
+#endif
+
 layout(std140) uniform ColorReliefDrawableUBO {
     highp mat4 u_matrix;
 };
@@ -16,8 +20,8 @@ layout(std140) uniform ColorReliefEvaluatedPropsUBO {
     highp float pad_eval2;
 };
 
-uniform sampler2D u_image;
-uniform sampler2D u_elevation_stops;
+uniform highp sampler2D u_image;
+uniform highp sampler2D u_elevation_stops;
 uniform sampler2D u_color_stops;
 
 in vec2 v_pos;

@@ -9,6 +9,10 @@
 #include <mln/util/image.hpp>
 #include <mln/util/run_loop.hpp>
 
+#include <cmath>
+#include <cstdint>
+#include <string>
+
 using namespace mln;
 
 namespace {
@@ -98,4 +102,111 @@ TEST(ColorRelief, UploadsDEMTextureOncePerTile) {
 
     // Once the tile is up and nothing has changed, later frames must not re-send it.
     EXPECT_LT(uploaded.back(), demUploadBytes);
+}
+
+namespace {
+
+constexpr uint32_t planeSize = 256;
+
+// A Mapbox Terrain-RGB tile holding a plane: 3000 m plus a quarter of a metre per pixel eastward,
+// to the 0.1 m step, with DEM pixel i describing the terrain at its centre, i + 0.5.
+std::string makePlaneTile() {
+    PremultipliedImage image({planeSize, planeSize});
+    for (uint32_t y = 0; y < planeSize; ++y) {
+        for (uint32_t x = 0; x < planeSize; ++x) {
+            const double meters = 3000.0 + 0.25 * x;
+            const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
+            uint8_t* px = image.data.get() + (static_cast<size_t>(y) * planeSize + x) * 4;
+            px[0] = static_cast<uint8_t>(value >> 16);
+            px[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+            px[2] = static_cast<uint8_t>(value & 0xff);
+            px[3] = 255;
+        }
+    }
+    return encodePNG(image);
+}
+
+// Black at 3000 m to red at 3064 m: four colour steps per metre.
+const char* planeReliefStyle = R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 0,
+      "tileSize": 256
+    }
+  },
+  "layers": [{
+    "id": "relief",
+    "type": "color-relief",
+    "source": "dem",
+    "paint": {
+      "color-relief-color": [
+        "interpolate", ["linear"], ["elevation"],
+        3000, "rgb(0, 0, 0)",
+        3064, "rgb(255, 0, 0)"
+      ]
+    }
+  }]
+})STYLE";
+
+} // namespace
+
+// Each pixel is coloured by the height the DEM holds under it. At 3000 m a half float steps by
+// 2 m, eight colour steps on this ramp, so a height decoded or kept in half floats (a GLSL ES
+// sampler or float left at its default precision) shows as colour bands up to that far off.
+//
+// The DEM texture is filtered linearly, which is exact on a plane only with exact filter weights:
+// between two texels whose low byte carries, a GPU that filters 8-bit channels with coarse
+// weights blends the bytes, not the heights. Those pixels are left out here; they are a
+// separate defect (task-18 report, fix round 1).
+TEST(ColorRelief, ColoursEachPixelByTheHeightUnderIt) {
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    const std::string tile = makePlaneTile();
+    fileSource->tileResponse = [&](const Resource&) {
+        Response res;
+        res.data = std::make_shared<std::string>(tile);
+        return res;
+    };
+    HeadlessFrontend frontend{{512, 512}, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize()));
+    map.getStyle().loadJSON(planeReliefStyle);
+    map.jumpTo(CameraOptions().withCenter(LatLng{0, 0}).withZoom(0.0));
+    const PremultipliedImage image = frontend.render(map).image;
+    ASSERT_EQ(image.size, (Size{512, 512}));
+
+    // The world's one tile fills the frame, a DEM pixel per 2x2 screen pixels. Keep clear of the
+    // tile's backfilled border.
+    const auto encoded = [](int pixel) {
+        return std::lround((3000.0 + 0.25 * pixel + 10000.0) * 10.0);
+    };
+    double worst = 0.0;
+    uint32_t worstX = 0;
+    int checked = 0;
+    for (uint32_t y = 64; y < 448; y += 8) {
+        for (uint32_t x = 64; x < 448; ++x) {
+            const double demX = (x + 0.5) / 2.0;
+            // The two texels the filter blends; skip a pair whose low byte carries.
+            const int left = static_cast<int>(std::floor(demX - 0.5));
+            if ((encoded(left) >> 8) != (encoded(left + 1) >> 8)) {
+                continue;
+            }
+            ++checked;
+            const double meters = 3000.0 + 0.25 * (demX - 0.5);
+            const double red = (meters - 3000.0) / 64.0 * 255.0;
+            const uint8_t* px = image.data.get() + (static_cast<size_t>(y) * 512 + x) * 4;
+            if (std::abs(px[0] - red) > worst) {
+                worst = std::abs(px[0] - red);
+                worstX = x;
+            }
+        }
+    }
+    ASSERT_GT(checked, 10000);
+    EXPECT_LT(worst, 1.5) << "pixel x = " << worstX << " is " << worst << " colour steps off the height under it";
 }
