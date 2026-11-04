@@ -430,11 +430,21 @@ private:
     int finestDEMZoom() const;
     /// The loaded DEM tile with data that covers `tileID`: its own, or its closest ancestor.
     const RenderTile* findDEMTile(const UnwrappedTileID& tileID) const;
+    /// findDEMTile's last answer, for a run of lookups that cannot see the DEM source change in
+    /// between (the samples of one raycast): they mostly ask for the same tile, and findDEMTile
+    /// scans every loaded DEM tile. Valid only within the call that made it.
+    struct DEMTileMemo {
+        std::optional<UnwrappedTileID> tileID;
+        const RenderTile* demTile = nullptr;
+    };
+    const RenderTile* findDEMTile(const UnwrappedTileID& tileID, DEMTileMemo& memo) const;
     /// The DEM height (not exaggerated) at a tile coordinate, as getElevation reads it, but
     /// empty where no loaded DEM tile covers the coordinate (rather than 0).
     std::optional<float> findElevation(const UnwrappedTileID& tileID, float x, float y) const;
+    std::optional<float> findElevation(UnwrappedTileID tileID, float x, float y, DEMTileMemo& memo) const;
     /// findElevationForLatLng, sampled at `sampleZoom` (finestDEMZoom).
     std::optional<double> findElevationForLatLng(const LatLng& latLng, int sampleZoom) const;
+    std::optional<double> findElevationForLatLng(const LatLng& latLng, int sampleZoom, DEMTileMemo& memo) const;
 
     /**
      * @brief Generate terrain mesh geometry

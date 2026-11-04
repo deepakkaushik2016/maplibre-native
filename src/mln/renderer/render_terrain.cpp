@@ -900,12 +900,24 @@ std::optional<RenderTerrain::TileElevation> RenderTerrain::getTileElevation(cons
     return TileElevation(sharedDEMDataOf(*demRenderTile), off.scale, off.dx, off.dy, exaggeration);
 }
 
-std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID_, float x, float y) const {
-    UnwrappedTileID tileID = tileID_;
+const RenderTile* RenderTerrain::findDEMTile(const UnwrappedTileID& tileID, DEMTileMemo& memo) const {
+    if (memo.tileID != tileID) {
+        memo.tileID = tileID;
+        memo.demTile = findDEMTile(tileID);
+    }
+    return memo.demTile;
+}
+
+std::optional<float> RenderTerrain::findElevation(const UnwrappedTileID& tileID, float x, float y) const {
+    DEMTileMemo memo;
+    return findElevation(tileID, x, y, memo);
+}
+
+std::optional<float> RenderTerrain::findElevation(UnwrappedTileID tileID, float x, float y, DEMTileMemo& memo) const {
     if (!normalizeTileCoordinates(tileID, x, y)) {
         return std::nullopt;
     }
-    const RenderTile* demRenderTile = findDEMTile(tileID);
+    const RenderTile* demRenderTile = findDEMTile(tileID, memo);
     if (!demRenderTile) {
         return std::nullopt;
     }
@@ -965,6 +977,13 @@ std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng
 }
 
 std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng, int sampleZoom) const {
+    DEMTileMemo memo;
+    return findElevationForLatLng(latLng, sampleZoom, memo);
+}
+
+std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng,
+                                                            int sampleZoom,
+                                                            DEMTileMemo& memo) const {
     if (sampleZoom < 0) {
         return std::nullopt;
     }
@@ -978,7 +997,7 @@ std::optional<double> RenderTerrain::findElevationForLatLng(const LatLng& latLng
     const UnwrappedTileID sampleTile(static_cast<uint8_t>(sampleZoom), tx, ty);
     const auto localX = static_cast<float>((point.x - static_cast<double>(tx)) * util::EXTENT);
     const auto localY = static_cast<float>((point.y - static_cast<double>(ty)) * util::EXTENT);
-    const auto elevation = findElevation(sampleTile, localX, localY);
+    const auto elevation = findElevation(sampleTile, localX, localY, memo);
     if (!elevation) {
         return std::nullopt;
     }
@@ -1053,10 +1072,12 @@ std::optional<LatLng> RenderTerrain::raycast(const RaycastSetup& setup, const Sc
     const auto at = [&](double t) {
         return Projection::unproject({near[0] + t * dx, near[1] + t * dy}, setup.scale, LatLng::Unwrapped);
     };
-    // As gl-js `isBelowTerrainSample`: ground no loaded DEM covers is never hit.
+    // As gl-js `isBelowTerrainSample`: ground no loaded DEM covers is never hit. The ray's samples
+    // walk through a few DEM tiles in order, so each tile is looked up once, not once a sample.
     constexpr double hitEpsilonMeters = 1e-6;
+    DEMTileMemo memo;
     const auto belowTerrain = [&](double t) {
-        const auto elevation = findElevationForLatLng(at(t), setup.sampleZoom);
+        const auto elevation = findElevationForLatLng(at(t), setup.sampleZoom, memo);
         return elevation && near[2] + t * dz <= *elevation + hitEpsilonMeters;
     };
 
