@@ -2,6 +2,7 @@
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
 
+#include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/headless_frontend.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
@@ -448,7 +449,12 @@ TEST(TerrainQuery, RaycastAcrossDEMTilesAndAncestorsHitsWhereDrawn) {
     for (int i = 0; i < 20; ++i) {
         pump();
     }
-    const PremultipliedImage image = frontend.readStillImage();
+    // OpenGL reads the frame back from the backend's context, so the read needs its scope (as
+    // HeadlessFrontend::render takes for its own read); without it the image shows none of the frame.
+    const PremultipliedImage image = [&] {
+        const gfx::BackendScope scope{*frontend.getBackend()};
+        return frontend.readStillImage();
+    }();
     const auto state = frontend.getTransformState();
     ASSERT_TRUE(state);
     ASSERT_TRUE(ancestorServed) << "no ancestor of the missing DEM tile was loaded";

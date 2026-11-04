@@ -3,6 +3,7 @@
 #include <mln/test/map_adapter.hpp>
 
 #include <mln/gfx/context.hpp>
+#include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/headless_frontend.hpp>
 #include <mln/gfx/renderer_backend.hpp>
 #include <mln/map/bound_options.hpp>
@@ -1233,6 +1234,14 @@ const char* stepStyle = R"STYLE({
   ]
 })STYLE";
 
+// The last frame rendered. OpenGL reads it back from the backend's context, so the read needs
+// the backend's scope, as HeadlessFrontend::render takes for its own read; without it the read
+// shows none of the frame. Metal and Vulkan read their render target and need no scope.
+PremultipliedImage readFrame(HeadlessFrontend& frontend) {
+    const gfx::BackendScope scope{*frontend.getBackend()};
+    return frontend.readStillImage();
+}
+
 // The share of the frame the draped green fill covers.
 double greenShare(const PremultipliedImage& image) {
     size_t green = 0;
@@ -1306,7 +1315,7 @@ TEST(TerrainCamera, AJumpOntoGroundAboveTheEyeLandsOnIt) {
     }
     EXPECT_NEAR(centerAltitude(), trailheadPlateauMeters, 1.0) << "the center landed on the plateau";
     EXPECT_GT(eyeAltitude(), trailheadPlateauMeters + 10.0) << "the eye is above the ground under it";
-    EXPECT_GT(greenShare(frontend.readStillImage()), 0.5) << "the frame shows the ground";
+    EXPECT_GT(greenShare(readFrame(frontend)), 0.5) << "the frame shows the ground";
 }
 
 // The same jump with the centre landing low, on the lowland just north of the plateau's edge: the
@@ -1370,7 +1379,7 @@ TEST(TerrainCamera, AJumpIntoAValleyLiftsTheEyeOutOfTheGroundBehindIt) {
         frontend.renderFrame();
     }
     EXPECT_TRUE(eyeClear()) << "the eye is above the ground under it, by the clearance: " << eye().altitude << " m";
-    EXPECT_GT(greenShare(frontend.readStillImage()), 0.5) << "the frame shows the ground";
+    EXPECT_GT(greenShare(readFrame(frontend)), 0.5) << "the frame shows the ground";
 }
 
 namespace {
