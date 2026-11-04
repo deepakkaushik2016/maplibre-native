@@ -60,7 +60,7 @@ layout (std140) uniform SymbolDrawableUBO {
     lowp float u_depth_enabled;
 };
 
-uniform sampler2D u_dem;
+uniform highp sampler2D u_dem;
 uniform highp sampler2D u_depth;
 
 layout (std140) uniform SymbolEvaluatedPropsUBO {

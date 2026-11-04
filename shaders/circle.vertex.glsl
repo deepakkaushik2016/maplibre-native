@@ -36,7 +36,7 @@ layout (std140) uniform CircleDrawableUBO {
     lowp float drawable_pad4;
 };
 
-uniform sampler2D u_dem;
+uniform highp sampler2D u_dem;
 
 layout (std140) uniform CircleEvaluatedPropsUBO {
     highp vec4 u_color;

@@ -26,7 +26,7 @@ layout (std140) uniform FillExtrusionDrawableUBO {
     lowp float drawable_pad2;
 };
 
-uniform sampler2D u_dem;
+uniform highp sampler2D u_dem;
 
 layout (std140) uniform FillExtrusionTilePropsUBO {
     highp vec4 u_pattern_from;

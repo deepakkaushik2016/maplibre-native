@@ -16,7 +16,7 @@ layout (std140) uniform TerrainEvaluatedPropsUBO {
 
 layout (location = 0) in vec4 a_pos; // xy = tile position, z = skirt flag (1 = skirt vertex)
 
-uniform sampler2D u_dem;
+uniform highp sampler2D u_dem;
 
 void main() {
     // The mesh was generated with coordinates from 0 to EXTENT (8192)

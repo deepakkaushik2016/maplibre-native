@@ -17,7 +17,7 @@ layout (std140) uniform HeatmapDrawableUBO {
     lowp float drawable_pad2;
 };
 
-uniform sampler2D u_dem;
+uniform highp sampler2D u_dem;
 
 layout (std140) uniform HeatmapEvaluatedPropsUBO {
     highp float u_weight;

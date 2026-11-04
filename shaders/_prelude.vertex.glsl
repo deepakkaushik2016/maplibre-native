@@ -77,7 +77,9 @@ vec2 get_pattern_pos(const vec2 pixel_coord_upper, const vec2 pixel_coord_lower,
 // Decode one DEM texel to meters. The clamp at the call sites matters: texelFetch out of
 // range is undefined where the sampler's clamp-to-edge used to cover it, and a tile with
 // no DEM of its own is bound the 1x1 placeholder, whose only valid texel is (0, 0).
-float dem_texel(sampler2D dem, ivec2 texel, vec4 dem_unpack) {
+// The sampler is highp, as are the u_dem uniforms: GLSL ES samplers default to lowp, and a
+// lowp fetch may come back in half floats, which do not keep every DEM byte exact.
+float dem_texel(highp sampler2D dem, ivec2 texel, vec4 dem_unpack) {
     vec4 data = texelFetch(dem, texel, 0) * 255.0;
     data.a = -1.0;
     return dot(data, dem_unpack);
@@ -91,7 +93,7 @@ float dem_texel(sampler2D dem, ivec2 texel, vec4 dem_unpack) {
 // Unlike gl-js (global terrain uniforms), MapLibre Native carries the DEM data
 // per-drawable, so the DEM sampler and dem_* values are passed in as arguments rather
 // than read from globals.
-float get_elevation(vec2 pos, sampler2D dem, vec4 dem_coords, vec4 dem_unpack,
+float get_elevation(vec2 pos, highp sampler2D dem, vec4 dem_coords, vec4 dem_unpack,
                     float dem_dim, float dem_exaggeration, float dem_enabled) {
     if (dem_enabled == 0.0) {
         return 0.0;
