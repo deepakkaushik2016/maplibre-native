@@ -135,10 +135,10 @@ float sampleDEM(const DEMData& dem, const DEMSubTileOffset& off, float x, float 
     const int32_t xb = texel(x0 + 1.0f);
     const int32_t ya = texel(y0);
     const int32_t yb = texel(y0 + 1.0f);
-    const auto tl = static_cast<float>(dem.get(xa, ya));
-    const auto tr = static_cast<float>(dem.get(xb, ya));
-    const auto bl = static_cast<float>(dem.get(xa, yb));
-    const auto br = static_cast<float>(dem.get(xb, yb));
+    const float tl = dem.get(xa, ya);
+    const float tr = dem.get(xb, ya);
+    const float bl = dem.get(xa, yb);
+    const float br = dem.get(xb, yb);
     const float top = tl + (tr - tl) * fx;
     const float bottom = bl + (br - bl) * fx;
     return top + (bottom - top) * fy;
@@ -156,17 +156,6 @@ std::array<uint8_t, 4> elevationTexel(const std::array<float, 4>& unpack, double
              static_cast<uint8_t>((value >> 8) & 0xFF),
              static_cast<uint8_t>(value & 0xFF),
              255}};
-}
-
-// A DEM texel's height in metres, decoded as the shaders' dem_texel() does: not rounded to whole
-// metres, as DEMData::get is. Terrarium's no-data value reads 0 m, as in DEMData::get.
-double texelMeters(const DEMData& dem, const uint32_t& texel) {
-    std::array<uint8_t, 4> rgba{};
-    std::memcpy(rgba.data(), &texel, rgba.size());
-    const auto& unpack = dem.getUnpackVector();
-    const double meters = rgba[0] * double{unpack[0]} + rgba[1] * double{unpack[1]} + rgba[2] * double{unpack[2]} -
-                          unpack[3];
-    return dem.encoding == Tileset::RasterEncoding::Terrarium && meters == -32768.0 ? 0.0 : meters;
 }
 
 // Where a stitched pixel's centre falls in a descendant `ratio` times finer, along one axis: the
@@ -238,15 +227,13 @@ std::shared_ptr<const DEMData> RenderTerrain::stitchDEM(const CanonicalTileID& t
         }
         for (int32_t y = ya; y < yb; ++y) {
             const ResampleTap rowTap = resampleTap(y - y0, ratio, dem.dim);
-            const uint32_t* top = inRow(rowTap.first);
-            const uint32_t* bottom = inRow(rowTap.second);
             uint32_t* row = out + static_cast<ptrdiff_t>(y + 2) * stride + 2;
             for (int32_t x = xa; x < xb; ++x) {
                 const ResampleTap& col = columns[static_cast<size_t>(x - xa)];
-                const double t0 = texelMeters(dem, top[col.first]);
-                const double t1 = texelMeters(dem, top[col.second]);
-                const double b0 = texelMeters(dem, bottom[col.first]);
-                const double b1 = texelMeters(dem, bottom[col.second]);
+                const double t0 = dem.get(col.first, rowTap.first);
+                const double t1 = dem.get(col.second, rowTap.first);
+                const double b0 = dem.get(col.first, rowTap.second);
+                const double b1 = dem.get(col.second, rowTap.second);
                 const double upper = t0 + (t1 - t0) * col.weight;
                 const double lower = b0 + (b1 - b0) * col.weight;
                 const auto texel = elevationTexel(unpack, upper + (lower - upper) * rowTap.weight);

@@ -19,7 +19,8 @@ public:
     DEMData(std::shared_ptr<PremultipliedImage> borderedImage, Tileset::RasterEncoding encoding);
     void backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy);
 
-    int32_t get(int32_t x, int32_t y) const;
+    /// The height in metres at pixel (x, y), as the shaders decode it: not rounded.
+    float get(int32_t x, int32_t y) const;
     const std::array<float, 4>& getUnpackVector() const;
 
     const PremultipliedImage* getImage() const { return &*image; }

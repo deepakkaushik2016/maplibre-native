@@ -186,8 +186,36 @@ LatLng knownPoint() {
     return demPoint(knownI + 0.5, knownJ + 0.5);
 }
 
+// A plane in a DEM encoding: the height at the centre of DEM pixel (i, j), counted as for
+// demMeters, is base + east * i + south * j metres.
+struct Plane {
+    double base = 500.0;
+    double east = 2.0;
+    double south = 3.0;
+    bool terrarium = false;
+
+    double pixelMeters(double i, double j) const { return base + east * i + south * j; }
+    // The terrain at demPoint(u, v): bilinear between pixel centres reproduces the plane.
+    double drawnMeters(double u, double v) const { return pixelMeters(u - 0.5, v - 0.5); }
+};
+
+// Heights a whole metre apart would hide a sampler that drops the fraction: these planes hold
+// fractional heights, at the step of their encoding (0.1 m Mapbox, 1/256 m Terrarium).
+constexpr Plane fractionalMapboxPlane{.base = 500.4, .east = 2.3, .south = 3.7};
+constexpr Plane fractionalTerrariumPlane{.base = 500.3, .east = 2.37, .south = 3.11, .terrarium = true};
+
+// The R, G, B digits of `meters`: Mapbox Terrain-RGB, -10000 + (R * 65536 + G * 256 + B) * 0.1, or
+// Terrarium, R * 256 + G + B / 256 - 32768; to the nearest step.
+std::array<uint8_t, 3> encodeMeters(double meters, bool terrarium) {
+    const auto value = static_cast<uint32_t>(terrarium ? std::lround((meters + 32768.0) * 256.0)
+                                                       : std::lround((meters + 10000.0) * 10.0));
+    return {{static_cast<uint8_t>((value >> 16) & 0xFF),
+             static_cast<uint8_t>((value >> 8) & 0xFF),
+             static_cast<uint8_t>(value & 0xFF)}};
+}
+
 // A tile of the plane, at any zoom: each pixel holds the plane at its centre.
-std::string gradientTile(const CanonicalTileID& id) {
+std::string gradientTile(const CanonicalTileID& id, const Plane& plane = {}) {
     const CanonicalTileID known = knownTile();
     const double scale = std::pow(2.0, demZoom - id.z);
     PremultipliedImage image({demDim, demDim});
@@ -196,12 +224,11 @@ std::string gradientTile(const CanonicalTileID& id) {
             // This pixel's centre, in z10 DEM pixels from the known tile's corner.
             const double u = (static_cast<double>(id.x) * demDim + x + 0.5) * scale - known.x * double{demDim};
             const double v = (static_cast<double>(id.y) * demDim + y + 0.5) * scale - known.y * double{demDim};
-            // Terrain-RGB: metres = -10000 + (R * 65536 + G * 256 + B) * 0.1.
-            const auto value = static_cast<uint32_t>(std::lround((drawnMeters(u, v) + 10000.0) * 10.0));
+            const auto rgb = encodeMeters(plane.drawnMeters(u, v), plane.terrarium);
             uint8_t* px = image.data.get() + (static_cast<size_t>(y) * demDim + x) * 4;
-            px[0] = static_cast<uint8_t>((value >> 16) & 0xFF);
-            px[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
-            px[2] = static_cast<uint8_t>(value & 0xFF);
+            px[0] = rgb[0];
+            px[1] = rgb[1];
+            px[2] = rgb[2];
             px[3] = 255;
         }
     }
@@ -213,14 +240,15 @@ CanonicalTileID tileOf(const Resource& resource) {
     return {static_cast<uint8_t>(t.z), static_cast<uint32_t>(t.x), static_cast<uint32_t>(t.y)};
 }
 
-std::string demStyle(const std::string& terrain) {
+std::string demStyle(const std::string& terrain, bool terrarium = false) {
     return R"STYLE({
   "version": 8,
   "sources": {
     "dem": {
       "type": "raster-dem",
       "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
-      "encoding": "mapbox",
+      "encoding": ")STYLE" +
+           std::string(terrarium ? "terrarium" : "mapbox") + R"STYLE(",
       "maxzoom": 10,
       "tileSize": 256
     }
@@ -243,23 +271,26 @@ struct ElevationScene {
 
     // `deliverDEM` false holds every DEM response, so terrain is set but no DEM tile ever loads;
     // the map then runs continuously, as a still render would wait for the DEM forever.
-    ElevationScene(const std::string& terrain, bool deliverDEM = true, const LatLng& center = knownPoint())
+    ElevationScene(const std::string& terrain,
+                   bool deliverDEM = true,
+                   const LatLng& center = knownPoint(),
+                   const Plane& plane = {})
         : map(frontend,
               MapObserver::nullObserver(),
               fileSource,
               MapOptions()
                   .withMapMode(deliverDEM ? MapMode::Static : MapMode::Continuous)
                   .withSize(frontend.getSize())) {
-        fileSource->tileResponse = [this, deliverDEM](const Resource& resource) -> std::optional<Response> {
+        fileSource->tileResponse = [this, deliverDEM, plane](const Resource& resource) -> std::optional<Response> {
             ++demRequests;
             if (!deliverDEM) {
                 return std::nullopt;
             }
             Response res;
-            res.data = std::make_shared<std::string>(gradientTile(tileOf(resource)));
+            res.data = std::make_shared<std::string>(gradientTile(tileOf(resource), plane));
             return res;
         };
-        map.getStyle().loadJSON(demStyle(terrain));
+        map.getStyle().loadJSON(demStyle(terrain, plane.terrarium));
         map.jumpTo(CameraOptions().withCenter(center).withZoom(12.0));
         if (deliverDEM) {
             frontend.render(map);
@@ -289,6 +320,29 @@ TEST(TerrainElevation, RendererQueryAppliesExaggeration) {
     const auto q = scene.query();
     ASSERT_TRUE(q) << "no elevation where a loaded DEM tile covers the point";
     EXPECT_NEAR(*q, 2.0 * knownMeters, 1.0);
+}
+
+// The queried height keeps the fraction of a metre the DEM encodes, as the shaders and
+// maplibre-gl-js decode it: not rounded to whole metres. Mapbox (0.1 m steps) and Terrarium
+// (1/256 m steps), at pixel centres, between them and across tile edges.
+void expectFractionalPlaneQueried(const Plane& plane) {
+    ElevationScene scene(R"("terrain": {"source": "dem", "exaggeration": 1},)", true, demPoint(0.0, 0.0), plane);
+    const std::pair<double, double> points[] = {
+        {knownI + 0.5, knownJ + 0.5}, {knownI + 0.3, knownJ + 0.85}, {12.5, 7.5}, {0.2, 10.5}, {-0.2, -0.3}};
+    for (const auto& [u, v] : points) {
+        const auto q = scene.query(demPoint(u, v));
+        ASSERT_TRUE(q) << "no elevation where a loaded DEM tile covers (" << u << ", " << v << ")";
+        EXPECT_NEAR(*q, plane.drawnMeters(u, v), 0.05)
+            << (plane.terrarium ? "terrarium" : "mapbox") << " at (" << u << ", " << v << ")";
+    }
+}
+
+TEST(TerrainElevation, QueryKeepsTheFractionOfAMetreMapbox) {
+    expectFractionalPlaneQueried(fractionalMapboxPlane);
+}
+
+TEST(TerrainElevation, QueryKeepsTheFractionOfAMetreTerrarium) {
+    expectFractionalPlaneQueried(fractionalTerrariumPlane);
 }
 
 // The queried height is the terrain as maplibre-gl-js has it: each DEM pixel at its centre, and
@@ -417,8 +471,8 @@ namespace {
 // pixels, counted across the whole tile, the terrain is 500 + 2 u + 3 v metres, and each pixel
 // holds the plane at its centre. The stitched DEM has 256 px across, so a stitched pixel spans
 // 2^(dz - 1) descendant pixels and its centre falls on a descendant pixel corner: integer
-// metres, which DEMData::get reads exactly. A stitched pixel taken from one descendant pixel
-// instead of resampled is half a descendant pixel off, 2.5 m.
+// metres, which the stitched DEM's 0.1 m steps hold exactly. A stitched pixel taken from one
+// descendant pixel instead of resampled is half a descendant pixel off, 2.5 m.
 constexpr int32_t stitchDescendantDim = 128;
 const CanonicalTileID stitchTile{10, 540, 360};
 

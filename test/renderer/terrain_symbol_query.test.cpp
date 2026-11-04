@@ -76,8 +76,16 @@ enum class Dem {
     // the 512 px GeoJSON tiles for 128 px tiles, three for 64 px ones, so the z13 symbol tile is
     // lifted by a DEM stitched from descendants two or three zooms deeper. Every coarser tile
     // holds the slope `slopeAncestorMeters` higher, so a symbol lifted by one of them shows.
-    Slope
+    Slope,
+    // Flat at fractionalMeters(): less than a metre, all of it fraction.
+    Fractional
 };
+
+// A height that is all fraction, at a step of each encoding: 255/256 m in Terrarium, 0.9 m in
+// Mapbox. Rounded to whole metres it is sea level.
+double fractionalMeters(bool terrarium) {
+    return terrarium ? 255.0 / 256.0 : 0.9;
+}
 enum class Symbol {
     Icon,
     Text,
@@ -97,6 +105,8 @@ struct SceneOptions {
     /// The DEM source's tile size: at 256 px its tiles are one zoom finer than the 512 px
     /// GeoJSON tiles at the same map zoom.
     uint32_t demTileSize = 256;
+    /// The DEM's encoding: Terrarium, or else Mapbox Terrain-RGB.
+    bool terrarium = false;
     /// Z14Stripes only: the POI a quarter of the way into the first pixel column of the cliff-top
     /// child (z14 x = 8647), on the step up from the plateau child before it: three quarters of
     /// the way from the centre of the plateau child's last pixel to that pixel's centre.
@@ -121,6 +131,8 @@ struct SceneOptions {
                 return cliffTopMeters;
             case Dem::Slope:
                 return plateauMeters;
+            case Dem::Fractional:
+                return fractionalMeters(terrarium);
             case Dem::Z14Stripes:
                 // At z13 a 512 px DEM is served at z13, all plateau; a 256 px one at z14.
                 if (demTileSize != 256) {
@@ -168,7 +180,8 @@ std::string symbolStyle(const SceneOptions& options) {
     "dem": {
       "type": "raster-dem",
       "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
-      "encoding": "mapbox",
+      "encoding": ")STYLE" +
+           std::string(options.terrarium ? "terrarium" : "mapbox") + R"STYLE(",
       "maxzoom": )STYLE" +
            std::to_string(options.demMaxZoom()) + R"STYLE(,
       "tileSize": )STYLE" +
@@ -195,14 +208,17 @@ std::string symbolStyle(const SceneOptions& options) {
 })STYLE";
 }
 
-// A Terrain-RGB tile all at `meters` (-10000 + (R * 65536 + G * 256 + B) * 0.1), but for the
-// pixel column `ridge`, if any, which is at `ridgeMeters`.
-std::string demTile(double meters,
+// A DEM tile all at `meters`, but for the pixel column `ridge`, if any, which is at `ridgeMeters`:
+// Terrarium (R * 256 + G + B / 256 - 32768) or Mapbox Terrain-RGB
+// (-10000 + (R * 65536 + G * 256 + B) * 0.1), to the nearest step.
+std::string demTile(bool terrarium,
+                    double meters,
                     uint32_t size = 256,
                     std::optional<uint32_t> ridge = std::nullopt,
                     double ridgeMeters = 0.0) {
-    const auto encode = [](double m) {
-        return static_cast<uint32_t>(std::lround((m + 10000.0) * 10.0));
+    const auto encode = [terrarium](double m) {
+        return static_cast<uint32_t>(terrarium ? std::lround((m + 32768.0) * 256.0)
+                                               : std::lround((m + 10000.0) * 10.0));
     };
     const uint32_t value = encode(meters);
     const uint32_t ridgeValue = encode(ridgeMeters);
@@ -314,9 +330,11 @@ struct TerrainSymbolScene {
 
     explicit TerrainSymbolScene(SceneOptions options_)
         : options(options_),
-          lowTile(demTile(plateauMeters, options.demTileSize)),
-          highTile(demTile(cliffTopMeters, options.demTileSize)),
-          ridgeTile(demTile(plateauMeters, options.demTileSize, ridgeColumn, cliffTopMeters)) {
+          lowTile(demTile(options.terrarium,
+                          options.dem == Dem::Fractional ? fractionalMeters(options.terrarium) : plateauMeters,
+                          options.demTileSize)),
+          highTile(demTile(options.terrarium, cliffTopMeters, options.demTileSize)),
+          ridgeTile(demTile(options.terrarium, plateauMeters, options.demTileSize, ridgeColumn, cliffTopMeters)) {
         fileSource->tileResponse = [this](const Resource& resource) {
             Response res;
             const auto& tile = resource.tileData;
@@ -349,7 +367,8 @@ struct TerrainSymbolScene {
                        .withZoom(13.0)
                        .withPitch(60.0)
                        .withBearing(options.bearing)
-                       .withCenterAltitude(plateauMeters * exaggeration));
+                       .withCenterAltitude((options.dem == Dem::Fractional ? options.poiMeters() : plateauMeters) *
+                                           exaggeration));
         for (int i = 0; i < 4; ++i) {
             loop.runOnce();
             image = frontend.render(map).image;
@@ -545,6 +564,26 @@ TEST(TerrainSymbolQuery, IconOverDEMTwoZoomsFinerHitsWhereDrawn) {
 
 TEST(TerrainSymbolQuery, IconOverDEMThreeZoomsFinerHitsWhereDrawn) {
     expectDrawnOnSlopeOfDescendants(64);
+}
+
+// The ground is less than a metre above sea level, all of it fraction (0.9 m in Mapbox, 255/256 m in
+// Terrarium), exaggerated 500 times so that a fraction dropped shows on screen. The icon is drawn
+// at the full height, and a tap there must find it: the CPU decodes the heights as the shaders do.
+void expectFractionDrawnAndHit(bool terrarium) {
+    TerrainSymbolScene scene({.exaggeration = 500.0, .dem = Dem::Fractional, .terrarium = terrarium});
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(scene.seaLevel), 0u)
+        << "a tap where the icon would sit with the fraction dropped (nothing is drawn there) hits it";
+}
+
+TEST(TerrainSymbolQuery, IconOnAFractionOfAMetreHitsWhereDrawnTerrarium) {
+    expectFractionDrawnAndHit(true);
+}
+
+TEST(TerrainSymbolQuery, IconOnAFractionOfAMetreHitsWhereDrawnMapbox) {
+    expectFractionDrawnAndHit(false);
 }
 
 // Circles bind the DEM the same way (as do fill extrusions and heatmaps).

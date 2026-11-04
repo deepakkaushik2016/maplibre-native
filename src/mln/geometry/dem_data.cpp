@@ -9,7 +9,7 @@ namespace mln {
 
 namespace {
 // Terrarium encodes "no data" as RGB(0, 0, 0), which unpacks to this elevation.
-constexpr int32_t terrariumNoData = -32768;
+constexpr float terrariumNoData = -32768.0f;
 } // namespace
 
 DEMData::DEMData(const PremultipliedImage& _image, Tileset::RasterEncoding _encoding)
@@ -59,10 +59,11 @@ DEMData::DEMData(const PremultipliedImage& _image, Tileset::RasterEncoding _enco
     // The border is excluded: it is a copy of the edge pixels until neighbouring
     // tiles backfill it, so it holds no elevation this tile does not already have.
     if (dim > 0) {
-        minElevation = maxElevation = get(0, 0);
+        // Whole metres, toward zero, as the range has always been kept.
+        minElevation = maxElevation = static_cast<int32_t>(get(0, 0));
         for (int32_t y = 0; y < dim; y++) {
             for (int32_t x = 0; x < dim; x++) {
-                const int32_t value = get(x, y);
+                const auto value = static_cast<int32_t>(get(x, y));
                 minElevation = std::min(minElevation, value);
                 maxElevation = std::max(maxElevation, value);
             }
@@ -124,15 +125,16 @@ void DEMData::backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy
     }
 }
 
-int32_t DEMData::get(const int32_t x, const int32_t y) const {
+float DEMData::get(const int32_t x, const int32_t y) const {
     const auto& unpack = getUnpackVector();
     const uint8_t* value = image->data.get() + idx(x, y) * 4;
-    const auto elevation = static_cast<int32_t>(value[0] * unpack[0] + value[1] * unpack[1] + value[2] * unpack[2] -
-                                                unpack[3]);
+    // Decoded as the shaders' dem_texel() and maplibre-gl-js DEMData decode it, keeping the
+    // fraction of a metre the encoding holds (0.1 m Mapbox, 1/256 m Terrarium).
+    const float elevation = value[0] * unpack[0] + value[1] * unpack[1] + value[2] * unpack[2] - unpack[3];
     // Reading no-data as -32768 m would drag the tile's elevation range (and the frustum
     // test built on it) down with it.
     if (encoding == Tileset::RasterEncoding::Terrarium && elevation == terrariumNoData) {
-        return 0;
+        return 0.0f;
     }
     return elevation;
 }

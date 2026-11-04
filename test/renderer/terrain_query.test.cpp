@@ -422,10 +422,10 @@ TEST(TerrainQuery, RaycastAcrossDEMTilesAndAncestorsHitsWhereDrawn) {
     ASSERT_TRUE(ancestorServed) << "no ancestor of the missing DEM tile was loaded";
     const auto onAncestor = frontend.getRenderer()->queryTerrainElevation({rampTrailLats[2], center.longitude()});
     ASSERT_TRUE(onAncestor) << "nothing stands in for the missing DEM tile";
-    // DEMData decodes to whole metres, so within 1 m (exaggerated).
+    // The ramp is encoded to 0.1 m steps, so within 0.05 m (exaggerated).
     EXPECT_NEAR(*onAncestor,
                 (rampMeters({rampTrailLats[2], center.longitude()}) + rampAncestorMeters) * exaggeration,
-                exaggeration);
+                0.05 * exaggeration);
 
     RenderedQueryOptions options;
     options.layerIDs = std::vector<std::string>{"trail"};
