@@ -60,11 +60,10 @@ double groundMeters(double lng, double lat) {
     return 1400.0 + 800.0 * std::sin(lng * 120.0) * std::cos(lat * 150.0) + 450.0 * std::sin(lng * 47.0 + lat * 61.0);
 }
 
-// A 512 px Terrain-RGB tile (Mapbox encoding) of groundMeters. 512 px tiles put the DEM at the
-// zoom of the vector tiles it lifts, as Mapbox and Mapterhorn serve it.
-constexpr uint32_t demTileSize = 512;
-std::string demTile(int z, int x, int y) {
-    constexpr uint32_t dim = demTileSize;
+// A Terrain-RGB tile (Mapbox encoding) of groundMeters, `dim` px square. 512 px tiles put the DEM
+// at the zoom of the vector tiles it lifts, as Mapbox and Mapterhorn serve it; 256 px tiles (as
+// Terrarium is served) put it one zoom deeper.
+std::string demTile(int z, int x, int y, uint32_t dim) {
     PremultipliedImage image({dim, dim});
     const double tiles = std::pow(2.0, z);
     std::vector<double> lngs(dim);
@@ -86,11 +85,11 @@ std::string demTile(int z, int x, int y) {
     return encodePNG(image);
 }
 
-std::shared_ptr<const std::string> cachedDemTile(int z, int x, int y) {
-    static std::map<std::tuple<int, int, int>, std::shared_ptr<const std::string>> cache;
-    auto& entry = cache[{z, x, y}];
+std::shared_ptr<const std::string> cachedDemTile(int z, int x, int y, uint32_t dim) {
+    static std::map<std::tuple<int, int, int, uint32_t>, std::shared_ptr<const std::string>> cache;
+    auto& entry = cache[{z, x, y, dim}];
     if (!entry) {
-        entry = std::make_shared<const std::string>(demTile(z, x, y));
+        entry = std::make_shared<const std::string>(demTile(z, x, y, dim));
     }
     return entry;
 }
@@ -112,7 +111,7 @@ public:
             const auto& t = *resource.tileData;
             requestedTiles.emplace_back(
                 static_cast<uint8_t>(t.z), static_cast<uint32_t>(t.x), static_cast<uint32_t>(t.y));
-            response.data = cachedDemTile(t.z, t.x, t.y);
+            response.data = cachedDemTile(t.z, t.x, t.y, demTileSize);
             if (held && *held == requestedTiles.back()) {
                 heldCallback = std::move(callback);
                 heldResponse = std::move(response);
@@ -135,6 +134,8 @@ public:
     /// Responses posted to the run loop and not yet delivered (or cancelled).
     int pendingResponses() const { return *pending; }
 
+    /// The DEM tile size served, as the style's DEM source declares it.
+    uint32_t demTileSize = 512;
     /// Holds back the response to this DEM tile until release().
     std::optional<CanonicalTileID> held;
     bool isHeld() const { return static_cast<bool>(heldCallback); }
@@ -225,6 +226,7 @@ struct SceneOptions {
     /// Points per side of the symbol grid (side * side symbols, each an icon and a label).
     int peaksPerSide = 20;
     MapMode mode = MapMode::Static;
+    uint32_t demTileSize = 512;
 };
 
 std::string terrainStyle(const SceneOptions& options) {
@@ -234,7 +236,8 @@ std::string terrainStyle(const SceneOptions& options) {
   "glyphs": "http://example.com/fonts/{fontstack}/{range}.pbf",
   "sources": {
     "dem": {"type": "raster-dem", "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"], "encoding": "mapbox",
-            "minzoom": 11, "maxzoom": 14, "tileSize": 512},
+            "minzoom": 11, "maxzoom": 14, "tileSize": )"
+        << options.demTileSize << R"(},
     "trails": {"type": "geojson", "data": )"
         << trailsGeoJSON(30) << R"(},
     "peaks": {"type": "geojson", "data": )"
@@ -291,6 +294,7 @@ struct TerrainScene {
                    invalidateOnUpdate),
           map(frontend, fileSource, MapOptions().withMapMode(options.mode).withSize(frontend.getSize())) {
         NetworkStatus::Set(NetworkStatus::Status::Offline);
+        fileSource->demTileSize = options.demTileSize;
     }
 
     void load() {
@@ -369,8 +373,11 @@ void Terrain_RenderFrame(::benchmark::State& state) {
 
 // The same frame with a symbol-heavy style (60x60 = 3,600 icons with labels), where placement
 // dominates: what terrain adds to placement (each symbol's collision boxes lifted by the DEM).
+// Arg 2: terrain on with a 256 px DEM, a zoom deeper than the symbol tiles, so each symbol tile
+// binds and places on the DEM stitched from its children.
 void Terrain_RenderFrameSymbols(::benchmark::State& state) {
-    TerrainScene scene({.terrain = state.range(0) != 0, .peaksPerSide = 60});
+    TerrainScene scene(
+        {.terrain = state.range(0) != 0, .peaksPerSide = 60, .demTileSize = state.range(0) == 2 ? 256u : 512u});
     scene.load();
     scene.renderStill();
     gfx::RenderingStats stats;
@@ -604,7 +611,7 @@ void Terrain_TileCoverSteep(::benchmark::State& state) {
 }
 
 BENCHMARK(Terrain_RenderFrame)->Arg(0)->Arg(1)->Unit(::benchmark::kMillisecond)->Iterations(40);
-BENCHMARK(Terrain_RenderFrameSymbols)->Arg(0)->Arg(1)->Unit(::benchmark::kMillisecond)->Iterations(20);
+BENCHMARK(Terrain_RenderFrameSymbols)->Arg(0)->Arg(1)->Arg(2)->Unit(::benchmark::kMillisecond)->Iterations(20);
 BENCHMARK(Terrain_QueryTap)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_QueryBox)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_QueryLasso)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
