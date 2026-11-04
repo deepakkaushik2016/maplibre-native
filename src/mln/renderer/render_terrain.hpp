@@ -305,6 +305,10 @@ public:
      */
     std::optional<double> raycastAltitude(const TransformState& state, const std::array<vec3, 2>& ray) const;
 
+    /// Moves on whenever the set of DEM tiles with data changes, so a raycast that missed for
+    /// want of DEM need only be tried again once it has.
+    uint64_t getDEMCoverGeneration() const { return demCoverGeneration; }
+
     /**
      * @brief Get the terrain exaggeration multiplier
      */
@@ -580,6 +584,10 @@ private:
     // this, preventing unbounded growth while browsing (previously reached 2GB+)
     static constexpr size_t maxDEMTextures = 96;
     uint64_t demUpdateCounter = 0;
+    /// getDEMCoverGeneration, and the count and hash of the DEM tiles with data it was taken for.
+    uint64_t demCoverGeneration = 0;
+    size_t demCoverCount = 0;
+    size_t demCoverHash = 0;
 
     /// Stitched DEMs by tile (findStitchedDEM), for tiles the DEM is finer than; dropped once a
     /// frame passes without a lookup. Filled by const lookups (placement), on the render thread.

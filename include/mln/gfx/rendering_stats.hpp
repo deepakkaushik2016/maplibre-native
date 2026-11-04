@@ -109,6 +109,8 @@ struct RenderingStats {
     /// Terrain depth passes (the symbol-occlusion depth texture) rendered; one per frame in
     /// which the camera or the mesh set changed, none for a still frame
     int numDepthPasses = 0;
+    /// Raycasts for the height of the ground a drag grabbed (Map::moveBy with an anchor)
+    int numTerrainGrabRaycasts = 0;
 
     /// Per-phase CPU time of the terrain path this frame (seconds), for profiling
     /// where the terrain overhead goes when nothing re-renders

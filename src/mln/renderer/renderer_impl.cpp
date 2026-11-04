@@ -777,11 +777,19 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             lastReportedTargetElevation = std::numeric_limits<double>::quiet_NaN();
         }
         // And the ground a gesture grabbed, so a drag keeps it under the finger at its own height
-        // rather than the centre's. One raycast a grab: none on the frames after it is reported.
-        if (const auto& grab = updateParameters->terrainGrab; grab && grab->id != lastReportedGrabId) {
+        // rather than the centre's. One raycast a grab, and after a miss (the ground is not covered
+        // by a loaded DEM tile, or the line of sight passes over it) another only once the DEM
+        // tiles have changed: a grab whose ground never loads does not march every frame.
+        if (const auto& grab = updateParameters->terrainGrab;
+            grab && grab->id != lastReportedGrabId &&
+            (grab->id != lastMissedGrabId || terrain->getDEMCoverGeneration() != lastMissedDEMCoverGeneration)) {
+            context.renderingStats().numTerrainGrabRaycasts++;
             if (const auto altitude = terrain->raycastAltitude(updateParameters->transformState, grab->ray)) {
                 lastReportedGrabId = grab->id;
                 observer->onTerrainGrabbedGroundElevation(grab->id, *altitude);
+            } else {
+                lastMissedGrabId = grab->id;
+                lastMissedDEMCoverGeneration = terrain->getDEMCoverGeneration();
             }
         }
     }

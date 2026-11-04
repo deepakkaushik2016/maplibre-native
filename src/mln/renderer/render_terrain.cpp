@@ -573,6 +573,10 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     // Stitched DEMs no lookup asked for since the frame before (placement looks up before this
     // update, the layer tweakers after it) belong to tiles no longer drawn.
     std::erase_if(stitchedDEMs, [&](const auto& stitched) { return stitched.second.lastUsed + 1 < demUpdateCounter; });
+    // Which DEM tiles have data, folded into a count and an order-free hash as the loop below
+    // visits them, so the DEM cover's generation moves when that set changes.
+    size_t demCount = 0;
+    size_t demHash = 0;
     for (const auto& renderTile : *renderTiles) {
         const auto& tile = renderTile.getTile();
         if (tile.kind != Tile::Kind::RasterDEM) {
@@ -586,6 +590,8 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             // encoding and DEM dimension
             demUnpackVector = demData->getUnpackVector();
             demDim = demData->dim;
+            ++demCount;
+            demHash ^= std::hash<UnwrappedTileID>{}(renderTile.id);
             if (auto existing = demTextures.find(renderTile.id); existing != demTextures.end()) {
                 existing->second.lastUsed = demUpdateCounter;
             } else if (auto texture = createDEMTexture(context, *demData)) {
@@ -598,6 +604,12 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
 #endif
             }
         }
+    }
+
+    if (demCount != demCoverCount || demHash != demCoverHash) {
+        demCoverCount = demCount;
+        demCoverHash = demHash;
+        ++demCoverGeneration;
     }
 
     // The mesh (and drape) tile set: an elevation-aware, LOD-based ideal cover

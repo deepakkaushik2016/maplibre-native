@@ -2,7 +2,9 @@
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
 
+#include <mln/gfx/context.hpp>
 #include <mln/gfx/headless_frontend.hpp>
+#include <mln/gfx/renderer_backend.hpp>
 #include <mln/map/bound_options.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
@@ -1553,6 +1555,9 @@ struct AlpsGestureTest {
         return std::nullopt;
     }
 
+    // Raycasts for the ground drags grabbed, over all frames so far.
+    int grabRaycasts() { return frontend.getBackend()->getContext().renderingStats().numTerrainGrabRaycasts; }
+
     double distance(const ScreenCoordinate& a, const ScreenCoordinate& b) const {
         return std::hypot(a.x - b.x, a.y - b.y);
     }
@@ -1847,4 +1852,50 @@ TEST(TerrainGesture, ACentreSetDuringAZoomAboutATapLandsWhereAsked) {
         EXPECT_NEAR(camera.center->longitude(), target.longitude(), 1e-7) << duration.count() << " ms";
         EXPECT_LT(std::abs(*test.centerOffGround()), 1.0) << duration.count() << " ms";
     }
+}
+
+// A drag that grabs ground no DEM tile ever covers (the z11 tiles north of the centre's never
+// arrive) never learns that ground's height. The renderer raycasts for it again only when DEM
+// tiles arrive, not on every frame of the drag, and the drag carries on on the centre's plane.
+TEST(TerrainGesture, GroundNoDEMCoversIsRaycastOnlyWhenTheDEMChanges) {
+    AlpsGestureTest test(1.0);
+    const auto centreTile = Projection::project(LatLng{alpsLatitude, alpsLongitude}, 11);
+    const auto northernRow = static_cast<int32_t>(std::floor(centreTile.y)) - 1;
+    test.fileSource->tileResponse = [northernRow](const Resource& resource) {
+        Response res;
+        if (resource.tileData && resource.tileData->y <= northernRow) {
+            res.noContent = true;
+        } else {
+            res.data = std::make_shared<std::string>(makeAlpsDEMTile(resource.url));
+        }
+        return res;
+    };
+    std::string style = alpsStyle(1.0);
+    style.replace(style.find(R"("maxzoom": 11)"), 13, R"("minzoom": 11, "maxzoom": 11)");
+    test.map.getStyle().loadJSON(style);
+    ASSERT_TRUE(test.settle());
+
+    // Far up the screen, over the ground the missing tiles would cover.
+    ScreenCoordinate finger{195, 150};
+    test.map.anchorCenterOnTerrain();
+    test.map.setGestureInProgress(true);
+    test.map.moveBy({0, 0}, {}, finger);
+    test.frame();
+    const TransformState state = test.map.getTransformState();
+    const double plane = *test.map.getCameraOptions().centerAltitude;
+    const GroundPoint onPlane{
+        .location = state.screenCoordinateToLatLng({finger.x, state.getSize().height - finger.y}, plane),
+        .altitude = plane};
+    ASSERT_FALSE(test.groundUnder(finger)) << "the grabbed ground is covered after all";
+
+    const int before = test.grabRaycasts();
+    constexpr int moves = 40;
+    for (int i = 0; i < moves; ++i) {
+        test.map.moveBy({5, 0}, {}, finger);
+        finger.x += 5;
+        test.frame();
+    }
+    const int raycasts = test.grabRaycasts() - before;
+    EXPECT_LE(raycasts, 3) << "over " << moves << " frames";
+    EXPECT_LT(test.distance(test.project(onPlane), finger), 2.0) << "the drag carries on on the centre's plane";
 }
