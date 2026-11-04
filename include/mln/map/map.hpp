@@ -83,7 +83,12 @@ public:
      * it. During a gesture (setGestureInProgress), a move whose anchor is where the last one left the
      * finger carries on with the ground the first one grabbed; any other anchor grabs anew. The ground's
      * height comes from the renderer a frame after the grab; until then the centre's stands in for it,
-     * and the camera follows once it arrives.
+     * and during a gesture the camera follows once it arrives. Outside a gesture each anchored move is
+     * a grab of its own and pans on the centre's plane.
+     *
+     * One finger: the grab follows a single anchor. A second finger's moves anchored elsewhere grab
+     * anew on every move, on the centre's plane; drive a two-finger gesture's pan by its focal point.
+     * Any other camera command, a style starting to load and a change of the terrain end the grab.
      */
     void moveBy(const ScreenCoordinate&,
                 const AnimationOptions& = {},
