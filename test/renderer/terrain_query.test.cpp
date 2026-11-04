@@ -13,10 +13,14 @@
 #include <mln/util/projection.hpp>
 #include <mln/util/run_loop.hpp>
 
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 using namespace mln;
 
@@ -277,4 +281,162 @@ TEST(TerrainQuery, BoxEdgeOverReliefKeepsFeatureJustInside) {
     EXPECT_EQ(scene.queryBox(inside), 1u) << "a box whose top edge runs 12 px above the line misses it";
     const ScreenBox below{{line.x - halfWidth, line.y + 12.0}, {line.x + halfWidth, line.y + 100.0}};
     EXPECT_EQ(scene.queryBox(below), 0u) << "a box whose top edge runs 12 px below the line hits it";
+}
+
+namespace {
+
+// A DEM that rises linearly northwards in web-mercator y. Texel i of a tile holds the height at
+// i / 256 across it, where the samplers (the shaders' get_elevation, RenderTerrain's sampleDEM)
+// read it, so bilinear interpolation reproduces the plane exactly: the drawn surface and the
+// height under a point are known from the DEM tile that covers it. The z14 tiles hold the plane;
+// coarser tiles hold it raised by rampAncestorMeters, so it shows which tile a sample came from.
+constexpr double rampBaseMeters = 600.0;
+constexpr double rampMetersPerWorld = 5.0e6;
+constexpr double rampAncestorMeters = 60.0;
+const double rampOriginY = Projection::project(center, 1.0).y / util::tileSize_D;
+
+double rampMeters(double worldY) {
+    return rampBaseMeters + (rampOriginY - worldY) * rampMetersPerWorld;
+}
+
+double rampMeters(const LatLng& latLng) {
+    return rampMeters(Projection::project(latLng, 1.0).y / util::tileSize_D);
+}
+
+std::string rampTile(const CanonicalTileID& id) {
+    PremultipliedImage image({256, 256});
+    const double tiles = std::pow(2.0, id.z);
+    for (uint32_t y = 0; y < 256; ++y) {
+        const double meters = rampMeters((id.y + y / 256.0) / tiles) + (id.z < 14 ? rampAncestorMeters : 0.0);
+        const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
+        for (uint32_t x = 0; x < 256; ++x) {
+            uint8_t* px = image.data.get() + (static_cast<size_t>(y) * 256 + x) * 4;
+            px[0] = static_cast<uint8_t>(value >> 16);
+            px[1] = static_cast<uint8_t>((value >> 8) & 0xff);
+            px[2] = static_cast<uint8_t>(value & 0xff);
+            px[3] = 255;
+        }
+    }
+    return encodePNG(image);
+}
+
+// East-west trails at these latitudes, near to far from the camera.
+constexpr std::array<double, 4> rampTrailLats{{45.996, 46.006, 46.016, 46.03}};
+
+std::string rampStyle() {
+    std::string features;
+    for (size_t i = 0; i < rampTrailLats.size(); ++i) {
+        const std::string lat = std::to_string(rampTrailLats[i]);
+        features += std::string(i ? "," : "") + R"({"type": "Feature", "properties": {"name": ")" + std::to_string(i) +
+                    R"("}, "geometry": {"type": "LineString", "coordinates": [[9.97, )" + lat + "], [10.03, " + lat +
+                    "]]}}";
+    }
+    return R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 14,
+      "tileSize": 256
+    },
+    "trail": {"type": "geojson", "data": {"type": "FeatureCollection", "features": [)STYLE" +
+           features + R"STYLE(]}}
+  },
+  "terrain": {"source": "dem", "exaggeration": 1.5},
+  "layers": [
+    {"id": "background", "type": "background", "paint": {"background-color": "white"}},
+    {"id": "trail", "type": "line", "source": "trail", "paint": {"line-color": "#d00", "line-width": 6}}
+  ]
+})STYLE";
+}
+
+} // namespace
+
+// A tap's raycast samples the DEM along the ray, through several DEM tiles and, where a z14 tile
+// is not loaded (under the camera, and the one that never arrives under the third trail), through
+// their z10 ancestor (prefetched, it stands in for them) 60 m higher. Each trail is drawn at the
+// height of the tile under it, so each tap must find exactly the trail it is drawn on, nearest to
+// farthest: on z14 tiles behind the ancestor, on the ancestor, and behind both.
+TEST(TerrainQuery, RaycastAcrossDEMTilesAndAncestorsHitsWhereDrawn) {
+    constexpr double exaggeration = 1.5;
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    // The z14 tile under the third trail never answers.
+    const auto underThird = Projection::project({rampTrailLats[2], center.longitude()}, 1.0);
+    const CanonicalTileID missing{14,
+                                  static_cast<uint32_t>(underThird.x / util::tileSize_D * 16384),
+                                  static_cast<uint32_t>(underThird.y / util::tileSize_D * 16384)};
+    bool ancestorServed = false;
+    fileSource->tileResponse = [&](const Resource& resource) -> std::optional<Response> {
+        const auto& t = *resource.tileData;
+        const CanonicalTileID id{static_cast<uint8_t>(t.z), static_cast<uint32_t>(t.x), static_cast<uint32_t>(t.y)};
+        if (id == missing) {
+            return std::nullopt;
+        }
+        ancestorServed = ancestorServed || missing.isChildOf(id);
+        Response res;
+        res.data = std::make_shared<std::string>(rampTile(id));
+        return res;
+    };
+    HeadlessFrontend frontend{{viewSize, viewSize}, 1};
+    MapAdapter map{frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
+    map.getStyle().loadJSON(rampStyle());
+    map.jumpTo(CameraOptions().withCenter(center).withZoom(13.0).withPitch(65.0).withCenterAltitude(rampMeters(center) *
+                                                                                                    exaggeration));
+    const auto pump = [&] {
+        loop.runOnce();
+        frontend.renderFrame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    };
+    // Loaded once each trail's own DEM tile is (or, for the third, its ancestor), up to 20 s; then
+    // a few more frames so every drawable has been built over them.
+    const auto loaded = [&] {
+        for (size_t i = 0; i < rampTrailLats.size(); ++i) {
+            const LatLng onTrail{rampTrailLats[i], center.longitude()};
+            const auto elevation = frontend.getRenderer()->queryTerrainElevation(onTrail);
+            const double meters = rampMeters(onTrail) + (i == 2 ? rampAncestorMeters : 0.0);
+            if (!elevation || std::abs(*elevation - meters * exaggeration) > exaggeration) {
+                return false;
+            }
+        }
+        return ancestorServed;
+    };
+    for (int i = 0; i < 20000 && !loaded(); ++i) {
+        pump();
+    }
+    for (int i = 0; i < 20; ++i) {
+        pump();
+    }
+    const PremultipliedImage image = frontend.readStillImage();
+    const auto state = frontend.getTransformState();
+    ASSERT_TRUE(state);
+    ASSERT_TRUE(ancestorServed) << "no ancestor of the missing DEM tile was loaded";
+    const auto onAncestor = frontend.getRenderer()->queryTerrainElevation({rampTrailLats[2], center.longitude()});
+    ASSERT_TRUE(onAncestor) << "nothing stands in for the missing DEM tile";
+    // DEMData decodes to whole metres, so within 1 m (exaggerated).
+    EXPECT_NEAR(*onAncestor,
+                (rampMeters({rampTrailLats[2], center.longitude()}) + rampAncestorMeters) * exaggeration,
+                exaggeration);
+
+    RenderedQueryOptions options;
+    options.layerIDs = std::vector<std::string>{"trail"};
+    for (size_t i = 0; i < rampTrailLats.size(); ++i) {
+        const LatLng onTrail{rampTrailLats[i], center.longitude()};
+        const double meters = rampMeters(onTrail) + (i == 2 ? rampAncestorMeters : 0.0);
+        const auto drawn = project(*state, onTrail, meters * exaggeration);
+        SCOPED_TRACE(::testing::Message()
+                     << "trail " << i << " at " << meters << " m, drawn at (" << drawn.x << ", " << drawn.y << ")");
+        ASSERT_GT(drawn.y, 0);
+        ASSERT_LT(drawn.y, viewSize);
+        ASSERT_GT(redAround(image, drawn), 10) << "the trail is not drawn at its height on the ramp";
+        const auto hits = frontend.getRenderer()->queryRenderedFeatures(drawn, options);
+        ASSERT_EQ(hits.size(), 1u) << "a tap on the drawn trail does not find exactly one trail";
+        EXPECT_EQ(hits[0].properties.at("name"), mapbox::feature::value(std::to_string(i)))
+            << "a tap on the drawn trail finds another trail";
+    }
 }
