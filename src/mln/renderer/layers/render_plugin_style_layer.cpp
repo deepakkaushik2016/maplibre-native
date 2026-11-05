@@ -302,8 +302,8 @@ void RenderPluginStyleLayer::update(gfx::ShaderRegistry& shaders,
             hasDepthDrawables |= drawable.getIs3D() && !drawable.getEnableStencil() && drawable.getEnableDepth() &&
                                  drawable.getDepthType() == gfx::DepthMaskType::ReadWrite;
         });
-        // The group only applies the 3D depth mode to is3D drawables when it has stencil tiles; read-write
-        // drawables disable stencil, so no clipping masks are drawn for them.
+        // The group sets up 3D depth and stencil state for is3D drawables with or without stencil tiles;
+        // read-write drawables disable stencil, so no clipping masks are drawn for them.
         tileLayerGroup->setStencilTiles(hasDepthDrawables ? renderTiles : RenderTiles{});
     }
 }
