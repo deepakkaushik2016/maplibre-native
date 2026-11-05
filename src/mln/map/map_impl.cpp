@@ -717,7 +717,15 @@ void Map::Impl::onTerrainGrabbedGroundElevation(uint64_t grabId, double elevatio
 }
 
 void Map::Impl::noteCameraSet(const CameraOptions& camera) {
-    noteCameraSet(keepsViewAboutAnchor(camera));
+    const bool keepsView = keepsViewAboutAnchor(camera);
+    // Only a gesture holds a grab. About the grab's finger, the grabbed ground stays on the line of
+    // sight through it, and the pan that follows puts it under the finger again. About any other
+    // point it would not: the height's report would put it back under the finger and undo the
+    // change.
+    const bool keepsGrab = keepsView && groundGrab &&
+                           std::hypot(camera.anchor->x - groundGrab->finger.x,
+                                      camera.anchor->y - groundGrab->finger.y) < 0.5;
+    noteCameraSet(keepsView, keepsGrab);
     // A centre the app sets is where it wants the centre. An anchor that keeps the view, owed to a
     // change this one cuts short (a double tap's zoom), would slide it along the line of sight;
     // the plain clamp puts it on the ground where it is.

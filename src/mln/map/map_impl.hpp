@@ -186,7 +186,9 @@ public:
     /// anchor, so the ground there stays put whatever its height.
     static bool keepsViewAboutAnchor(const CameraOptions& camera);
     /// noteCameraSet for a camera command: about an anchor it keeps the view, and an explicit
-    /// centre cancels an anchor owed to the change it replaces.
+    /// centre cancels an anchor owed to the change it replaces. A change about the finger of a
+    /// gesture's grab (a pinch's zoom or rotation about its focal point) keeps the grab, so the pan
+    /// that follows puts the same ground back under the moved focal point.
     void noteCameraSet(const CameraOptions& camera);
     /// Ends a hold: anchors the center keeping the view and starts the passes that follow it.
     void anchorAfterHold();

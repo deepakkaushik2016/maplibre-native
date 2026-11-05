@@ -1939,3 +1939,71 @@ TEST(TerrainGesture, ADragAtABearingKeepsTheGroundItGrabbedUnderTheFinger) {
     EXPECT_LT(drift.held, 2.0);
     EXPECT_LT(drift.released, 2.0);
 }
+
+// A two-finger pinch over the ridge, as the app's gesture layer sends each step: the zoom and
+// rotation about the fingers' focal point, then the focal point's movement as a pan anchored there.
+// The ground the focal point grabbed stays under it on every frame drawn, not only once the frame
+// after each step has reported the ground's height: the zoom ended the grab, so every pan grabbed
+// anew on the centre's plane, and each frame drew the ground 6 to 11 px from the focal point.
+TEST(TerrainGesture, APinchKeepsTheGroundUnderItsFocalPoint) {
+    for (const double exaggeration : {1.0, 1.5}) {
+        for (const ScreenCoordinate start : {ScreenCoordinate{120, 560}, ScreenCoordinate{280, 300}}) {
+            AlpsGestureTest test(exaggeration);
+            ASSERT_TRUE(test.settle());
+            ScreenCoordinate focal = start;
+            test.map.anchorCenterOnTerrain();
+            test.map.setGestureInProgress(true);
+            test.map.moveBy({0, 0}, {}, focal);
+            test.frame();
+            const auto grabbed = test.groundUnder(focal);
+            ASSERT_TRUE(grabbed);
+            constexpr int steps = 20;
+            const ScreenCoordinate step{60.0 / steps, -120.0 / steps};
+            double drawn = 0.0;
+            for (int i = 0; i < steps; ++i) {
+                const auto camera = test.map.getCameraOptions();
+                test.map.easeTo(CameraOptions()
+                                    .withZoom(*camera.zoom + 1.0 / steps)
+                                    .withBearing(*camera.bearing + 15.0 / steps)
+                                    .withAnchor(focal),
+                                {});
+                test.map.moveBy(step, {}, focal);
+                focal = {focal.x + step.x, focal.y + step.y};
+                // The camera the next frame draws.
+                drawn = std::max(drawn, test.distance(test.project(*grabbed), focal));
+                test.frame();
+                drawn = std::max(drawn, test.distance(test.project(*grabbed), focal));
+            }
+            test.map.setGestureInProgress(false);
+            for (int i = 0; i < 30; ++i) {
+                test.frame();
+            }
+            const auto label = ::testing::Message()
+                               << "exaggeration " << exaggeration << ", focal point " << start.x << "," << start.y;
+            EXPECT_LT(drawn, 2.0) << label;
+            EXPECT_LT(test.distance(test.project(*grabbed), focal), 2.0) << label << ", released";
+        }
+    }
+}
+
+// A second finger comes down during a drag and the pinch zooms about a point other than where the
+// drag left the first finger, before the renderer has reported the dragged ground's height. That
+// ground is the drag's, not the pinch's: once the height arrives it must not be put back under the
+// first finger, which would pan the map away from the point the zoom kept in place.
+TEST(TerrainGesture, AZoomAboutAnotherPointDuringADragDropsTheGroundItHad) {
+    AlpsGestureTest test(1.0);
+    ASSERT_TRUE(test.settle());
+    const ScreenCoordinate finger{120, 560};
+    const ScreenCoordinate focal{280, 300};
+    test.map.anchorCenterOnTerrain();
+    test.map.setGestureInProgress(true);
+    test.map.moveBy({0, 0}, {}, finger);
+    const auto tapped = test.groundUnder(focal);
+    ASSERT_TRUE(tapped);
+    test.map.easeTo(CameraOptions().withZoom(*test.map.getCameraOptions().zoom + 1.0).withAnchor(focal), {});
+    for (int i = 0; i < 5; ++i) {
+        test.frame();
+    }
+    EXPECT_LT(test.distance(test.project(*tapped), focal), 2.0);
+    test.map.setGestureInProgress(false);
+}

@@ -88,7 +88,10 @@ public:
      *
      * One finger: the grab follows a single anchor. A second finger's moves anchored elsewhere grab
      * anew on every move, on the centre's plane; drive a two-finger gesture's pan by its focal point.
-     * Any other camera command, a style starting to load and a change of the terrain end the grab.
+     * A pinch keeps its grab when each step first zooms, rotates or pitches about the focal point
+     * where the last move left it (a camera change whose anchor is there, with no centre or centre
+     * altitude), then pans from that point. Any other camera command, a style starting to load and a
+     * change of the terrain end the grab.
      */
     void moveBy(const ScreenCoordinate&,
                 const AnimationOptions& = {},
