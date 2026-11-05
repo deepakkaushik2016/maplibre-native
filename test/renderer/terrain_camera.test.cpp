@@ -2007,3 +2007,23 @@ TEST(TerrainGesture, AZoomAboutAnotherPointDuringADragDropsTheGroundItHad) {
     EXPECT_LT(test.distance(test.project(*tapped), focal), 2.0);
     test.map.setGestureInProgress(false);
 }
+
+// The same, with the pinch's zoom about a point a pixel from where the drag left the finger: that is
+// another point, not the drag's finger, so the drag's ground is not put back under the finger.
+TEST(TerrainGesture, AZoomAboutAPointAPixelFromTheFingerDropsTheGroundItHad) {
+    AlpsGestureTest test(1.0);
+    ASSERT_TRUE(test.settle());
+    const ScreenCoordinate finger{120, 560};
+    const ScreenCoordinate focal{121, 560};
+    test.map.anchorCenterOnTerrain();
+    test.map.setGestureInProgress(true);
+    test.map.moveBy({0, 0}, {}, finger);
+    const auto tapped = test.groundUnder(focal);
+    ASSERT_TRUE(tapped);
+    test.map.easeTo(CameraOptions().withZoom(*test.map.getCameraOptions().zoom + 1.0).withAnchor(focal), {});
+    for (int i = 0; i < 5; ++i) {
+        test.frame();
+    }
+    EXPECT_LT(test.distance(test.project(*tapped), focal), 0.5);
+    test.map.setGestureInProgress(false);
+}

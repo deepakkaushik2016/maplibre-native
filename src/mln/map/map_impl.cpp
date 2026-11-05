@@ -660,12 +660,19 @@ void Map::Impl::onTerrainEyeElevationChanged(double elevationMeters) {
     applyCenterClamp();
 }
 
+namespace {
+// How near the point a gesture's grab left its finger a later command's anchor must be to mean the
+// same finger: a gesture works out where its finger was from the last move's anchor and offset, so
+// it lands within rounding of that point, and half a pixel away is already another point.
+constexpr double sameFingerPixels = 0.5;
+} // namespace
+
 bool Map::Impl::moveGrabbedGround(const ScreenCoordinate& offset,
                                   const ScreenCoordinate& anchor,
                                   const AnimationOptions& animation) {
     // A move that starts where the last one left the finger carries on with the same ground.
-    const bool continues = groundGrab &&
-                           std::hypot(anchor.x - groundGrab->finger.x, anchor.y - groundGrab->finger.y) < 0.5;
+    const bool continues = groundGrab && std::hypot(anchor.x - groundGrab->finger.x, anchor.y - groundGrab->finger.y) <
+                                             sameFingerPixels;
     if (!continues) {
         const TransformState& state = transform.getState();
         groundGrab = GroundGrab{
@@ -724,7 +731,7 @@ void Map::Impl::noteCameraSet(const CameraOptions& camera) {
     // change.
     const bool keepsGrab = keepsView && groundGrab &&
                            std::hypot(camera.anchor->x - groundGrab->finger.x,
-                                      camera.anchor->y - groundGrab->finger.y) < 0.5;
+                                      camera.anchor->y - groundGrab->finger.y) < sameFingerPixels;
     noteCameraSet(keepsView, keepsGrab);
     // A centre the app sets is where it wants the centre. An anchor that keeps the view, owed to a
     // change this one cuts short (a double tap's zoom), would slide it along the line of sight;
