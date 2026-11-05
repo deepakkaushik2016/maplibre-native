@@ -19,6 +19,7 @@ namespace mln {
 
 namespace gfx {
 class Context;
+class Drawable;
 class Texture2D;
 class OffscreenTexture;
 class UniformBuffer;
@@ -197,6 +198,13 @@ protected:
 
 public:
     void setRenderOnce(bool value) { renderOnce = value; }
+
+    /// What a draped drawable's content is drawn from, folded into the drape signatures with its
+    /// covering tile: its source bucket's id, or, for the hillshade and color-relief layers
+    /// (whose drawables hold no bucket), the texture they sample the DEM through. Those are made
+    /// anew when the tile's DEM changes - a reload, or a border backfilled from a neighbour that
+    /// arrived later - so the drape is re-rendered then, and only then. O(1).
+    static std::size_t drapedSourceHash(const gfx::Drawable&);
 
 protected:
     // This target's own content signature (PaintParameters::perTargetDrapeSignature)

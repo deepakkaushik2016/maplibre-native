@@ -12,11 +12,14 @@
 #include <mln/renderer/render_orchestrator.hpp>
 #include <mln/renderer/render_tree.hpp>
 #include <mln/shaders/layer_ubo.hpp>
+#include <mln/shaders/shader_defines.hpp>
 #include <mln/util/hash.hpp>
 #include <mln/util/string.hpp>
 
 #include <cassert>
 #include <cmath>
+#include <functional>
+#include <optional>
 #include <set>
 
 namespace mln {
@@ -111,6 +114,24 @@ void RenderTarget::updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& par
     drapeGlobalParamsRecorded = true;
 }
 
+std::size_t RenderTarget::drapedSourceHash(const gfx::Drawable& drawable) {
+    std::size_t hash = 0;
+    // The hillshade's drawable samples its tile's prepare target, made anew (with a new texture)
+    // when the tile's DEM changes; the color relief's samples the DEM itself, uploaded anew then.
+    std::optional<size_t> demTexture;
+    if (drawable.getName() == "hillshade") {
+        demTexture = shaders::idHillshadeImageTexture;
+    } else if (drawable.getName() == "colorRelief") {
+        demTexture = shaders::idColorReliefImageTexture;
+    }
+    if (demTexture) {
+        util::hash_combine(hash, std::hash<const void*>{}(drawable.getTexture(*demTexture).get()));
+    } else if (const auto& bucket = drawable.getBucket()) {
+        util::hash_combine(hash, bucket->getID().id());
+    }
+    return hash;
+}
+
 RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrator& orchestrator,
                                                                const PaintParameters& parameters) const {
     DrapeCoverage coverage;
@@ -151,12 +172,7 @@ RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrato
             // alone judged it the same and kept the stale bake until the next zoom level.
             // Bucket ids are stable across fades and paint changes, so this does not churn;
             // hillshade is excluded as in the signature.
-            std::size_t bucketHash = 0;
-            if (drawable.getName() != "hillshade") {
-                if (const auto& bucket = drawable.getBucket()) {
-                    util::hash_combine(bucketHash, bucket->getID().id());
-                }
-            }
+            const std::size_t bucketHash = drapedSourceHash(drawable);
             if (overlaps) {
                 // Key on the COVERING TILE id, NOT the drawable-instance id. A tile's
                 // drawables are rebuilt with fresh ids on every bucket update, fade
