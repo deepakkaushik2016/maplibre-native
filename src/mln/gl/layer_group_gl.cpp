@@ -202,6 +202,14 @@ void LayerGroupGL::render(RenderOrchestrator&, PaintParameters& parameters) {
             tweaker->execute(drawable, parameters);
         }
 
+        // A 3D drawable leaves its stencil mode to its layer group (DrawableGL::draw), and this
+        // group clips nothing: draw it with the stencil test off. Otherwise it inherits the last
+        // draw's mode, e.g. a terrain drape target's tile clipping, and fails against the main
+        // pass's cleared stencil (the terrain mesh vanished in a still frame after a GeoJSON change).
+        if (drawable.getIs3D()) {
+            context.setStencilMode(gfx::StencilMode::disabled());
+        }
+
         drawable.draw(parameters);
     });
 

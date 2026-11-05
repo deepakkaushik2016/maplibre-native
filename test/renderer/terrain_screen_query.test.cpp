@@ -558,6 +558,33 @@ TEST(TerrainScreenQuery, GroundMarkedAtTheTappedLatLngIsDrawnUnderTheFinger) {
     }
 }
 
+// A GeoJSON change is drawn on the terrain in the first still frame after it: a patch added, then
+// moved, then removed. A snapshot taken right after a trail is added or edited must show it. On
+// OpenGL the frame that re-rendered the drape targets once drew no terrain at all: the mesh took
+// the drape's tile-clipping stencil test into the main pass.
+TEST(TerrainScreenQuery, AGeoJSONChangeIsDrawnInTheFirstStillFrameAfterIt) {
+    HillsScene scene(CameraCase{.center = {46.0, 10.0}, .pitch = 60.0, .bearing = 0.0});
+    const ScreenCoordinate first{195.0, 600.0};
+    const ScreenCoordinate second{80.0, 420.0};
+    const auto firstGround = scene.renderer().queryTerrainLatLng(first);
+    const auto secondGround = scene.renderer().queryTerrainLatLng(second);
+    ASSERT_TRUE(firstGround);
+    ASSERT_TRUE(secondGround);
+
+    scene.setPatch(*firstGround, 25.0);
+    ASSERT_TRUE(scene.render());
+    EXPECT_GT(scene.redCentroid(first, 24).second, 2) << "the added patch is not drawn in the first frame";
+
+    scene.setPatch(*secondGround, 25.0);
+    ASSERT_TRUE(scene.render());
+    EXPECT_GT(scene.redCentroid(second, 24).second, 2) << "the moved patch is not drawn in the first frame";
+    EXPECT_EQ(scene.redCentroid(first, 24).second, 0) << "the moved patch is still drawn where it was";
+
+    scene.map.getStyle().getSource("patch")->as<style::GeoJSONSource>()->setGeoJSON(GeoJSON{FeatureCollection{}});
+    ASSERT_TRUE(scene.render());
+    EXPECT_EQ(scene.redPixels().second, 0) << "the removed patch is still drawn in the first frame";
+}
+
 // A point behind the ridge, seen from the south at a low angle, is drawn where the ridge hides it:
 // its pixel is reported occluded, and a tap there reads the ridge, not the point. A point on the
 // near face of the ridge is not.
