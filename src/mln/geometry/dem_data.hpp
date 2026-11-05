@@ -17,7 +17,10 @@ public:
     /// Adopts an image already laid out as this class keeps it: `dim` + 4 texels square, the
     /// data inset by its 2-texel border. The elevation range is not computed (it stays 0).
     DEMData(std::shared_ptr<PremultipliedImage> borderedImage, Tileset::RasterEncoding encoding);
-    void backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy);
+    /// Copies the neighbouring tile's pixels at offset (`dx`, `dy`) into the border, and returns
+    /// whether that changed it: false when the border held them already (the same neighbour
+    /// again, or a reload of it with the same heights), so nothing made from it needs redoing.
+    bool backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy);
 
     /// The height in metres at pixel (x, y), as the shaders decode it: not rounded.
     float get(int32_t x, int32_t y) const;

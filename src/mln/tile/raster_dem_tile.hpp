@@ -78,11 +78,16 @@ public:
     HillshadeBucket* getBucket() const;
     /// The bucket, shared: holding it keeps its DEM data alive across a reload of the tile.
     const std::shared_ptr<HillshadeBucket>& getSharedBucket() const { return bucket; }
-    void backfillBorder(const RasterDEMTile& borderTile, DEMTileNeighbors mask);
+    /// Backfills the border facing `borderTile` (at `mask`) from it; returns whether that changed
+    /// the border.
+    bool backfillBorder(const RasterDEMTile& borderTile, DEMTileNeighbors mask);
 
     // neighboringTiles is a bitmask for which neighboring tiles have been backfilled
-    // there are max 8 possible neighboring tiles, so each bit represents one neighbor
+    // there are max 8 possible neighboring tiles, so each bit represents one neighbor.
+    // Reset to absentNeighbors whenever the tile's DEM is parsed anew.
     DEMTileNeighbors neighboringTiles = DEMTileNeighbors::Empty;
+    /// The neighbours a tile in the top or bottom row of the world does not have.
+    DEMTileNeighbors getAbsentNeighbors() const { return absentNeighbors; }
 
     void setMask(TileMask&&) override;
 
@@ -108,6 +113,7 @@ private:
     std::shared_ptr<HillshadeBucket> bucket;
 
     bool obsolete = false;
+    DEMTileNeighbors absentNeighbors = DEMTileNeighbors::Empty;
 };
 
 } // namespace mln

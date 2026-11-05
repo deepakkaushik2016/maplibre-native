@@ -152,7 +152,13 @@ void RenderRasterDEMSource::onTileChanged(Tile& tile) {
         {DEMTileNeighbors::BottomCenter, DEMTileNeighbors::TopCenter},
         {DEMTileNeighbors::BottomLeft, DEMTileNeighbors::TopRight}};
 
-    if (tile.isRenderable() && demtile.neighboringTiles != DEMTileNeighbors::Complete) {
+    // A tile changes when its DEM is parsed, a reload included, so the new DEM's border is
+    // backfilled from each loaded neighbour, and each neighbour's border from the new DEM: the
+    // neighbour may have been backfilled from an earlier DEM of this tile, with other heights.
+    // That costs at most 8 neighbour lookups and 16 border copies of 2 rows each per parse, and
+    // nothing per frame; a neighbour whose border already held these pixels is left as it is,
+    // not prepared or uploaded again.
+    if (tile.isRenderable()) {
         const CanonicalTileID canonical = tile.id.canonical;
         const auto dim = static_cast<uint32_t>(std::pow(2, canonical.z));
         const uint32_t px = (canonical.x - 1 + dim) % dim;
@@ -184,23 +190,19 @@ void RenderRasterDEMSource::onTileChanged(Tile& tile) {
 
         for (uint8_t i = 0; i < 8; i++) {
             auto mask = DEMTileNeighbors(std::pow(2, i));
-            // only backfill if this neighbor has not been previously backfilled
-            if ((demtile.neighboringTiles & mask) != mask) {
-                OverscaledTileID neighborid = getNeighbor(mask);
-                Tile* renderableNeighbor = tilePyramid.getTile(neighborid);
-                if (renderableNeighbor != nullptr && renderableNeighbor->isRenderable()) {
-                    auto& borderTile = static_cast<RasterDEMTile&>(*renderableNeighbor);
-                    demtile.backfillBorder(borderTile, mask);
-
-                    // if the border tile has not been backfilled by a previous
-                    // instance of the main tile, backfill its corresponding
-                    // neighbor as well.
-                    const DEMTileNeighbors& borderMask = opposites[mask];
-                    if ((borderTile.neighboringTiles & borderMask) != borderMask) {
-                        borderTile.backfillBorder(demtile, borderMask);
-                    }
-                }
+            // no neighbour beyond the top or bottom row of the world
+            if ((demtile.getAbsentNeighbors() & mask) == mask) {
+                continue;
             }
+            Tile* renderableNeighbor = tilePyramid.getTile(getNeighbor(mask));
+            if (renderableNeighbor == nullptr || !renderableNeighbor->isRenderable()) {
+                continue;
+            }
+            auto& borderTile = static_cast<RasterDEMTile&>(*renderableNeighbor);
+            if ((demtile.neighboringTiles & mask) != mask) {
+                demtile.backfillBorder(borderTile, mask);
+            }
+            borderTile.backfillBorder(demtile, opposites[mask]);
         }
     }
 

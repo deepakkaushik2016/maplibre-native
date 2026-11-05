@@ -88,7 +88,7 @@ DEMData::DEMData(std::shared_ptr<PremultipliedImage> borderedImage, Tileset::Ras
 // dx/dz, dy/dz derivatives at each pixel of the tile by querying the 8
 // surrounding pixels, and if we don't have the pixel buffer we get seams at
 // tile boundaries.
-void DEMData::backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy) {
+bool DEMData::backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy) {
     auto& o = borderTileData;
 
     // Tiles from the same source should always be of the same dimensions.
@@ -119,11 +119,18 @@ void DEMData::backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy
     auto* dest = reinterpret_cast<uint32_t*>(image->data.get());
     auto* source = reinterpret_cast<uint32_t*>(o.image->data.get());
 
+    // Compared as copied (at most 2 rows or columns, no more work than the copy), so that a
+    // border already holding these pixels is reported unchanged.
+    bool changed = false;
     for (int32_t y = yMin; y < yMax; y++) {
         for (int32_t x = xMin; x < xMax; x++) {
-            dest[idx(x, y)] = source[idx(x + ox, y + oy)];
+            uint32_t& texel = dest[idx(x, y)];
+            const uint32_t value = source[idx(x + ox, y + oy)];
+            changed = changed || texel != value;
+            texel = value;
         }
     }
+    return changed;
 }
 
 float DEMData::get(const int32_t x, const int32_t y) const {

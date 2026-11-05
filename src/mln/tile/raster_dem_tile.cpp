@@ -25,15 +25,19 @@ RasterDEMTile::RasterDEMTile(const OverscaledTileID& id_,
       mailbox(std::make_shared<Mailbox>(*Scheduler::GetCurrent())),
       worker(parameters.threadPool, ActorRef<RasterDEMTile>(*this, mailbox)) {
     encoding = tileset.rasterEncoding.value_or(Tileset::RasterEncoding::Mapbox);
-    if (id.canonical.y == 0) {
-        // this tile doesn't have upper neighboring tiles so marked those as backfilled
-        neighboringTiles = neighboringTiles | DEMTileNeighbors::NoUpper;
+    // A tile in the top row has no upper neighbours and one in the bottom row no lower ones, so
+    // those count as backfilled. The z0 tile has neither, and its left and right neighbours are
+    // itself in the next world copies, which add nothing to its border.
+    const bool top = id.canonical.y == 0;
+    const bool bottom = id.canonical.y + 1 == std::pow(2, id.canonical.z);
+    if (top && bottom) {
+        absentNeighbors = DEMTileNeighbors::Complete;
+    } else if (top) {
+        absentNeighbors = DEMTileNeighbors::NoUpper;
+    } else if (bottom) {
+        absentNeighbors = DEMTileNeighbors::NoLower;
     }
-
-    if (id.canonical.y + 1 == std::pow(2, id.canonical.z)) {
-        // this tile doesn't have lower neighboring tiles so marked those as backfilled
-        neighboringTiles = neighboringTiles | DEMTileNeighbors::NoLower;
-    }
+    neighboringTiles = absentNeighbors;
 }
 
 RasterDEMTile::~RasterDEMTile() {
@@ -80,6 +84,8 @@ void RasterDEMTile::setData(const std::shared_ptr<const std::string>& data) {
 void RasterDEMTile::onParsed(std::unique_ptr<HillshadeBucket> result, const uint64_t resultCorrelationID) {
     if (!obsolete) {
         bucket = std::move(result);
+        // The new DEM's border is a copy of its own edge again: no neighbour has backfilled it.
+        neighboringTiles = absentNeighbors;
         loaded = true;
         if (resultCorrelationID == correlationID) {
             pending = false;
@@ -107,13 +113,13 @@ HillshadeBucket* RasterDEMTile::getBucket() const {
     return bucket.get();
 }
 
-void RasterDEMTile::backfillBorder(const RasterDEMTile& borderTile, const DEMTileNeighbors mask) {
+bool RasterDEMTile::backfillBorder(const RasterDEMTile& borderTile, const DEMTileNeighbors mask) {
     int32_t dx = static_cast<int32_t>(borderTile.id.canonical.x) - static_cast<int32_t>(id.canonical.x);
     const auto dy = static_cast<int8_t>(static_cast<int32_t>(borderTile.id.canonical.y) -
                                         static_cast<int32_t>(id.canonical.y));
     const auto dim = static_cast<uint32_t>(pow(2, id.canonical.z));
-    if (dx == 0 && dy == 0) return;
-    if (std::abs(dy) > 1) return;
+    if (dx == 0 && dy == 0) return false;
+    if (std::abs(dy) > 1) return false;
     // neighbor is in another world wrap
     if (std::abs(dx) > 1) {
         if (std::abs(int(dx + dim)) == 1) {
@@ -123,13 +129,16 @@ void RasterDEMTile::backfillBorder(const RasterDEMTile& borderTile, const DEMTil
         }
     }
     const HillshadeBucket* borderBucket = borderTile.getBucket();
-    if (borderBucket) {
-        const DEMData& borderDEM = borderBucket->getDEMData();
-        DEMData& tileDEM = bucket->getDEMData();
+    if (!borderBucket || !bucket) {
+        return false;
+    }
+    const DEMData& borderDEM = borderBucket->getDEMData();
+    DEMData& tileDEM = bucket->getDEMData();
 
-        tileDEM.backfillBorder(borderDEM, dx, dy);
-        // update the bitmask to indicate that this tiles have been backfilled by flipping the relevant bit
-        this->neighboringTiles = this->neighboringTiles | mask;
+    const bool changed = tileDEM.backfillBorder(borderDEM, dx, dy);
+    // update the bitmask to indicate that this tiles have been backfilled by flipping the relevant bit
+    this->neighboringTiles = this->neighboringTiles | mask;
+    if (changed) {
         // mark HillshadeBucket.prepared as false so it runs through the prepare
         // render pass with the new texture data we just backfilled
         bucket->setPrepared(false);
@@ -138,6 +147,7 @@ void RasterDEMTile::backfillBorder(const RasterDEMTile& borderTile, const DEMTil
         // stale now too.
         bucket->colorReliefDEMTexture.reset();
     }
+    return changed;
 }
 
 void RasterDEMTile::setMask(TileMask&& mask) {
