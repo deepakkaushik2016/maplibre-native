@@ -544,12 +544,7 @@ TEST(TerrainScreenQuery, GroundMarkedAtTheTappedLatLngIsDrawnUnderTheFinger) {
             const auto ground = scene.renderer().queryTerrainLatLng(finger);
             ASSERT_TRUE(ground);
             scene.setPatch(*ground, 25.0);
-            // On OpenGL the drape shows the source's new data a frame late (llvmpipe; see
-            // TerrainLineDrape.RedrawnDrapeUsesTheFramesPaintParams), so allow one more frame.
-            scene.render();
-            if (scene.redCentroid(finger, 24).second == 0) {
-                scene.render();
-            }
+            ASSERT_TRUE(scene.render());
             const auto [centre, count] = scene.redCentroid(finger, 24);
             ASSERT_GT(count, 2) << "no patch drawn near the finger";
             EXPECT_LT(distance(centre, finger), 0.5)
