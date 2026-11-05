@@ -159,7 +159,8 @@ struct HillsScene {
     PremultipliedImage image;
     /// Every tile requested, in order.
     std::vector<Resource::TileData> requested;
-    /// Tiles past this many are answered with no content.
+    /// Tiles past this many are answered with no content. The count is cumulative over the scene's
+    /// life, so a test that re-renders a scene many times may need to raise it.
     static constexpr size_t tileBudget = 1000;
     bool stillDone = false;
     std::exception_ptr stillError;

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <map>
+#include <numbers>
 #include <cstdlib> /* srand, rand */
 #include <ctime>   /* time */
 #include <iterator>
@@ -228,8 +229,9 @@ TEST(TileCover, TileLimitReturnsTheNearestTilesWithoutWalkingTheWholeView) {
     const Range<uint8_t> deep{z, z};
     const CountingElevation counter;
     // A fixed-zoom cover (the variable-zoom threshold above the pitch) covers the whole view at z.
-    util::TileCoverParameters params{
-        .transformState = transform.getState(), .tileLodPitchThreshold = M_PI / 2.0, .elevationProvider = &counter};
+    util::TileCoverParameters params{.transformState = transform.getState(),
+                                     .tileLodPitchThreshold = std::numbers::pi / 2.0,
+                                     .elevationProvider = &counter};
 
     const auto whole = util::tileCover(params, z, deep);
     ASSERT_GT(whole.size(), 1000 * limit)

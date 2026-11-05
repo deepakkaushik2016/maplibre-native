@@ -47,8 +47,9 @@ std::string makeFlatDEMTile() {
 // The flat DEM tile above decodes to this height everywhere.
 constexpr double flatDEMMeters = 1000.0;
 
-// A vector source whose minzoom is deeper than the far field needs, beside the DEM. The
-// vector layer starts hidden, so the DEM can load before the source asks for anything.
+// A vector source with a deep minzoom, beside the DEM. Its tests turn level of detail off, so it
+// covers the whole view at that minzoom out to the horizon. The vector layer starts hidden, so
+// the DEM can load before the source asks for anything.
 std::string deepSourceStyle(int demMinZoom, int demMaxZoom) {
     return R"STYLE({
   "version": 8,
