@@ -618,9 +618,23 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             demHash ^= std::hash<UnwrappedTileID>{}(renderTile.id);
             if (auto existing = demTextures.find(renderTile.id); existing != demTextures.end()) {
                 existing->second.lastUsed = demUpdateCounter;
+                if (existing->second.revision != demData->getRevision()) {
+                    // The tile's DEM changed since the upload (a reload, or a border backfilled
+                    // from a neighbour that arrived later): upload it again into the same
+                    // texture, so every drawable bound to it draws the new heights. Only when the
+                    // DEM changes; O(1) per DEM tile per frame otherwise.
+                    existing->second.texture->setImage(demData->getImagePtr());
+                    existing->second.revision = demData->getRevision();
+#if MLN_RENDER_BACKEND_OPENGL
+                    packDEMArrayLayer(context, renderTile.id, *demData);
+#endif
+                }
             } else if (auto texture = createDEMTexture(context, *demData)) {
                 // Keep the texture available for elevation sampling by non-draped layers
-                demTextures[renderTile.id] = {.texture = texture, .dim = demData->dim, .lastUsed = demUpdateCounter};
+                demTextures[renderTile.id] = {.texture = texture,
+                                              .dim = demData->dim,
+                                              .lastUsed = demUpdateCounter,
+                                              .revision = demData->getRevision()};
 #if MLN_RENDER_BACKEND_OPENGL
                 // Also pack this tile's DEM into the array for the (upcoming) instanced
                 // depth pass. Additive: the per-tile texture above is still the fallback.
@@ -1352,7 +1366,8 @@ std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const Un
                         .emplace(demRenderTile->id,
                                  DEMTextureEntry{.texture = std::move(texture),
                                                  .dim = demDataOf(*demRenderTile)->dim,
-                                                 .lastUsed = demUpdateCounter})
+                                                 .lastUsed = demUpdateCounter,
+                                                 .revision = demDataOf(*demRenderTile)->getRevision()})
                         .first;
         }
         entry->second.lastUsed = demUpdateCounter;

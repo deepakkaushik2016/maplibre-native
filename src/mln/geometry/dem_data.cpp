@@ -2,11 +2,18 @@
 #include <mln/math/clamp.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
 
 namespace mln {
+
+uint64_t DEMData::newRevision() {
+    // Tiles are decoded on worker threads.
+    static std::atomic<uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
 
 DEMData::DEMData(const PremultipliedImage& _image, Tileset::RasterEncoding _encoding)
     : dim(_image.size.height),
@@ -129,6 +136,9 @@ bool DEMData::backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy
             changed = changed || texel != value;
             texel = value;
         }
+    }
+    if (changed) {
+        revision = newRevision();
     }
     return changed;
 }

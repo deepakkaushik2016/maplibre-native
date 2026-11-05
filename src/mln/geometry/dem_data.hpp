@@ -7,6 +7,7 @@
 #include <memory>
 #include <array>
 #include <cassert>
+#include <cstdint>
 #include <vector>
 
 namespace mln {
@@ -21,6 +22,10 @@ public:
     /// whether that changed it: false when the border held them already (the same neighbour
     /// again, or a reload of it with the same heights), so nothing made from it needs redoing.
     bool backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy);
+
+    /// Names the texels as they are now: unique to this data, and new whenever backfillBorder
+    /// changes them, so a copy of them (an uploaded texture) can tell that it is stale.
+    uint64_t getRevision() const { return revision; }
 
     /// The height in metres at pixel (x, y), as the shaders decode it: not rounded.
     float get(int32_t x, int32_t y) const;
@@ -42,6 +47,9 @@ private:
     std::shared_ptr<PremultipliedImage> image;
     int32_t minElevation = 0;
     int32_t maxElevation = 0;
+    uint64_t revision = newRevision();
+
+    static uint64_t newRevision();
 
     size_t idx(const int32_t x, const int32_t y) const {
         assert(x >= -2);
