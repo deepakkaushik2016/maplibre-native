@@ -203,10 +203,13 @@ void LayerGroupGL::render(RenderOrchestrator&, PaintParameters& parameters) {
             tweaker->execute(drawable, parameters);
         }
 
-        // A 3D drawable leaves its stencil mode to its layer group (DrawableGL::draw), and this
-        // group clips nothing: draw it with the stencil test off. Otherwise it inherits the last
-        // draw's mode, e.g. a terrain drape target's tile clipping, and fails against the main
-        // pass's cleared stencil (the terrain mesh vanished in a still frame after a GeoJSON change).
+        // A 3D drawable leaves its stencil mode to its layer group (DrawableGL::draw). This group
+        // draws no tile clipping masks, and no 3D drawable in a plain group asks for stencil today
+        // (the terrain mesh does not), so draw it with the stencil test off. Otherwise it inherits
+        // the last draw's mode, e.g. a terrain drape target's tile clipping, and fails against the
+        // main pass's cleared stencil (the terrain mesh vanished in a still frame after a GeoJSON
+        // change). A 3D drawable here that enables stencil for overlap dedup would need the
+        // group's stencilModeFor3D instead, as the tile groups and Metal's plain group give it.
         if (drawable.getIs3D()) {
             context.setStencilMode(gfx::StencilMode::disabled());
         }
