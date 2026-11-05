@@ -250,6 +250,77 @@ void registerTriangles(const std::string& pluginID,
     ASSERT_EQ(MLN_PLUGIN_STATUS_OK, mln_plugin_register_v1(&descriptor, error, sizeof(error))) << error;
 }
 
+// One layer type whose single drawable draws the same translucent triangle twice and asks for
+// stencil overlap on that drawable alone (enable_stencil_overlap), with the layer's own dedup off.
+void registerOverlappingTriangles(const std::string& pluginID) {
+    static const float vertices[] = {-1, -1, 1, -1, 0, 1};
+    static const uint16_t indices[] = {0, 1, 2, 0, 1, 2};
+    static const mln_plugin_vertex_stream_v1 stream = {
+        sizeof(stream), 0, reinterpret_cast<const uint8_t*>(vertices), sizeof(vertices), 3, 2 * sizeof(float)};
+    static const mln_plugin_attribute_binding_v1 binding = {sizeof(binding), 0, 0, 0};
+    static const mln_plugin_segment_v1 segment = {sizeof(segment), 0, 0, 3, 6};
+    static const mln_plugin_drawable_descriptor_v1 drawable = {
+        sizeof(drawable), 1, {"main", 4}, &binding, 1, &segment, 1, MLN_PLUGIN_DRAWABLE_DEPTH_READ_ONLY, 1, 0, 0, 0};
+    static const std::string type = pluginID + ".overlap";
+    // Premultiplied red at half opacity: drawn once a pixel is (128, 0, 0, 128), twice (191, 0, 0, 191).
+    static const std::array<std::string, 4> code = {
+        "in vec2 a_pos;void main(){gl_Position=vec4(a_pos,0,1);}",
+        "void main(){fragColor=vec4(0.5,0,0,0.5);}",
+        "layout(location=0) in vec2 a_pos;void main(){gl_Position=vec4(a_pos,0,1);applySurfaceTransform();}",
+        "layout(location=0) out vec4 fragColor;void main(){fragColor=vec4(0.5,0,0,0.5);}"};
+    static const std::string metal =
+        "struct Input{float2 a_pos [[attribute(0)]];};"
+        "vertex float4 triangleVertex(Input in [[stage_in]]){return float4(in.a_pos,0,1);}"
+        "fragment half4 triangleFragment(){return half4(0.5,0,0,0.5);}";
+    const mln_plugin_shader_source_v1 sources[] = {
+        {sizeof(mln_plugin_shader_source_v1), MLN_PLUGIN_BACKEND_OPENGL, view(code[0]), view(code[1]), {}, {}},
+        {sizeof(mln_plugin_shader_source_v1), MLN_PLUGIN_BACKEND_VULKAN, view(code[2]), view(code[3]), {}, {}},
+        {sizeof(mln_plugin_shader_source_v1),
+         MLN_PLUGIN_BACKEND_METAL,
+         view(metal),
+         {},
+         {"triangleVertex", 14},
+         {"triangleFragment", 16}}};
+    const mln_plugin_shader_attribute_v1 attribute = {
+        sizeof(attribute), 0, 0, {"a_pos", 5}, MLN_PLUGIN_VERTEX_FLOAT_X2};
+    const mln_plugin_shader_descriptor_v1 shader = {
+        sizeof(mln_plugin_shader_descriptor_v1), {"main", 4}, sources, 3, &attribute, 1, nullptr, 0, nullptr, 0};
+    mln_plugin_layer_type_v1 layer{};
+    layer.struct_size = sizeof(layer);
+    layer.layer_type = view(type);
+    layer.backend_mask = MLN_PLUGIN_BACKEND_OPENGL | MLN_PLUGIN_BACKEND_VULKAN | MLN_PLUGIN_BACKEND_METAL;
+    layer.geometry_type_mask = MLN_PLUGIN_GEOMETRY_POINT;
+    layer.shaders = &shader;
+    layer.shader_count = 1;
+    layer.enable_stencil_overlap_dedup = 0;
+    layer.update_uniform_block = [](const mln_plugin_uniform_context_v1*, uint32_t, uint8_t*, size_t) {
+        return MLN_PLUGIN_STATUS_OK;
+    };
+    layer.create_layout = [](const mln_plugin_layout_context_v1*, void** instance) {
+        *instance = new (std::nothrow) int(0);
+        return *instance ? MLN_PLUGIN_STATUS_OK : MLN_PLUGIN_STATUS_CALLBACK_ERROR;
+    };
+    layer.layout_feature = [](void* instance, const mln_plugin_feature_v1*) {
+        ++*static_cast<int*>(instance);
+        return MLN_PLUGIN_STATUS_OK;
+    };
+    layer.finish_layout = [](void* instance, mln_plugin_bucket_v1* output) {
+        *output = {};
+        output->struct_size = sizeof(*output);
+        if (*static_cast<int*>(instance) > 0) {
+            *output = {sizeof(*output), &stream, 1, indices, 6, &drawable, 1, 0, nullptr, 0};
+        }
+        return MLN_PLUGIN_STATUS_OK;
+    };
+    layer.destroy_layout = [](void* instance) {
+        delete static_cast<int*>(instance);
+    };
+    const mln_plugin_descriptor_v1 descriptor = {
+        sizeof(descriptor), MLN_PLUGIN_ABI_VERSION_1, view(pluginID), {"1", 1}, 1, 1, &layer, 1};
+    char error[256]{};
+    ASSERT_EQ(MLN_PLUGIN_STATUS_OK, mln_plugin_register_v1(&descriptor, error, sizeof(error))) << error;
+}
+
 std::string triangleStyle(const std::string& pluginID) {
     return R"({"version":8,"sources":{"points":{"type":"geojson","data":{
         "type":"FeatureCollection","features":[{"type":"Feature","properties":{},
@@ -327,6 +398,22 @@ TEST(PluginRendering, StencilOverlapDedupGeneratesStencilUpdates) {
     test.expectTriangles("test.stencil-dedup");
     const auto result = test.frontend.render(test.map);
     EXPECT_GT(result.stats.stencilUpdates, 0u);
+}
+
+// A drawable that asks for stencil overlap on its own (enable_stencil_overlap, with the layer's
+// dedup off) gets the 3D stencil state from its layer group: the triangle it draws twice covers
+// each pixel once. Its group has no stencil tiles, and the tile layer groups used to set up 3D
+// state only when they did, so the drawable drew with whatever stencil state came before.
+TEST(PluginRendering, DrawableStencilOverlapWithoutLayerDedupDrawsEachPixelOnce) {
+    ASSERT_NO_FATAL_FAILURE(registerOverlappingTriangles("test.drawable-stencil-overlap"));
+    RenderTest test;
+    test.map.getStyle().loadJSON(R"({"version":8,"sources":{"points":{"type":"geojson","data":{
+        "type":"Point","coordinates":[0,0]}}},"layers":[{"id":"overlap",
+        "type":"test.drawable-stencil-overlap.overlap","source":"points"}]})");
+    const auto result = test.frontend.render(test.map);
+    const auto* pixel = result.image.data.get() + (32 * 64 + 32) * 4;
+    EXPECT_NEAR(128, pixel[0], 2) << "the overlapping triangle was blended more than once";
+    EXPECT_NEAR(128, pixel[3], 2);
 }
 
 TEST(PluginRendering, CameraPaintRefreshesAfterPropertyAndZoomChanges) {
