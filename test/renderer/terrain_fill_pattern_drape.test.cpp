@@ -2,14 +2,23 @@
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
 
+#include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/headless_frontend.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
+#include <mln/map/transform_state.hpp>
 #include <mln/style/image.hpp>
+#include <mln/style/sources/geojson_source.hpp>
 #include <mln/style/style.hpp>
+#include <mln/util/geojson.hpp>
 #include <mln/util/image.hpp>
+#include <mln/util/mat4.hpp>
+#include <mln/util/projection.hpp>
 #include <mln/util/run_loop.hpp>
 
+#include <chrono>
+#include <cmath>
+#include <exception>
 #include <memory>
 #include <string>
 
@@ -117,4 +126,125 @@ TEST(TerrainDrape, AFillPatternFromAShallowTileLandsWhereItsPolygonIs) {
     const int area = 64 * 84;
     EXPECT_GT(west, area * 9 / 10) << "east " << east;
     EXPECT_LT(east, area / 20) << "west " << west;
+}
+
+namespace {
+
+// Flat ground 1,000 m up, a white background and a GeoJSON source that starts empty, drawn red.
+const char* geojsonStyle = R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 11,
+      "tileSize": 256
+    },
+    "patch": {"type": "geojson", "data": {"type": "FeatureCollection", "features": []}}
+  },
+  "terrain": {"source": "dem", "exaggeration": 1.0},
+  "layers": [
+    {"id": "background", "type": "background", "paint": {"background-color": "white"}},
+    {"id": "patch", "type": "fill", "source": "patch", "paint": {"fill-color": "#f00"}}
+  ]
+})STYLE";
+
+constexpr double groundMeters = 1000.0;
+
+std::string flatDemTile(double meters) {
+    // Terrain-RGB: height = -10000 + (R * 65536 + G * 256 + B) * 0.1
+    const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
+    PremultipliedImage image({256, 256});
+    for (uint32_t i = 0; i < 256 * 256; ++i) {
+        uint8_t* px = image.data.get() + i * 4;
+        px[0] = static_cast<uint8_t>(value >> 16);
+        px[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+        px[2] = static_cast<uint8_t>(value & 0xFF);
+        px[3] = 255;
+    }
+    return encodePNG(image);
+}
+
+} // namespace
+
+// A GeoJSON change shows on the terrain in the first still frame after it, so a snapshot taken
+// right after a feature is added has it. On OpenGL that frame drew no terrain at all: the frame
+// re-renders the drape targets, whose fills leave the tile-clipping stencil test on, the camera
+// is still so the terrain depth pass (which would reset it) is skipped, and the terrain mesh, a 3D
+// drawable in a plain layer group, inherited that test and failed it against the main pass's
+// cleared stencil.
+TEST(TerrainDrape, AGeoJSONChangeShowsInTheFirstStillFrameAfterIt) {
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    const std::string dem = flatDemTile(groundMeters);
+    fileSource->tileResponse = [&](const Resource&) {
+        Response res;
+        res.data = std::make_shared<std::string>(dem);
+        return res;
+    };
+    HeadlessFrontend frontend{{256, 256}, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize()));
+    map.getStyle().loadJSON(geojsonStyle);
+    const LatLng center{46.0, 10.0};
+    map.jumpTo(CameraOptions().withCenter(center).withZoom(14.0).withPitch(45.0).withCenterAltitude(groundMeters));
+
+    // A still frame, waited for at most 30 s, so a frame that never finishes fails the test.
+    PremultipliedImage image;
+    const auto renderStill = [&] {
+        bool done = false;
+        std::exception_ptr error;
+        gfx::BackendScope guard{*frontend.getBackend()};
+        map.renderStill([&](const std::exception_ptr& e) {
+            error = e;
+            if (!e) {
+                image = frontend.readStillImage();
+            }
+            done = true;
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!done && std::chrono::steady_clock::now() < deadline) {
+            loop.runOnce();
+        }
+        return done && !error;
+    };
+    ASSERT_TRUE(renderStill()) << "the still frame before the change did not finish";
+
+    // A 100 m square 300 m north of the centre.
+    const LatLng patch{center.latitude() + 0.3 / 111.32, center.longitude()};
+    const double half = 0.05 / 111.32;
+    const double halfLon = half / std::cos(patch.latitude() * M_PI / 180.0);
+    map.getStyle().getSource("patch")->as<style::GeoJSONSource>()->setGeoJSON(
+        Geometry<double>{Polygon<double>{{{patch.longitude() - halfLon, patch.latitude() - half},
+                                          {patch.longitude() + halfLon, patch.latitude() - half},
+                                          {patch.longitude() + halfLon, patch.latitude() + half},
+                                          {patch.longitude() - halfLon, patch.latitude() + half},
+                                          {patch.longitude() - halfLon, patch.latitude() - half}}}});
+    ASSERT_TRUE(renderStill()) << "the still frame after the change did not finish";
+
+    // Where the patch's centre is drawn: on the ground's height, through the camera's projection
+    // matrix, as the terrain vertex shader places it. Top-left origin.
+    const auto state = frontend.getTransformState();
+    ASSERT_TRUE(state);
+    const Point<double> world = Projection::project(patch, state->getScale());
+    vec4 clip;
+    matrix::transformMat4(clip, vec4{{world.x, world.y, groundMeters, 1.0}}, state->getProjectionMatrix());
+    const double px = (clip[0] / clip[3] + 1.0) * image.size.width / 2.0;
+    const double py = (1.0 - clip[1] / clip[3]) * image.size.height / 2.0;
+    ASSERT_GT(px, 8.0);
+    ASSERT_GT(py, 8.0);
+    ASSERT_LT(px, image.size.width - 8.0);
+    ASSERT_LT(py, image.size.height - 8.0);
+
+    int red = 0;
+    for (int y = static_cast<int>(py) - 3; y <= static_cast<int>(py) + 3; ++y) {
+        for (int x = static_cast<int>(px) - 3; x <= static_cast<int>(px) + 3; ++x) {
+            const uint8_t* p = image.data.get() + (static_cast<size_t>(y) * image.size.width + x) * 4;
+            red += (p[0] > 200 && p[1] < 60 && p[2] < 60) ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(red, 49) << "the patch is not drawn at (" << px << ", " << py << ") in the first still frame";
 }
