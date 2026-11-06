@@ -202,7 +202,18 @@ void RenderHeatmapLayer::update(gfx::ShaderRegistry& shaders,
     }
 
     if (renderTarget->getTexture()->getSize() != size) {
-        renderTarget->getTexture()->setSize(size);
+        // A render target's renderable (framebuffer, depth attachment, viewport) is made at its
+        // size, so resizing only its texture left the pass drawing at the old size, into an image
+        // its framebuffer no longer held (Vulkan). A resize, such as a rotation, gets a new target
+        // carrying the same layer group; the texture drawable below picks up its texture.
+        auto heatmapLayerGroup = renderTarget->getLayerGroup(0);
+        activateRenderTarget(renderTarget, false, changes);
+        renderTarget = context.createRenderTarget(size, gfx::TextureChannelDataType::HalfFloat, /*stencil=*/false);
+        if (!renderTarget) {
+            return;
+        }
+        activateRenderTarget(renderTarget, isRenderable, changes);
+        renderTarget->addLayerGroup(heatmapLayerGroup, /*replace=*/true);
     }
 
     auto* tileLayerGroup = static_cast<TileLayerGroup*>(renderTarget->getLayerGroup(0).get());

@@ -37,6 +37,7 @@
 ### 🐞 Bug fixes
 
 - *...Add new stuff here...*
+- [core] Fix a heatmap drawn after the map is resized (a phone turned on its side): its offscreen texture got the new size, but the pass kept drawing at the old size (Metal and GL draw it squeezed into a corner), and on Vulkan into a framebuffer that still held the destroyed image. A resize now gives the heatmap a new render target at the new size.
 - [core] Vulkan: a texture bound before its image exists (an attachment no pass has drawn yet) binds the dummy texture in its place instead of dereferencing a missing image view.
 - [core] Vulkan: fix a crash, and on Metal hidden labels, in the frames before the first raster-dem tile of a 3D terrain arrives. Symbols tested their terrain occlusion against the depth target, which the depth pass had not drawn yet (it has nothing to draw without a DEM tile), so its texture had no image: Vulkan dereferenced the missing image view, and Metal sampled nothing there and hid every symbol. While the depth pass has nothing to draw, symbols test against the far plane.
 - [core] Vulkan: a descriptor set bound into the frame's command buffer is no longer written again in that frame. Each terrain drape target swaps the global paint params for its own between render passes, which rewrote the one global set the earlier passes had bound, and invalidated the command buffer (`VUID-vkCmdBindDescriptorSets-commandBuffer-recording`). The set is now retired until the frame completes and a fresh one written; only a set written twice in one frame pays for it.

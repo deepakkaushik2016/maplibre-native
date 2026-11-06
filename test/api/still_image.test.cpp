@@ -13,6 +13,7 @@
 #include <mln/util/run_loop.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 
@@ -85,4 +86,85 @@ TEST(API, AStillImageReadRightAfterTheFrameHoldsThatFrame) {
         EXPECT_TRUE(red(here, 128)) << "frame " << frame << ": the point is not drawn where it is";
         EXPECT_FALSE(red(there, 128)) << "frame " << frame << ": the point is still drawn where it was";
     }
+}
+
+namespace {
+
+// A still image of the heatmap with one point at the centre, drawn by `map` into `frontend`.
+PremultipliedImage renderHeatmapStill(util::RunLoop& loop, HeadlessFrontend& frontend, MapAdapter& map) {
+    PremultipliedImage image;
+    bool done = false;
+    std::exception_ptr error;
+    gfx::BackendScope guard{*frontend.getBackend()};
+    map.renderStill([&](const std::exception_ptr& e) {
+        error = e;
+        if (!e) {
+            image = frontend.readStillImage();
+        }
+        done = true;
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!done && std::chrono::steady_clock::now() < deadline) {
+        loop.runOnce();
+    }
+    EXPECT_TRUE(done && !error) << "the still frame did not finish";
+    return image;
+}
+
+void loadCentredHeatmap(MapAdapter& map) {
+    map.getStyle().loadJSON(heatmapStyle);
+    map.getStyle().getSource("point")->as<style::GeoJSONSource>()->setGeoJSON(
+        Geometry<double>{Point<double>{0.0, 0.0}});
+    map.jumpTo(CameraOptions().withCenter(LatLng{0.0, 0.0}).withZoom(4.0));
+}
+
+} // namespace
+
+// The heatmap's offscreen texture is half the view's size, so a resize (a phone turned on its side)
+// gives it a new size. Its image is made again at that size, and the pass that draws it must draw
+// into the new image, at the new size: the frame after the resize matches one drawn at that size
+// from the start.
+TEST(API, AHeatmapDrawnAfterAResizeMatchesOneDrawnAtThatSize) {
+    const Size before{256, 512};
+    const Size after{512, 256};
+    util::RunLoop loop;
+    const auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+
+    PremultipliedImage reference;
+    {
+        HeadlessFrontend frontend{after, 1};
+        MapAdapter map(frontend,
+                       MapObserver::nullObserver(),
+                       fileSource,
+                       MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize()));
+        loadCentredHeatmap(map);
+        reference = renderHeatmapStill(loop, frontend, map);
+    }
+
+    HeadlessFrontend frontend{before, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize()));
+    loadCentredHeatmap(map);
+    renderHeatmapStill(loop, frontend, map);
+    frontend.setSize(after);
+    map.setSize(after);
+    const auto image = renderHeatmapStill(loop, frontend, map);
+
+    ASSERT_EQ(image.size, reference.size);
+    size_t red = 0;
+    size_t differing = 0;
+    for (size_t i = 0; i < image.bytes(); i += 4) {
+        const uint8_t* p = image.data.get() + i;
+        red += p[0] > 200 && p[1] < 60 && p[2] < 60 ? 1 : 0;
+        for (size_t c = 0; c < 4; ++c) {
+            if (std::abs(int{p[c]} - int{reference.data[i + c]}) > 8) {
+                ++differing;
+                break;
+            }
+        }
+    }
+    EXPECT_GT(red, 1000u) << "no heatmap drawn after the resize";
+    EXPECT_EQ(differing, 0u) << "the heatmap drawn after the resize differs from one drawn at that size";
 }
