@@ -254,7 +254,8 @@ void DynamicTextureAtlas::releaseTexture(const DynamicTexturePtr& dynamicTexture
         return;
     }
 
-    // The last handle was released, so forget the revision; its bin may now be reused by other images.
+    // The last handle was released, so forget the revision: a later use packs a fresh bin. The old
+    // bin goes back to the texture once the frames that may have drawn it have completed.
     const auto it = imageAllocationKeys.find(
         BinKey{.dynamicTexture = dynamicTexture.get(), .binId = texHandle.getId()});
     if (it != imageAllocationKeys.end()) {
@@ -277,8 +278,9 @@ void DynamicTextureAtlas::removeTextures(const std::vector<TextureHandle>& textu
 }
 
 void DynamicTextureAtlas::retireCompletedBins() {
-    // Render thread, at the start of a frame. A worker holding the lock is packing, which retires
-    // completed bins itself; don't wait for it.
+    // Render thread, at the start of a frame. A worker holding the atlas lock is packing, which
+    // retires completed bins itself, so skip the sweep. No GPU wait; each texture's own lock may
+    // briefly contend with a worker writing into it.
     std::unique_lock lock(mutex, std::try_to_lock);
     if (!lock.owns_lock()) {
         return;

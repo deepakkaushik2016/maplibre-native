@@ -15,6 +15,9 @@
 #include <mln/util/run_loop.hpp>
 
 #include <atomic>
+#include <map>
+#include <set>
+#include <tuple>
 #include <random>
 #include <thread>
 #include <vector>
@@ -320,33 +323,45 @@ TEST(DynamicTextureFrames, FreeingAndPackingUnderPressureLeaksNoBin) {
     }
 }
 
-// The same from worker threads, while the render thread moves the frames on and retires bins.
+// The same from worker threads, while the render thread moves the frames on and retires bins. The
+// workers also reserve a few glyph ids that every layout shares, so a glyph is released and
+// reserved again, by different threads, while its bin waits. No bin may be lost or handed out
+// twice, and once idle, every bin is free again.
 TEST(DynamicTextureFrames, WorkersFreeAndPackWhileFramesAdvance) {
     constexpr Size size{128, 128};
     constexpr Size image{8, 8};
     constexpr size_t capacity = (128 / 8) * (128 / 8);
+    constexpr int32_t glyphIds = 16; // ids 1..16; shelf-pack ids for fresh bins start above them
     Serials gpu;
     SerialTexture texture(size, gpu.serials);
+    for (int32_t id = 1; id <= glyphIds; ++id) { // reserve the glyph ids once, so fresh ids pass them
+        texture.removeTexture(*texture.reserveSize(image, id));
+    }
     std::atomic<bool> stop{false};
     std::atomic<size_t> operations{0};
+    std::atomic<size_t> resurrected{0};
 
+    std::vector<std::vector<gfx::TextureHandle>> held(4);
     std::vector<std::thread> workers;
     for (int worker = 0; worker < 4; ++worker) {
         workers.emplace_back([&, worker] {
             std::mt19937 random(worker);
-            std::vector<gfx::TextureHandle> live;
+            auto& live = held[worker];
             while (!stop) {
-                if (auto handle = texture.reserveSize(image, -1)) {
+                const bool glyph = random() % 2;
+                const int32_t id = glyph ? static_cast<int32_t>(1 + random() % glyphIds) : -1;
+                if (auto handle = texture.reserveSize(image, id)) {
+                    if (glyph && !handle->isUploadNeeded()) {
+                        ++resurrected;
+                    }
                     live.push_back(*handle);
                 }
                 if (!live.empty() && random() % 2) {
-                    texture.removeTexture(live.back());
-                    live.pop_back();
+                    const auto index = random() % live.size();
+                    texture.removeTexture(live[index]);
+                    live.erase(live.begin() + index);
                 }
                 ++operations;
-            }
-            for (const auto& handle : live) {
-                texture.removeTexture(handle);
             }
         });
     }
@@ -359,11 +374,32 @@ TEST(DynamicTextureFrames, WorkersFreeAndPackWhileFramesAdvance) {
     for (auto& worker : workers) {
         worker.join();
     }
+    EXPECT_GT(resurrected, 0u) << "no glyph was reserved again while shared or waiting (the case tests nothing)";
 
+    // Every live handle has a bin of its own, or shares one only with handles of the same id.
+    std::map<int32_t, Rect<uint16_t>> rectOf;
+    std::set<std::tuple<uint16_t, uint16_t>> origins;
+    for (const auto& live : held) {
+        for (const auto& handle : live) {
+            const auto [it, added] = rectOf.emplace(handle.getId(), handle.getRectangle());
+            EXPECT_EQ(it->second, handle.getRectangle()) << "one id, two bins";
+            if (added) {
+                EXPECT_TRUE(origins.emplace(handle.getRectangle().x, handle.getRectangle().y).second)
+                    << "a bin was handed out twice";
+            }
+        }
+    }
+
+    for (const auto& live : held) {
+        for (const auto& handle : live) {
+            texture.removeTexture(handle);
+        }
+    }
     gpu.at(frame + 2, frame + 2);
     texture.retireCompletedBins();
     EXPECT_EQ(texture.numPendingBins(), 0u);
     EXPECT_EQ(gpu.serials->pendingReleases(), 0);
+    EXPECT_TRUE(texture.isEmpty());
     for (size_t i = 0; i < capacity; ++i) {
         ASSERT_TRUE(texture.reserveSize(image, -1)) << "bin " << i << " leaked";
     }
@@ -383,6 +419,32 @@ TEST_F(DynamicTextureAtlasTest, AnIconSetRolledBackFromAFullTextureHoldsNoBin) {
     ASSERT_EQ(atlases.back().textureHandles.size(), 2u);
     ASSERT_NE(atlases.back().dynamicTexture, atlases.front().dynamicTexture);
     EXPECT_EQ(atlas.numPendingBins(), 0u) << "a bin reserved and rolled back waits for the frames";
+}
+
+// The same on the glyph path: a glyph set that doesn't fit the first glyph texture rolls back the
+// glyph it reserved there, which must not stay held for frames that never drew it.
+TEST_F(DynamicTextureAtlasTest, AGlyphSetRolledBackFromAFullTextureHoldsNoBin) {
+    ASSERT_TRUE(backend->getRendererBackend()->getContext().getFrameSerials());
+    const auto glyph = [](uint32_t id, Size size) {
+        auto made = makeMutable<Glyph>();
+        made->id = GlyphID(id);
+        made->bitmap = AlphaImage(size);
+        return Immutable<Glyph>(std::move(made));
+    };
+    const FontStackHash fontStack = 4;
+    std::vector<gfx::GlyphAtlas> glyphAtlases;
+    // The first glyph texture exists, and stays.
+    glyphAtlases.push_back(atlas.uploadGlyphs({{fontStack, {{GlyphID(65u), glyph(65, {8, 8})}}}}));
+    // A small glyph is reserved there first, then a large one that fits only the second texture.
+    glyphAtlases.push_back(
+        atlas.uploadGlyphs({{fontStack, {{GlyphID(66u), glyph(66, {8, 8})}, {GlyphID(67u), glyph(67, {600, 600})}}}}));
+
+    ASSERT_EQ(glyphAtlases.back().textureHandles.size(), 2u);
+    ASSERT_NE(glyphAtlases.back().dynamicTexture, glyphAtlases.front().dynamicTexture);
+    EXPECT_EQ(atlas.numPendingBins(), 0u) << "a glyph bin reserved and rolled back waits for the frames";
+    for (const auto& glyphAtlas : glyphAtlases) {
+        atlas.removeTextures(glyphAtlas.textureHandles, glyphAtlas.dynamicTexture);
+    }
 }
 
 // A map whose icons go away releases their bins; as frames go on they come back, with nothing
@@ -405,7 +467,10 @@ TEST(DynamicTextureFrames, AMapReleasesItsAtlasBinsOnceItsFramesHaveCompleted) {
     dot.fill(255);
     map.getStyle().addImage(std::make_unique<style::Image>("dot", std::move(dot), 1.0f));
     map.jumpTo(CameraOptions().withCenter(LatLng{0.0, 0.0}).withZoom(2.0));
-    const auto serials = frontend.getBackend()->getContext().getFrameSerials();
+    const auto serials = [&] {
+        gfx::BackendScope guard{*frontend.getBackend()};
+        return frontend.getBackend()->getContext().getFrameSerials();
+    }();
     ASSERT_TRUE(serials);
 
     frontend.render(map);

@@ -42,7 +42,7 @@ public:
     void removeTextures(const std::vector<TextureHandle>& textureHandles, const DynamicTexturePtr& dynamicTexture);
     void removeUnusedDynamicTextures();
     /// Returns released bins whose frames have completed on the GPU to their textures. Render
-    /// thread, once per frame; never waits.
+    /// thread, once per frame. No GPU wait; may briefly contend on a texture's mutex.
     void retireCompletedBins();
     /// Released bins still waiting for their frames, over the atlas's textures.
     size_t numPendingBins();
