@@ -287,6 +287,9 @@ struct PaintScene {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         const int start = observer.frames;
         observer.idleFrame = false;
+        // Ask for a frame: a map already at rest draws none on its own, and the check below needs
+        // one drawn after the call.
+        map.triggerRepaint();
         const auto quiet = [&] {
             // The image source's image arrives with no tile event; wait for it too.
             return observer.frames > start && observer.parsing.empty() && observer.idleFrame && imageLoaded();
@@ -303,7 +306,9 @@ struct PaintScene {
                 }
             }
         }
-        ADD_FAILURE() << "the map did not settle within 30 s";
+        ADD_FAILURE() << "the map did not settle within 30 s: " << observer.frames - start << " frames, "
+                      << observer.parsing.size() << " tiles parsing, idle frame " << observer.idleFrame
+                      << ", image loaded " << imageLoaded();
     }
 
     bool imageLoaded() {
