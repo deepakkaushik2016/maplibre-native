@@ -9,11 +9,30 @@
 
 #include <cassert>
 #include <cmath>
+#include <string>
+#include <utility>
 
 #define USE_DESCRIPTOR_POOL_RESET
 
 namespace mln {
 namespace vulkan {
+
+uint64_t FallbackLogLimiter::count(std::chrono::steady_clock::time_point now) {
+    std::scoped_lock lock(mutex);
+    ++unlogged;
+    if (logged && now - lastLine < interval) {
+        return 0;
+    }
+    logged = true;
+    lastLine = now;
+    return std::exchange(unlogged, 0);
+}
+
+namespace {
+// One line per 10 s at most, over every context: a target no pass has drawn yet may be bound each
+// frame until it is.
+FallbackLogLimiter dummyFallbackLog(std::chrono::seconds(10));
+} // namespace
 
 DescriptorSet::DescriptorSet(Context& context_, DescriptorSetType type_)
     : context(context_),
@@ -242,6 +261,13 @@ void ImageDescriptorSet::update(const std::array<gfx::Texture2DPtr, shaders::max
         // view to write; bind the dummy texture in its place rather than dereference it. Only
         // written on a dirty update, so it costs nothing per draw.
         auto& textureImpl = bound && bound->hasImage() ? *bound : *context.getDummyTexture();
+        if (bound && !bound->hasImage()) {
+            if (const auto fallbacks = dummyFallbackLog.count(std::chrono::steady_clock::now())) {
+                Log::Debug(Event::Render,
+                           "Vulkan: bound the dummy texture in place of a texture whose image was not created yet (" +
+                               std::to_string(fallbacks) + " since the last report)");
+            }
+        }
 
         const auto descriptorImageInfo = vk::DescriptorImageInfo()
                                              .setImageLayout(textureImpl.getVulkanImageLayout())

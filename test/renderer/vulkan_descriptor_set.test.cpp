@@ -1,5 +1,6 @@
 #if MLN_RENDER_BACKEND_VULKAN
 #include <mln/test/util.hpp>
+#include <mln/test/fixture_log_observer.hpp>
 
 #include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/dynamic_texture.hpp>
@@ -374,6 +375,41 @@ TEST(VulkanOffscreenTexture, ATargetDroppedWhileItsFrameIsInFlightOutlivesThatFr
     EXPECT_EQ(test.state.renderPassesDestroyed, std::vector<VkRenderPass>{renderPass});
     EXPECT_GE(test.state.imageViewsDestroyed.size(), viewsBefore + 2) << "the colour and depth views";
 }
+// The dummy fallback hides a texture bound before its image exists, so it says so at debug level,
+// at most once per interval, with the count of fallbacks since the last line.
+TEST(VulkanDescriptorSet, TheDummyTextureFallbackIsLoggedAtMostOncePerInterval) {
+    using namespace std::chrono_literals;
+    vulkan::FallbackLogLimiter limiter(10s);
+    const auto start = std::chrono::steady_clock::time_point{} + 1h;
+    EXPECT_EQ(limiter.count(start), 1u) << "the first fallback is not logged";
+    EXPECT_EQ(limiter.count(start + 1s), 0u);
+    EXPECT_EQ(limiter.count(start + 9s), 0u);
+    EXPECT_EQ(limiter.count(start + 10s), 3u) << "the next line does not count the fallbacks it covers";
+    EXPECT_EQ(limiter.count(start + 11s), 0u);
+    EXPECT_EQ(limiter.count(start + 25s), 2u);
+}
+
+#ifndef NDEBUG
+TEST(VulkanDescriptorSet, TheDummyTextureFallbackLogsADebugLine) {
+    FixtureLog log;
+    DescriptorTest<> test;
+    auto& context = test.context;
+    auto texture = context.createTexture2D();
+    texture->setSize({64, 64});
+    texture->setFormat(gfx::TexturePixelType::RGBA, gfx::TextureChannelDataType::UnsignedByte);
+    static_cast<vulkan::Texture2D&>(*texture).setUsage(vulkan::Texture2DUsage::Attachment);
+    vulkan::ImageDescriptorSet images(context);
+    std::array<gfx::Texture2DPtr, shaders::maxTextureCountPerShader> textures{};
+    textures[0] = texture;
+
+    test.renderFrames(1, [&](gfx::RenderPass& pass) {
+        images.update(textures);
+        images.bind(static_cast<vulkan::RenderPass&>(pass).getEncoder());
+    });
+
+    EXPECT_EQ(log.count({EventSeverity::Debug, Event::Render, -1, "dummy texture"}, /*substring=*/true), 1u);
+}
+#endif
 // An atlas bin released while frames are in flight comes back once the frame slot fences show that
 // every frame that may have drawn it has completed: with two slots, the release in frame 2 (stamped
 // 3, as frame 3 may still draw it) is free from frame 5, whose slot's fence covers frame 3.

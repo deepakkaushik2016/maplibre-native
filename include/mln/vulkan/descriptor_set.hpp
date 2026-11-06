@@ -2,13 +2,35 @@
 
 #include <mln/gfx/uniform_buffer.hpp>
 #include <mln/vulkan/buffer_resource.hpp>
-#include <span>
+#include <chrono>
+#include <cstdint>
+#include <mutex>
 #include <queue>
+#include <span>
 
 namespace mln {
 namespace vulkan {
 
 class CommandEncoder;
+
+/// Rate limit for a log line about a condition that may repeat every frame (the dummy texture
+/// bound in place of an image not created yet).
+class FallbackLogLimiter {
+public:
+    explicit FallbackLogLimiter(std::chrono::steady_clock::duration interval_)
+        : interval(interval_) {}
+
+    /// Counts one occurrence at `now`. When a line is due (the first one, then once `interval`
+    /// has passed since the last), returns the occurrences it covers, this one included; else 0.
+    uint64_t count(std::chrono::steady_clock::time_point now);
+
+private:
+    const std::chrono::steady_clock::duration interval;
+    std::mutex mutex;
+    std::chrono::steady_clock::time_point lastLine{};
+    bool logged = false;
+    uint64_t unlogged = 0;
+};
 
 enum class DescriptorSetType : uint8_t {
     Global,
