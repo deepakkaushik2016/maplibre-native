@@ -3,6 +3,7 @@
 
 #include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/dynamic_texture.hpp>
+#include <mln/gfx/offscreen_texture.hpp>
 #include <mln/gfx/render_pass.hpp>
 #include <mln/shaders/layer_ubo.hpp>
 #include <mln/shaders/shader_defines.hpp>
@@ -42,6 +43,13 @@ struct DescriptorProbe {
     PFN_vkBeginCommandBuffer beginCommandBuffer = nullptr;
     PFN_vkCmdBindDescriptorSets cmdBindDescriptorSets = nullptr;
     PFN_vkUpdateDescriptorSets updateDescriptorSets = nullptr;
+    /// Objects destroyed, in order
+    std::vector<VkFramebuffer> framebuffersDestroyed;
+    std::vector<VkRenderPass> renderPassesDestroyed;
+    std::vector<VkImageView> imageViewsDestroyed;
+    PFN_vkDestroyFramebuffer destroyFramebuffer = nullptr;
+    PFN_vkDestroyRenderPass destroyRenderPass = nullptr;
+    PFN_vkDestroyImageView destroyImageView = nullptr;
 };
 
 DescriptorProbe* probe = nullptr;
@@ -82,6 +90,27 @@ VKAPI_ATTR void VKAPI_CALL updateDescriptorSets(VkDevice device,
         }
     }
     probe->updateDescriptorSets(device, writeCount, writes, copyCount, copies);
+}
+
+VKAPI_ATTR void VKAPI_CALL destroyFramebuffer(VkDevice device,
+                                              VkFramebuffer framebuffer,
+                                              const VkAllocationCallbacks* allocator) {
+    probe->framebuffersDestroyed.push_back(framebuffer);
+    probe->destroyFramebuffer(device, framebuffer, allocator);
+}
+
+VKAPI_ATTR void VKAPI_CALL destroyRenderPass(VkDevice device,
+                                             VkRenderPass renderPass,
+                                             const VkAllocationCallbacks* allocator) {
+    probe->renderPassesDestroyed.push_back(renderPass);
+    probe->destroyRenderPass(device, renderPass, allocator);
+}
+
+VKAPI_ATTR void VKAPI_CALL destroyImageView(VkDevice device,
+                                            VkImageView imageView,
+                                            const VkAllocationCallbacks* allocator) {
+    probe->imageViewsDestroyed.push_back(imageView);
+    probe->destroyImageView(device, imageView, allocator);
 }
 
 // A renderable stood in for a surface, without one: its images are the frame slots' own.
@@ -137,13 +166,21 @@ public:
         state.beginCommandBuffer = dispatcher.vkBeginCommandBuffer;
         state.cmdBindDescriptorSets = dispatcher.vkCmdBindDescriptorSets;
         state.updateDescriptorSets = dispatcher.vkUpdateDescriptorSets;
+        state.destroyFramebuffer = dispatcher.vkDestroyFramebuffer;
+        state.destroyRenderPass = dispatcher.vkDestroyRenderPass;
+        state.destroyImageView = dispatcher.vkDestroyImageView;
         probe = &state;
         dispatcher.vkBeginCommandBuffer = beginCommandBuffer;
         dispatcher.vkCmdBindDescriptorSets = cmdBindDescriptorSets;
         dispatcher.vkUpdateDescriptorSets = updateDescriptorSets;
+        dispatcher.vkDestroyFramebuffer = destroyFramebuffer;
+        dispatcher.vkDestroyRenderPass = destroyRenderPass;
+        dispatcher.vkDestroyImageView = destroyImageView;
     }
 
     ~DescriptorTest() {
+        // Objects the context still holds are destroyed with it, through the probe's entry points
+        backend.getDevice()->waitIdle(backend.getDispatcher());
         dispatcher = original;
         probe = nullptr;
     }
@@ -293,7 +330,50 @@ TEST(VulkanDescriptorSet, AnUncreatedTextureBindsTheDummyTexture) {
     const VkImageView dummy = context.getDummyTexture()->getVulkanImageView().get();
     EXPECT_EQ(test.state.imageViews.front(), dummy) << "the uncreated texture's slot is not the dummy texture";
 }
+// An offscreen target (a drape, hillshade or heatmap target) dropped while a frame that drew into it
+// may still run: its framebuffer, render pass and depth image must outlive that frame, as its colour
+// image does. They go through the context's deletion queue, which runs once the frame slot that
+// dropped them comes round again, after its fence.
+TEST(VulkanOffscreenTexture, ATargetDroppedWhileItsFrameIsInFlightOutlivesThatFrame) {
+    DescriptorTest<TwoSlotBackend> test;
+    auto& context = test.context;
+    auto target = context.createOffscreenTexture(
+        {64, 64}, gfx::TextureChannelDataType::UnsignedByte, /*depth=*/true, /*stencil=*/true);
 
+    const auto drawInto = [&](gfx::OffscreenTexture& offscreen) {
+        auto encoder = context.createCommandEncoder();
+        auto pass = encoder->createRenderPass(
+            "target", {.renderable = offscreen, .clearColor = Color::white(), .clearDepth = 1.0f, .clearStencil = 0});
+    };
+
+    // Frame 1 draws into the target and is submitted, not waited for.
+    context.beginFrame();
+    drawInto(*target);
+    context.submitFrame();
+    const auto& resource = target->getResource<vulkan::RenderableResource>();
+    const VkFramebuffer framebuffer = resource.getFramebuffer().get();
+    const VkRenderPass renderPass = resource.getRenderPass().get();
+    ASSERT_NE(framebuffer, VK_NULL_HANDLE);
+    ASSERT_NE(renderPass, VK_NULL_HANDLE);
+
+    // Frame 2 takes the other slot while frame 1 may still run, and drops the target.
+    context.beginFrame();
+    const auto viewsBefore = test.state.imageViewsDestroyed.size();
+    target.reset();
+    EXPECT_TRUE(test.state.framebuffersDestroyed.empty()) << "the framebuffer went while its frame may run";
+    EXPECT_TRUE(test.state.renderPassesDestroyed.empty()) << "the render pass went while its frame may run";
+    EXPECT_EQ(test.state.imageViewsDestroyed.size(), viewsBefore) << "an attachment went while its frame may run";
+    context.submitFrame();
+
+    // Frames 3 and 4: once frame 2's slot comes round, after its fence, everything has gone.
+    for (int frame = 3; frame <= 4; ++frame) {
+        context.beginFrame();
+        context.submitFrame();
+    }
+    EXPECT_EQ(test.state.framebuffersDestroyed, std::vector<VkFramebuffer>{framebuffer});
+    EXPECT_EQ(test.state.renderPassesDestroyed, std::vector<VkRenderPass>{renderPass});
+    EXPECT_GE(test.state.imageViewsDestroyed.size(), viewsBefore + 2) << "the colour and depth views";
+}
 // An atlas bin released while frames are in flight comes back once the frame slot fences show that
 // every frame that may have drawn it has completed: with two slots, the release in frame 2 (stamped
 // 3, as frame 3 may still draw it) is free from frame 5, whose slot's fence covers frame 3.

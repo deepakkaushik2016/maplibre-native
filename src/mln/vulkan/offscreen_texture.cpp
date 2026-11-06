@@ -41,9 +41,23 @@ public:
     }
 
     ~OffscreenTextureResource() noexcept override {
-        framebuffer.reset();
-        renderPass.reset();
-        depthAllocation.reset();
+        // A frame still on the GPU may have drawn into the target: its framebuffer, render pass and
+        // depth attachment go when the frame slot comes round again, after its fence, as the colour
+        // image does (Texture2D::destroyTexture). Torn down in this order.
+        if (framebuffer || renderPass || depthAllocation) {
+            struct Attachments {
+                vk::UniqueFramebuffer framebuffer;
+                vk::UniqueRenderPass renderPass;
+                UniqueImageAllocation depthAllocation;
+            };
+            auto attachments = std::make_shared<Attachments>(
+                Attachments{std::move(framebuffer), std::move(renderPass), std::move(depthAllocation)});
+            backend.getContext<Context>().enqueueDeletion([attachments = std::move(attachments)](Context&) {
+                attachments->framebuffer.reset();
+                attachments->renderPass.reset();
+                attachments->depthAllocation.reset();
+            });
+        }
         colorTexture.reset();
 
         backend.getContext().renderingStats().numFrameBuffers--;
