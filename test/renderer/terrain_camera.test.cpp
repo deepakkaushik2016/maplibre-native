@@ -649,7 +649,8 @@ struct TerrainTransitionTest {
         };
         map.easeTo(CameraOptions().withCenter(westTarget), animation);
 
-        const auto deadline = Clock::now() + Seconds(20);
+        // The transition's own length, and slack for a slow frame past its end
+        const auto deadline = Clock::now() + duration + Seconds(20);
         while (!finished && Clock::now() < deadline) {
             renderFrame();
             whileRunning(finished);
