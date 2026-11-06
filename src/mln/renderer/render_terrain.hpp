@@ -320,8 +320,8 @@ public:
      */
     std::optional<double> raycastAltitude(const TransformState& state, const std::array<vec3, 2>& ray) const;
 
-    /// Moves on whenever the set of DEM tiles with data changes, so a raycast that missed for
-    /// want of DEM need only be tried again once it has.
+    /// Moves on whenever the set of DEM tiles with data, or the heights one of them holds,
+    /// changes, so a raycast that missed for want of DEM need only be tried again once it has.
     uint64_t getDEMCoverGeneration() const { return demCoverGeneration; }
 
     /**
@@ -527,10 +527,11 @@ private:
     // Layer group and viewport-sized target for the terrain depth pass
     LayerGroupBasePtr depthLayerGroup;
     std::shared_ptr<RenderTarget> depthRenderTarget;
-    // The depth pass output only changes when the camera moves or the terrain mesh
-    // set changes, so it is re-rendered only then (as maplibre-gl-js's maybeDrawDepth
-    // does) instead of every frame. depthDirty is set when depth drawables are added
-    // or removed; lastDepthProjMatrix detects camera movement.
+    // The depth pass output only changes when the camera moves, the terrain mesh set
+    // changes or a DEM tile's heights change, so it is re-rendered only then (as
+    // maplibre-gl-js's maybeDrawDepth does) instead of every frame. depthDirty is set when
+    // depth drawables are added or removed and when a DEM texture is uploaded again;
+    // lastDepthProjMatrix detects camera movement.
     bool depthDirty = true;
     std::optional<mat4> lastDepthProjMatrix;
     // The group the depth target currently holds; re-attached (and the pass re-run) only when
@@ -602,7 +603,8 @@ private:
     // this, preventing unbounded growth while browsing (previously reached 2GB+)
     static constexpr size_t maxDEMTextures = 96;
     uint64_t demUpdateCounter = 0;
-    /// getDEMCoverGeneration, and the count and hash of the DEM tiles with data it was taken for.
+    /// getDEMCoverGeneration, and the count and hash of the DEM tiles with data it was taken for
+    /// (it also moves on when one of their DEM textures is uploaded again).
     uint64_t demCoverGeneration = 0;
     size_t demCoverCount = 0;
     size_t demCoverHash = 0;

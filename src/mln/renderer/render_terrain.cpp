@@ -601,6 +601,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     // visits them, so the DEM cover's generation moves when that set changes.
     size_t demCount = 0;
     size_t demHash = 0;
+    bool demChanged = false;
     for (const auto& renderTile : *renderTiles) {
         const auto& tile = renderTile.getTile();
         if (tile.kind != Tile::Kind::RasterDEM) {
@@ -622,9 +623,13 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                     // The tile's DEM changed since the upload (a reload, or a border backfilled
                     // from a neighbour that arrived later): upload it again into the same
                     // texture, so every drawable bound to it draws the new heights. Only when the
-                    // DEM changes; O(1) per DEM tile per frame otherwise.
+                    // DEM changes; O(1) per DEM tile per frame otherwise. The packed depth drawn
+                    // from it is stale too, and a raycast that missed the old heights may hit the
+                    // new ones.
                     existing->second.texture->setImage(demData->getImagePtr());
                     existing->second.revision = demData->getRevision();
+                    depthDirty = true;
+                    demChanged = true;
 #if MLN_RENDER_BACKEND_OPENGL
                     packDEMArrayLayer(context, renderTile.id, *demData);
 #endif
@@ -644,7 +649,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         }
     }
 
-    if (demCount != demCoverCount || demHash != demCoverHash) {
+    if (demChanged || demCount != demCoverCount || demHash != demCoverHash) {
         demCoverCount = demCount;
         demCoverHash = demHash;
         ++demCoverGeneration;
@@ -1426,11 +1431,12 @@ void RenderTerrain::renderDepth(RenderOrchestrator& orchestrator,
     if (!depthRenderTarget) {
         return;
     }
-    // The packed-depth output is a function of the camera projection and the terrain mesh set
-    // only. When neither changed since the last depth render, the existing depth texture is
-    // still correct - skip the whole pass. This is what makes a static scene cheap; the depth
-    // is redrawn only on camera movement or a mesh/tile change. (From 604f293; without this
-    // gate the pass ran every frame, which is the state that flickered.)
+    // The packed-depth output is a function of the camera projection, the terrain mesh set and
+    // the DEM heights (update() marks a DEM change dirty) only. When none changed since the last
+    // depth render, the existing depth texture is still correct - skip the whole pass. This is
+    // what makes a static scene cheap; the depth is redrawn only on camera movement or a
+    // mesh/tile/DEM change. (From 604f293; without this gate the pass ran every frame, which is
+    // the state that flickered.)
     const mat4& proj = parameters.transformParams.projMatrix;
     const bool cameraMoved = !lastDepthProjMatrix || *lastDepthProjMatrix != proj;
     if (!depthDirty && !cameraMoved) {
