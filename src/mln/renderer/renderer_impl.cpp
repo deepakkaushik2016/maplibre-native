@@ -355,10 +355,12 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         // ids of all draped drawables, the draped group count, and the INTEGER tile-zoom
         // (not the continuous zoom), so pan / pitch / in-level pinch reuse the baked drape
         // textures and drapes re-render only when the covering tiles or integer zoom change
-        // (matches maplibre-gl-js). The paint-property epoch is deliberately not folded in:
-        // a paint change that alters draped geometry rebuilds its drawables (new covering
-        // set, captured below), whereas folding the global epoch would re-render every drape
-        // on any transition (e.g. a single label fading in).
+        // (matches maplibre-gl-js). The global paint-property epoch is deliberately not folded
+        // in, since it would re-render every drape on any transition (e.g. a single label
+        // fading in). Each draped layer's own paint revision and each bucket's feature-state
+        // revision are (see RenderTarget::drapedSourceHash): a paint or feature-state change
+        // keeps the same tiles and buckets, and the cached drape kept the old paint until the
+        // covering tiles or the integer zoom moved.
         const bool terrainActive = orchestrator.getRenderTerrain() != nullptr;
         bool drapedContentChanged = true;
         if (terrainActive) {
@@ -394,7 +396,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
                     // re-renders the drape instead of serving the stale bake until the next zoom.
                     // Keyed on the bucket id or DEM texture (stable across paint/fade), not the
                     // drawable id (which churns every frame). See RenderTarget::drapedSourceHash.
-                    util::hash_combine(h, RenderTarget::drapedSourceHash(drawable));
+                    util::hash_combine(h, RenderTarget::drapedSourceHash(layerGroup, drawable));
                     util::hash_combine(signature, h);
                     drapedTiles.emplace_back(tile, h);
                 });
@@ -454,7 +456,10 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             // enableAndroidEmulatorGoldfishMitigation) leave the signature as it was, and a drape
             // target that enters the cover while the camera moves draws them - with no uniforms,
             // which left those targets blank.
+            // Only tile layer groups are drawn into the drape; a draped plain layer group (an
+            // image source's raster, a heatmap's composite) is drawn to the screen every frame.
             const bool skipDrapedTweaker = terrainActive && !drapedContentChanged &&
+                                           layerGroup.getType() == LayerGroupBase::Type::TileLayerGroup &&
                                            layerGroup.shouldRenderToTerrain() && !layerGroup.hasUntweakedDrawables();
             if (!skipDrapedTweaker) {
                 layerGroup.runTweakers(renderTree, parameters);

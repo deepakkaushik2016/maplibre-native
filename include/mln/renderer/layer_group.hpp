@@ -110,6 +110,14 @@ public:
     /// a group whose content it judges unchanged (the terrain drape cache) checks this first.
     bool hasUntweakedDrawables() const { return untweakedDrawables; }
 
+    /// Bumped when the layer's evaluated paint may have changed for a reason other than the
+    /// camera: a style edit, a running paint transition or a global-state change (see
+    /// RenderOrchestrator). The terrain drape cache folds it into each draped drawable's content
+    /// hash, so a paint change re-renders the drape targets that layer covers on the next frame,
+    /// and nothing re-renders while it stays the same.
+    uint64_t getPaintRevision() const { return paintRevision; }
+    void markPaintChanged() { ++paintRevision; }
+
     /// Get the uniform buffers attached to this layer group
     virtual const gfx::UniformBufferArray& getUniformBuffers() const = 0;
 
@@ -131,6 +139,8 @@ protected:
     gfx::ContextObserver* observer;
     /// See hasUntweakedDrawables
     bool untweakedDrawables = false;
+    /// See getPaintRevision
+    uint64_t paintRevision = 0;
 };
 
 /**

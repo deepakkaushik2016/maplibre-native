@@ -417,10 +417,20 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
         const bool globalStateChangedAndMatters = globalStateChanged && !layerAddedOrChanged &&
                                                   (layer.getStyleDependencies() & Dependency::GlobalState);
 
+        // The paint may change for a reason other than the camera: a style edit, a running
+        // transition, or the global state. Mark the layer's group so the terrain drape - cached
+        // per tile and re-rendered only when its content signature moves - redraws it on this
+        // frame. A zoom change or crossfade alone does not mark it: the drape is keyed on the
+        // integer zoom already, and marking it would re-render the drape on every frame of a pinch.
+        const bool paintMayHaveChanged = layerAddedOrChanged || globalStateChangedAndMatters || layer.hasTransition();
+
         if (layerAddedOrChanged || zoomChangedAndMatters || globalStateChangedAndMatters ||
             evaluationParameters.hasCrossfade || layer.hasTransition()) {
             const auto previousMask = layer.evaluatedProperties->constantsMask();
             layer.evaluate(evaluationParameters);
+            if (paintMayHaveChanged) {
+                layer.markPaintChanged();
+            }
             if (previousMask != layer.evaluatedProperties->constantsMask()) {
                 constantsMaskChanged.insert(id);
             }

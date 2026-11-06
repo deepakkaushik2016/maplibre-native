@@ -601,7 +601,7 @@ void GeometryTile::performedFadePlacement() {
     }
 }
 
-void GeometryTile::setFeatureState(const LayerFeatureStates& states) {
+void GeometryTile::setFeatureState(const LayerFeatureStates& states, bool changed) {
     MLN_TRACE_FUNC();
 
     const auto layers = getData();
@@ -623,6 +623,11 @@ void GeometryTile::setFeatureState(const LayerFeatureStates& states) {
             }
             if (const auto bucket = renderData.bucket; bucket && bucket->hasData()) {
                 bucket->update(featureStates, *sourceLayer, layerID, layoutResult->imageAtlas.patternPositions);
+                // Only a real change re-renders the terrain drape: the states are re-applied on
+                // every frame once any is set, and that must not invalidate the drape at rest.
+                if (changed) {
+                    bucket->markFeatureStateChanged();
+                }
             }
         }
     }

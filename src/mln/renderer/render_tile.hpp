@@ -82,7 +82,7 @@ public:
                             const TransformState& state,
                             bool inViewportPixelUnits) const;
 
-    void setFeatureState(const LayerFeatureStates&);
+    void setFeatureState(const LayerFeatureStates&, bool changed);
 
 private:
     Tile& tile;

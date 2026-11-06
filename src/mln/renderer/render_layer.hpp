@@ -201,6 +201,14 @@ public:
     /// Remove all the drawables for tiles
     virtual std::size_t removeAllDrawables();
 
+    /// Records that the evaluated paint may have changed for a reason other than the camera, so a
+    /// terrain drape holding this layer re-renders (LayerGroupBase::getPaintRevision). O(1).
+    void markPaintChanged() {
+        if (layerGroup) {
+            layerGroup->markPaintChanged();
+        }
+    }
+
     using Dependency = style::expression::Dependency;
     Dependency getStyleDependencies() const { return styleDependencies; }
 

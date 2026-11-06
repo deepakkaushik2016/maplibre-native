@@ -105,7 +105,7 @@ public:
     void performedFadePlacement() override;
     std::shared_ptr<FeatureIndex> getFeatureIndex() const;
 
-    void setFeatureState(const LayerFeatureStates&) override;
+    void setFeatureState(const LayerFeatureStates&, bool changed) override;
 
 protected:
     const GeometryTileData* getData() const;

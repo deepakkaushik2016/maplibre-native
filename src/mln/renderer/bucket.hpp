@@ -74,6 +74,13 @@ public:
 
     const util::SimpleIdentity& getID() const { return bucketID; }
 
+    /// Bumped when a feature-state change has been applied to this bucket's paint attributes
+    /// (update), which rewrites them in place under the same bucket id. The terrain drape cache
+    /// folds it in with the id (RenderTarget::drapedSourceHash), so the drape of this tile
+    /// re-renders on the next frame.
+    uint64_t getFeatureStateRevision() const { return featureStateRevision; }
+    void markFeatureStateChanged() { ++featureStateRevision; }
+
 #if MLN_SYMBOL_GUARDS
     virtual bool check(source_location) { return true; }
 #else
@@ -98,6 +105,8 @@ protected:
     std::atomic<bool> uploaded{false};
 
     util::SimpleIdentity bucketID;
+
+    uint64_t featureStateRevision = 0;
 
     std::optional<std::thread::id> renderThreadID;
 

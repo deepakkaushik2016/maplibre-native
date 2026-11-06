@@ -114,8 +114,9 @@ void RenderTarget::updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& par
     drapeGlobalParamsRecorded = true;
 }
 
-std::size_t RenderTarget::drapedSourceHash(const gfx::Drawable& drawable) {
+std::size_t RenderTarget::drapedSourceHash(const LayerGroupBase& layerGroup, const gfx::Drawable& drawable) {
     std::size_t hash = 0;
+    util::hash_combine(hash, layerGroup.getPaintRevision());
     // The hillshade's drawable samples its tile's prepare target, made anew (with a new texture)
     // when the tile's DEM changes; the color relief's samples the DEM itself, uploaded anew then.
     std::optional<size_t> demTexture;
@@ -128,6 +129,7 @@ std::size_t RenderTarget::drapedSourceHash(const gfx::Drawable& drawable) {
         util::hash_combine(hash, std::hash<const void*>{}(drawable.getTexture(*demTexture).get()));
     } else if (const auto& bucket = drawable.getBucket()) {
         util::hash_combine(hash, bucket->getID().id());
+        util::hash_combine(hash, bucket->getFeatureStateRevision());
     }
     return hash;
 }
@@ -171,8 +173,9 @@ RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrato
             // or a hillshade or color relief whose DEM changed - is new content and must
             // re-render the drape. Keying on the tiles alone judged it the same and kept the
             // stale bake until the next zoom level. Bucket ids and DEM textures are stable
-            // across fades and paint changes, so this does not churn.
-            const std::size_t bucketHash = drapedSourceHash(drawable);
+            // across fades, so this does not churn; a paint or feature-state change moves the
+            // revisions folded in with them, and re-renders the drape once.
+            const std::size_t bucketHash = drapedSourceHash(layerGroup, drawable);
             if (overlaps) {
                 // Key on the COVERING TILE id, NOT the drawable-instance id. A tile's
                 // drawables are rebuilt with fresh ids on every bucket update, fade
@@ -363,7 +366,7 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
                 targetSignature = it->second;
             }
         }
-        if (bakedSignature && *bakedSignature == targetSignature) {
+        if (bakedSignature && *bakedSignature == targetSignature && !clearColorChanged) {
             return RenderResult::Skipped;
         }
 
@@ -379,7 +382,7 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
         // texture is already correct: keep it. This is what makes panning cheap,
         // since panning changes none of them, and it is the maplibre-gl-js
         // behaviour (render a terrain tile's texture only when its stack changes).
-        if (coverage.sameContentAs(bakedCoverage)) {
+        if (coverage.sameContentAs(bakedCoverage) && !clearColorChanged) {
             bakedSignature = targetSignature;
             return RenderResult::Skipped;
         }
@@ -392,7 +395,7 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
         // drawable set changing (contentHash) or crossing an integer zoom - is not
         // "worse" and falls through to re-render. The target's lifetime bounds
         // staleness: when its terrain tile leaves the cover it is destroyed.
-        if (coverage.worseThan(bakedCoverage)) {
+        if (coverage.worseThan(bakedCoverage) && !clearColorChanged) {
             // Keeping the already-baked (better) content: record that at this
             // signature the decision was to hold, so future identical frames skip
             // the scan too. A real change (drawable set, zoom, properties) moves the
@@ -413,6 +416,7 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
 
         bakedCoverage = coverage;
         bakedSignature = targetSignature;
+        clearColorChanged = false;
 
         // Committed to re-rendering this drape (a cache miss). Count it so the
         // measure-first overlay can show drape churn per frame.

@@ -45,8 +45,15 @@ public:
     RenderTarget(gfx::Context& context, const Size size, const gfx::TextureChannelDataType type, bool stencil);
     ~RenderTarget();
 
-    /// Set the color the render target is cleared to before its layer groups are drawn
-    void setClearColor(const Color& color) { backgroundColor = color; }
+    /// Set the color the render target is cleared to before its layer groups are drawn. A drape
+    /// target is cleared to the map's solid background (the background layer drawn as a colour),
+    /// so a new colour must re-render its cached drape.
+    void setClearColor(const Color& color) {
+        if (color != backgroundColor) {
+            backgroundColor = color;
+            clearColorChanged = true;
+        }
+    }
 
     /// Mark this render target as a terrain drape target for the given tile.
     /// Drape targets render the orchestrator's draped tile layer groups
@@ -183,6 +190,9 @@ protected:
     // fewer layers / coarser fallbacks than it already shows (anti-flicker);
     // see RenderTarget::render.
     DrapeCoverage bakedCoverage;
+    // The clear colour changed since the drape was last baked (setClearColor): re-render it even
+    // though the drawables it covers did not change.
+    bool clearColorChanged = false;
     // Opt-in "render once" for immutable targets (hillshade prepare, whose DEM input is
     // baked into the prepare drawable once). When set, the target renders on its first
     // frame and is skipped after (the offscreen texture persists). NOT set for the terrain
@@ -203,8 +213,12 @@ public:
     /// covering tile: its source bucket's id, or, for the hillshade and color-relief layers
     /// (whose drawables hold no bucket), the texture they sample the DEM through. Those are made
     /// anew when the tile's DEM changes - a reload, or a border backfilled from a neighbour that
-    /// arrived later - so the drape is re-rendered then, and only then. O(1).
-    static std::size_t drapedSourceHash(const gfx::Drawable&);
+    /// arrived later - so the drape is re-rendered then, and only then. Also folded in: the
+    /// bucket's feature-state revision (paint attributes rewritten in place under the same id) and
+    /// the layer group's paint revision (a style edit, a running transition or a global-state
+    /// change), so a paint change re-renders the drape targets the layer covers on the next frame.
+    /// O(1).
+    static std::size_t drapedSourceHash(const LayerGroupBase&, const gfx::Drawable&);
 
 protected:
     // This target's own content signature (PaintParameters::perTargetDrapeSignature)

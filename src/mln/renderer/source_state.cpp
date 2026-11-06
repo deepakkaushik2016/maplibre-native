@@ -45,6 +45,9 @@ void SourceFeatureState::getState(FeatureState& result,
 void SourceFeatureState::coalesceChanges(std::vector<RenderTile>& tiles) {
     MLN_TRACE_FUNC();
 
+    // A state was set or removed since the last call (the current states are re-sent below on
+    // every call, for tiles loaded since).
+    const bool changed = !stateChanges.empty() || !deletedStates.empty();
     LayerFeatureStates changes;
     for (const auto& layerStatesEntry : stateChanges) {
         const auto& sourceLayer = layerStatesEntry.first;
@@ -104,7 +107,7 @@ void SourceFeatureState::coalesceChanges(std::vector<RenderTile>& tiles) {
     }
 
     for (auto& tile : tiles) {
-        tile.setFeatureState(changes);
+        tile.setFeatureState(changes, changed);
     }
 }
 
