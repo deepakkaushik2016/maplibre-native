@@ -114,12 +114,16 @@ public:
         renderPassDescriptor.reset();
     }
 
-    PremultipliedImage readStillImage() {
-        // The CPU reads the texture: wait for the last pass that drew it.
+    void waitUntilCompleted() {
         if (lastCommitted) {
             lastCommitted->waitUntilCompleted();
             lastCommitted.reset();
         }
+    }
+
+    PremultipliedImage readStillImage() {
+        // The CPU reads the texture: wait for the last pass that drew it.
+        waitUntilCompleted();
         assert(static_cast<Texture2D*>(colorTexture.get())->getMetalTexture());
 
         auto data = std::make_unique<uint8_t[]>(colorTexture->getDataSize());
@@ -173,6 +177,10 @@ bool OffscreenTexture::isRenderable() {
 
 PremultipliedImage OffscreenTexture::readStillImage() {
     return getResource<OffscreenTextureResource>().readStillImage();
+}
+
+void OffscreenTexture::waitUntilCompleted() {
+    getResource<OffscreenTextureResource>().waitUntilCompleted();
 }
 
 const gfx::Texture2DPtr& OffscreenTexture::getTexture() {

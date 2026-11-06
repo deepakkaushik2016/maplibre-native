@@ -17,6 +17,7 @@ public:
     ~HeadlessBackend() override;
     gfx::Renderable& getDefaultRenderable() override;
     PremultipliedImage readStillImage() override;
+    /// The frame's texture, with the GPU's work on it finished.
     MTL::Texture* getMetalTexture();
     RendererBackend* getRendererBackend() override;
     SwapBehaviour getSwapBehaviour();

@@ -31,6 +31,9 @@ public:
     PremultipliedImage readStillImage() { return offscreenTexture->readStillImage(); }
 
     MTL::Texture* getMetalTexture() {
+        // Handed to a host outside the engine's queue: complete on return, as it was when every
+        // pass waited for the GPU.
+        static_cast<mtl::OffscreenTexture&>(*offscreenTexture).waitUntilCompleted();
         return static_cast<Texture2D*>(offscreenTexture->getTexture().get())->getMetalTexture();
     }
 
