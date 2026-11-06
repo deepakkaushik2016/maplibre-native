@@ -237,7 +237,11 @@ void ImageDescriptorSet::update(const std::array<gfx::Texture2DPtr, shaders::max
 
     for (size_t id = 0; id < shaders::maxTextureCountPerShader; ++id) {
         const auto& texture = id < textures.size() ? textures[id] : nullptr;
-        auto& textureImpl = texture ? static_cast<Texture2D&>(*texture) : *context.getDummyTexture();
+        auto* bound = texture ? static_cast<Texture2D*>(texture.get()) : nullptr;
+        // A texture whose image was never created (an attachment no pass has drawn yet) has no
+        // view to write; bind the dummy texture in its place rather than dereference it. Only
+        // written on a dirty update, so it costs nothing per draw.
+        auto& textureImpl = bound && bound->hasImage() ? *bound : *context.getDummyTexture();
 
         const auto descriptorImageInfo = vk::DescriptorImageInfo()
                                              .setImageLayout(textureImpl.getVulkanImageLayout())

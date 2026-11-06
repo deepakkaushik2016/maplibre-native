@@ -82,6 +82,9 @@ public:
     vk::Format getVulkanFormat() const { return vulkanFormat(pixelFormat, channelType); }
 
     const vk::ImageLayout& getVulkanImageLayout() const { return imageLayout; }
+    /// Whether the image exists: it is created on the first upload or, for an attachment, when
+    /// its render target is first bound. The accessors below require it.
+    bool hasImage() const noexcept { return imageAllocation && imageAllocation->imageView; }
     const vk::UniqueImageView& getVulkanImageView() const { return imageAllocation->imageView; }
     const vk::Image& getVulkanImage() const { return imageAllocation->image; }
     const vk::Sampler& getVulkanSampler();
