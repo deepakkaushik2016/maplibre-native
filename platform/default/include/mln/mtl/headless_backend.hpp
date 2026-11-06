@@ -17,7 +17,9 @@ public:
     ~HeadlessBackend() override;
     gfx::Renderable& getDefaultRenderable() override;
     PremultipliedImage readStillImage() override;
-    /// The frame's texture, with the GPU's work on it finished.
+    /// The frame's texture, with the GPU's work on it finished. Blocks until the last pass that drew
+    /// it has completed on the GPU, so call it on the thread that renders with this backend, between
+    /// frames, never from a thread that the frame's GPU work waits on.
     MTL::Texture* getMetalTexture();
     RendererBackend* getRendererBackend() override;
     SwapBehaviour getSwapBehaviour();

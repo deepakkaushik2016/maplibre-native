@@ -98,8 +98,9 @@ TEST(MetalTexture, TheHeadlessTextureHoldsTheFrameWhenHandedOut) {
 }
 
 // Offscreen passes are not waited for: a later pass that samples their texture is ordered after
-// them by Metal's hazard tracking, which holds for tracked resources, also across command queues.
-// Every texture the engine makes, and so every render target's, must be tracked.
+// them by Metal's hazard tracking, which holds for tracked resources submitted to one command queue
+// (across queues it takes an event; see TheFrameAndOffscreenPassesShareTheBackendQueue). Every
+// texture the engine makes, and so every render target's colour, depth and stencil, must be tracked.
 TEST(MetalTexture, EngineTexturesAreHazardTracked) {
     mtl::HeadlessBackend backend({64, 64});
     gfx::BackendScope scope{backend};
@@ -113,6 +114,8 @@ TEST(MetalTexture, EngineTexturesAreHazardTracked) {
     const auto& descriptor = target->getResource<mtl::RenderableResource>().getRenderPassDescriptor();
     ASSERT_NE(descriptor->depthAttachment()->texture(), nullptr);
     EXPECT_EQ(descriptor->depthAttachment()->texture()->hazardTrackingMode(), MTL::HazardTrackingModeTracked);
+    ASSERT_NE(descriptor->stencilAttachment()->texture(), nullptr);
+    EXPECT_EQ(descriptor->stencilAttachment()->texture()->hazardTrackingMode(), MTL::HazardTrackingModeTracked);
     target->getResource<mtl::RenderableResource>().swap();
 
     auto texture = context.createTexture2D();
