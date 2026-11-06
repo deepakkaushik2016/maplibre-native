@@ -248,3 +248,104 @@ TEST(TerrainDrape, AGeoJSONChangeShowsInTheFirstStillFrameAfterIt) {
     }
     EXPECT_EQ(red, 49) << "the patch is not drawn at (" << px << ", " << py << ") in the first still frame";
 }
+
+namespace {
+
+// Flat ground under one fill that covers the whole view, coloured from its feature's "color".
+const char* swatchStyle = R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 11,
+      "tileSize": 256
+    },
+    "swatch": {"type": "geojson", "data": {"type": "FeatureCollection", "features": []}}
+  },
+  "terrain": {"source": "dem", "exaggeration": 1.0},
+  "layers": [
+    {"id": "background", "type": "background", "paint": {"background-color": "white"}},
+    {"id": "swatch", "type": "fill", "source": "swatch",
+     "paint": {"fill-color": ["get", "color"], "fill-antialias": false}}
+  ]
+})STYLE";
+
+} // namespace
+
+// A still image read right after a frame holds that frame's drape. The drape targets and the
+// frame are only committed to the GPU, not waited for, so reading the frame must wait for it; an
+// image read before the GPU finished shows the previous frame's colour, or none. Each frame
+// changes the drape's colour, so a stale read fails whichever frame it happens in.
+TEST(TerrainDrape, AStillImageReadRightAfterTheFrameHoldsThatFramesDrape) {
+    util::RunLoop loop;
+    auto fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    const std::string dem = flatDemTile(groundMeters);
+    fileSource->tileResponse = [&](const Resource&) {
+        Response res;
+        res.data = std::make_shared<std::string>(dem);
+        return res;
+    };
+    HeadlessFrontend frontend{{512, 512}, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize()));
+    map.getStyle().loadJSON(swatchStyle);
+    const LatLng center{46.0, 10.0};
+    map.jumpTo(CameraOptions().withCenter(center).withZoom(14.0).withPitch(45.0).withCenterAltitude(groundMeters));
+
+    const auto setColor = [&](const char* color) {
+        mapbox::feature::property_map properties;
+        properties["color"] = std::string(color);
+        map.getStyle().getSource("swatch")->as<style::GeoJSONSource>()->setGeoJSON(mapbox::feature::feature<double>{
+            Polygon<double>{{{9.5, 45.5}, {10.5, 45.5}, {10.5, 46.5}, {9.5, 46.5}, {9.5, 45.5}}},
+            std::move(properties)});
+    };
+
+    // A still frame, read as soon as it is done (as HeadlessFrontend::render does), waited for at
+    // most 30 s.
+    PremultipliedImage image;
+    const auto renderStill = [&] {
+        bool done = false;
+        std::exception_ptr error;
+        gfx::BackendScope guard{*frontend.getBackend()};
+        map.renderStill([&](const std::exception_ptr& e) {
+            error = e;
+            if (!e) {
+                image = frontend.readStillImage();
+            }
+            done = true;
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!done && std::chrono::steady_clock::now() < deadline) {
+            loop.runOnce();
+        }
+        return done && !error;
+    };
+
+    // The lower half of the view is ground near the camera, all of it under the swatch.
+    const auto countColor = [&](bool red) {
+        int count = 0;
+        for (uint32_t y = image.size.height / 2; y < image.size.height - 8; ++y) {
+            for (uint32_t x = 8; x < image.size.width - 8; ++x) {
+                const uint8_t* p = image.data.get() + (static_cast<size_t>(y) * image.size.width + x) * 4;
+                const bool isRed = p[0] > 200 && p[1] < 60 && p[2] < 60;
+                const bool isBlue = p[0] < 60 && p[1] < 60 && p[2] > 200;
+                count += (red ? isRed : isBlue) ? 1 : 0;
+            }
+        }
+        return count;
+    };
+    for (int frame = 0; frame < 8; ++frame) {
+        const bool red = frame % 2 == 0;
+        setColor(red ? "#f00" : "#00f");
+        ASSERT_TRUE(renderStill()) << "still frame " << frame << " did not finish";
+        const int area = static_cast<int>((image.size.height / 2 - 8) * (image.size.width - 16));
+        ASSERT_GT(area, 0);
+        EXPECT_GT(countColor(red), area * 99 / 100)
+            << "frame " << frame << " (" << (red ? "red" : "blue") << ") read before its drape was drawn; "
+            << countColor(!red) << " px still show the previous frame";
+    }
+}
