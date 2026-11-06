@@ -445,7 +445,8 @@ public:
     void prepareDepthTarget(PaintParameters&);
 
     /// The packed-RGBA terrain depth texture for the current frame, or a 1x1
-    /// far-plane placeholder while the depth pass has not rendered yet
+    /// far-plane placeholder while the depth pass has nothing to draw (and so
+    /// has not drawn the target)
     const std::shared_ptr<gfx::Texture2D>& getDepthTexture(gfx::Context&);
 
     /// Layer group holding the terrain depth-pass drawables (not part of the

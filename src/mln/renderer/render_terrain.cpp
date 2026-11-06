@@ -1510,7 +1510,12 @@ void RenderTerrain::prepareDepthTarget(PaintParameters& parameters) {
 }
 
 const std::shared_ptr<gfx::Texture2D>& RenderTerrain::getDepthTexture(gfx::Context& context) {
-    if (depthRenderTarget && depthRenderTarget->getTexture()) {
+    // The target holds depth only while the depth pass has drawables: renderDepth then draws it
+    // later this frame, or drew it for the same drawables and camera before. With none (no DEM
+    // tile has arrived yet, or every one left) the pass never runs, and the target's texture was
+    // never drawn into: on Vulkan and Metal it has no image yet, which Vulkan dereferenced when
+    // a symbol bound it. Nothing occludes then, so the symbols test against the far plane.
+    if (depthRenderTarget && depthRenderTarget->getTexture() && depthLayerGroup && !depthLayerGroup->empty()) {
         return depthRenderTarget->getTexture();
     }
     if (!placeholderDepthTexture) {

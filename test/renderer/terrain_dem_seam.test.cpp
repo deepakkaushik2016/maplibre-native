@@ -152,6 +152,8 @@ struct SceneOptions {
     std::string points;
     /// A layer of source "points": its JSON. The style image "dot" (a red square) is added.
     std::string pointLayer;
+    /// Whether every DEM tile's answer is held back, cache and network, so none ever arrives.
+    bool holdEveryDEMTile = false;
 };
 
 std::string seamStyle(const SceneOptions& options) {
@@ -270,6 +272,13 @@ struct SeamScene {
             }
             const CanonicalTileID id(
                 resource.tileData->z, static_cast<uint32_t>(resource.tileData->x), resource.tileData->y);
+            if (options.holdEveryDEMTile) {
+                if (resource.loadingMethod == Resource::LoadingMethod::CacheOnly) {
+                    res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "not cached");
+                    return res;
+                }
+                return std::nullopt; // still on its way
+            }
             const auto rule = rules.find(id);
             if (resource.loadingMethod == Resource::LoadingMethod::CacheOnly) {
                 if (rule == rules.end() || !rule->second.cachedOffset) {
@@ -555,6 +564,45 @@ TEST(TerrainDEMSeam, HoldsWhenTheTilesComeBackNotModified) {
     ASSERT_GT(scene.notModifiedLoads, 0) << "no tile was revalidated on the way back";
     expectSeamOnThePlane(scene, "after a 304");
     expectFrameAsLoadedAtOnce(scene, "after a 304");
+}
+
+// How many pixels of `image` are the red of the style image "dot".
+int redPixels(const PremultipliedImage& image) {
+    int count = 0;
+    const size_t n = static_cast<size_t>(image.size.width) * image.size.height;
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t* px = image.data.get() + i * 4;
+        if (px[0] > 200 && px[1] < 60 && px[2] < 60) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// Icons drawn while no DEM tile has arrived: the terrain has no mesh yet, so the depth pass has
+// nothing to draw and never runs. The icons must test against the far plane then, not against the
+// depth target, whose texture nothing has drawn into and which has no image yet: Vulkan
+// dereferenced its missing image view when binding it (a segfault whenever the icons' tile was
+// drawn before the first DEM tile), and Metal sampled nothing there, which hid every icon.
+TEST(TerrainDEMSeam, ShowsTheIconsWhileNoDEMTileHasArrived) {
+    const LatLng origin = corner();
+    const double kmPerLng = kmPerDegree * std::cos(util::deg2rad(origin.latitude()));
+    std::vector<LatLng> icons;
+    for (const double northKm : {-0.2, 0.0, 0.2}) {
+        for (const double eastKm : {-0.2, 0.0, 0.2}) {
+            icons.emplace_back(origin.latitude() + northKm / kmPerDegree, origin.longitude() + eastKm / kmPerLng);
+        }
+    }
+    SceneOptions options;
+    options.holdEveryDEMTile = true;
+    options.points = multiPoint(icons);
+    options.pointLayer = R"({"id": "icons", "type": "symbol", "source": "points",
+        "layout": {"icon-image": "dot", "icon-allow-overlap": true, "icon-ignore-placement": true}})";
+    SeamScene scene({}, options);
+    ASSERT_TRUE(scene.networkLoads.empty()) << "a DEM tile arrived";
+    ASSERT_FALSE(scene.elevation(origin)) << "the terrain has heights, so a DEM tile arrived";
+    // Nine 8 px squares; a few edge pixels may blend.
+    EXPECT_GE(redPixels(scene.image()), 9 * 40) << "the icons are hidden while no DEM tile has arrived";
 }
 
 // The packed terrain depth, against which symbols test whether the ground hides them: a tile whose
