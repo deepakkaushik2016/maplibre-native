@@ -641,9 +641,9 @@ struct TerrainTransitionTest {
     // Eases west onto the 2000 m plateau; `whileRunning` is called after every frame of the
     // transition. Returns once the transition has finished and a few more frames rendered.
     template <typename Fn>
-    bool easeWest(Fn whileRunning) {
+    bool easeWest(Fn whileRunning, Milliseconds duration = Milliseconds(1500)) {
         bool finished = false;
-        AnimationOptions animation(Milliseconds(1500));
+        AnimationOptions animation(duration);
         animation.transitionFinishFn = [&] {
             finished = true;
         };
@@ -683,21 +683,35 @@ TEST(TerrainCamera, ClampWaitsForTransitionToEnd) {
 // A terrain removed while the clamp waits for a transition takes the waiting height with it:
 // once the transition ends, the centre returns to sea level and the clamp does not raise it
 // back onto ground that is no longer drawn.
+//
+// The transition runs on the wall clock, so a frame must land in it after the centre is over the
+// plateau. On a loaded machine one frame can take longer than the whole transition (seen on
+// llvmpipe beside parallel builds: the first frame after easeTo already ended it), and then no
+// terrain was removed mid-transition and the case says nothing. Such a run is tried again with
+// the transition twice as long; only a terrain removed mid-transition is checked.
 TEST(TerrainCamera, ClampDoesNotApplyAfterTerrainRemoval) {
-    TerrainTransitionTest test;
-    ASSERT_TRUE(test.settleOnPlateau());
+    for (Milliseconds duration(1500); duration <= Milliseconds(24000); duration *= 2) {
+        TerrainTransitionTest test;
+        ASSERT_TRUE(test.settleOnPlateau());
 
-    bool removedMidTransition = false;
-    ASSERT_TRUE(test.easeWest([&](bool finished) {
-        // Well over the 2000 m plateau, so the clamp has a new height waiting.
-        if (!finished && !removedMidTransition && test.map.getCameraOptions({}).center->longitude() < -5.0) {
-            test.map.getStyle().setTerrain(nullptr);
-            removedMidTransition = true;
+        bool removedMidTransition = false;
+        ASSERT_TRUE(test.easeWest(
+            [&](bool finished) {
+                // Well over the 2000 m plateau, so the clamp has a new height waiting.
+                if (!finished && !removedMidTransition && test.map.getCameraOptions({}).center->longitude() < -5.0) {
+                    test.map.getStyle().setTerrain(nullptr);
+                    removedMidTransition = true;
+                }
+            },
+            duration));
+        if (!removedMidTransition) {
+            continue; // no frame landed over the plateau before the transition ended
         }
-    }));
-    ASSERT_TRUE(removedMidTransition);
 
-    EXPECT_NEAR(test.altitude(), 0.0, 0.001);
+        EXPECT_NEAR(test.altitude(), 0.0, 0.001);
+        return;
+    }
+    FAIL() << "no frame landed over the plateau mid-transition, even in a 24 s transition";
 }
 
 // A drape target is drawn into only by the source tiles that overlap its own tile, so the
