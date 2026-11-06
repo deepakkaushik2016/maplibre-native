@@ -9,6 +9,7 @@
 #include <mln/map/map_options.hpp>
 #include <mln/renderer/renderer.hpp>
 #include <mln/storage/response.hpp>
+#include <mln/style/image.hpp>
 #include <mln/style/style.hpp>
 #include <mln/tile/tile_id.hpp>
 #include <mln/util/constants.hpp>
@@ -77,9 +78,25 @@ double planeMeters(const LatLng& point) {
            northSlope * std::clamp(northKm, -planeHalfKm, planeHalfKm);
 }
 
-// The DEM tile z/x/y of the plane, `offset` metres up, each pixel holding the height at its
-// centre (where the samplers place it), in Mapbox Terrain-RGB.
-std::string planeTile(const CanonicalTileID& id, double offset) {
+// Where a cached copy's bump stands: 0.6 km north and 0.3 km east of the corner, inside the
+// north-east tile, 0.4 km wide. Well inside the tile, so it leaves the tile's lowest and highest
+// heights (and so the tile covers drawn from them) as they are.
+constexpr double bumpNorthKm = 0.6;
+constexpr double bumpEastKm = 0.3;
+constexpr double bumpWidthKm = 0.2;
+
+double bumpMeters(const LatLng& point, double height) {
+    const LatLng origin = corner();
+    const double northKm = (point.latitude() - origin.latitude()) * kmPerDegree - bumpNorthKm;
+    const double eastKm = (point.longitude() - origin.longitude()) * kmPerDegree *
+                              std::cos(util::deg2rad(origin.latitude())) -
+                          bumpEastKm;
+    return height * std::exp(-(northKm * northKm + eastKm * eastKm) / (bumpWidthKm * bumpWidthKm));
+}
+
+// The DEM tile z/x/y of the plane, `offset` metres up and with a bump `bump` metres high, each
+// pixel holding the height at its centre (where the samplers place it), in Mapbox Terrain-RGB.
+std::string planeTile(const CanonicalTileID& id, double offset, double bump = 0.0) {
     const double n = std::pow(2.0, id.z);
     PremultipliedImage image({demSize, demSize});
     for (uint32_t row = 0; row < demSize; ++row) {
@@ -87,8 +104,9 @@ std::string planeTile(const CanonicalTileID& id, double offset) {
         const double latitude = util::rad2deg(std::atan(std::sinh(M_PI * (1.0 - 2.0 * mercatorY))));
         for (uint32_t col = 0; col < demSize; ++col) {
             const double longitude = (id.x + (col + 0.5) / demSize) / n * 360.0 - 180.0;
-            const auto value = static_cast<uint32_t>(
-                std::lround((planeMeters({latitude, longitude}) + offset + 10000.0) * 10.0));
+            const auto value = static_cast<uint32_t>(std::lround(
+                (planeMeters({latitude, longitude}) + offset + bumpMeters({latitude, longitude}, bump) + 10000.0) *
+                10.0));
             uint8_t* px = image.data.get() + (static_cast<size_t>(row) * demSize + col) * 4;
             px[0] = static_cast<uint8_t>(value >> 16);
             px[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
@@ -124,7 +142,23 @@ std::string gridGeoJSON() {
     return R"({"type": "MultiLineString", "coordinates": [)" + lines + "]}";
 }
 
-std::string seamStyle() {
+// What a scene draws, besides the grid draped over the terrain.
+struct SceneOptions {
+    double zoom = 14.0;
+    double pitch = 50.0;
+    /// The layer drawn from the DEM itself, draped.
+    std::string demLayer = R"({"id": "hillshade", "type": "hillshade", "source": "dem"})";
+    /// GeoJSON points (a geometry) drawn on the terrain as `pointLayer` draws them.
+    std::string points;
+    /// A layer of source "points": its JSON. The style image "dot" (a red square) is added.
+    std::string pointLayer;
+};
+
+std::string seamStyle(const SceneOptions& options) {
+    const std::string points = options.points.empty()
+                                   ? ""
+                                   : R"(, "points": {"type": "geojson", "data": )" + options.points + "}";
+    const std::string pointLayer = options.pointLayer.empty() ? "" : ", " + options.pointLayer;
     return R"STYLE({
   "version": 8,
   "sources": {
@@ -137,26 +171,44 @@ std::string seamStyle() {
       "tileSize": 256
     },
     "grid": {"type": "geojson", "data": )STYLE" +
-           gridGeoJSON() + R"STYLE(}
+           gridGeoJSON() + "}" + points + R"STYLE(
   },
   "terrain": {"source": "dem", "exaggeration": )STYLE" +
            std::to_string(exaggeration) + R"STYLE(},
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "white"}},
-    {"id": "hillshade", "type": "hillshade", "source": "dem"},
+    )STYLE" +
+           options.demLayer +
+           R"STYLE(,
     {"id": "grid", "type": "line", "source": "grid", "paint": {"line-color": "black", "line-width": 2}}
-  ]
+  )STYLE" + pointLayer +
+           R"STYLE(]
 })STYLE";
 }
 
 // How the file source answers one DEM tile: what the offline cache holds (DefaultFileSource
-// answers a tile from the cache first, then from the network), and whether the network answer
-// is held back for now.
+// answers a tile from the cache first, then from the network), whether the network answer is
+// held back for now, and the network copy's own heights.
 struct TileRule {
     /// Metres the cached copy is off the plane; no cached copy when empty.
     std::optional<double> cachedOffset;
     bool holdNetwork = false;
+    /// Metres the network copy is off the plane: a cliff at the tile's edges.
+    double networkOffset = 0.0;
+    /// The height of a bump on the cached copy (see bumpMeters).
+    double cachedBump = 0.0;
+    /// The height of a bump on the network copy.
+    double networkBump = 0.0;
 };
+
+// A tile whose network answer is held back, with this cached copy (none by default). Built field
+// by field: clang warns when designated initializers leave fields out.
+TileRule held(std::optional<double> cachedOffset = std::nullopt) {
+    TileRule rule;
+    rule.cachedOffset = cachedOffset;
+    rule.holdNetwork = true;
+    return rule;
+}
 
 // A file source that, like DefaultFileSource, answers each tile from its cache first and from
 // the network after, so a tile loads (and parses) twice when the cache has it.
@@ -199,11 +251,17 @@ struct SeamScene {
     MapAdapter map{
         frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
     std::map<CanonicalTileID, TileRule> rules;
-    /// Network answers per DEM tile.
+    SceneOptions options;
+    /// Network answers with data per DEM tile.
     std::map<CanonicalTileID, int> networkLoads;
+    /// Whether the network answers a tile it has sent before 304 Not Modified, as a server
+    /// revalidating the copy the map holds does.
+    bool notModified = false;
+    int notModifiedLoads = 0;
 
-    explicit SeamScene(std::map<CanonicalTileID, TileRule> rules_ = {})
-        : rules(std::move(rules_)) {
+    explicit SeamScene(std::map<CanonicalTileID, TileRule> rules_ = {}, SceneOptions options_ = {})
+        : rules(std::move(rules_)),
+          options(std::move(options_)) {
         fileSource->tileResponse = [this](const Resource& resource) -> std::optional<Response> {
             Response res;
             if (!resource.tileData || resource.url.find("/dem/") == std::string::npos) {
@@ -218,24 +276,45 @@ struct SeamScene {
                     res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "not cached");
                     return res;
                 }
-                res.data = std::make_shared<std::string>(planeTile(id, *rule->second.cachedOffset));
+                res.data = std::make_shared<std::string>(
+                    planeTile(id, *rule->second.cachedOffset, rule->second.cachedBump));
                 return res;
             }
             if (rule != rules.end() && rule->second.holdNetwork) {
                 return std::nullopt; // still on its way
             }
+            if (notModified && networkLoads[id] > 0) {
+                ++notModifiedLoads;
+                res.notModified = true;
+                return res;
+            }
             ++networkLoads[id];
-            res.data = std::make_shared<std::string>(planeTile(id, 0.0));
+            res.data = std::make_shared<std::string>(
+                rule != rules.end() ? planeTile(id, rule->second.networkOffset, rule->second.networkBump)
+                                    : planeTile(id, 0.0));
             return res;
         };
-        map.getStyle().loadJSON(seamStyle());
+        map.getStyle().loadJSON(seamStyle(options));
+        if (!options.pointLayer.empty()) {
+            PremultipliedImage dot({8, 8});
+            for (size_t i = 0; i < dot.bytes(); i += 4) {
+                dot.data[i] = 255;
+                dot.data[i + 1] = 0;
+                dot.data[i + 2] = 0;
+                dot.data[i + 3] = 255;
+            }
+            map.getStyle().addImage(std::make_unique<style::Image>("dot", std::move(dot), 1.0f));
+        }
         lookAt(corner());
     }
 
     void lookAt(const LatLng& center) {
-        map.jumpTo(
-            CameraOptions().withCenter(center).withZoom(14.0).withPitch(50.0).withBearing(0.0).withCenterAltitude(
-                planeMeters(center) * exaggeration));
+        map.jumpTo(CameraOptions()
+                       .withCenter(center)
+                       .withZoom(options.zoom)
+                       .withPitch(options.pitch)
+                       .withBearing(0.0)
+                       .withCenterAltitude(planeMeters(center) * exaggeration));
         settle();
     }
 
@@ -394,7 +473,7 @@ TEST(TerrainDEMSeam, HoldsAfterTheTilesAreDroppedAndMadeAgain) {
 TEST(TerrainDEMSeam, HoldsWhenANeighbourArrivesAfterTheTile) {
     referenceFrame();
     for (const auto& late : {southEast, northEast, northWest}) {
-        SeamScene scene({{late, {.cachedOffset = std::nullopt, .holdNetwork = true}}});
+        SeamScene scene({{late, held()}});
         scene.release(late);
         expectSeamOnThePlane(scene, "after the late neighbour");
         expectFrameAsLoadedAtOnce(scene, "after the late neighbour");
@@ -405,7 +484,7 @@ TEST(TerrainDEMSeam, HoldsWhenANeighbourArrivesAfterTheTile) {
 // (DefaultFileSource does this for every tile it has cached), here once the neighbours are in.
 TEST(TerrainDEMSeam, HoldsWhenATileIsParsedAgainWhileItsNeighboursAreKept) {
     referenceFrame();
-    SeamScene scene({{northEast, {.cachedOffset = 0.0, .holdNetwork = true}}});
+    SeamScene scene({{northEast, held(0.0)}});
     expectSeamOnThePlane(scene, "with the cached copy");
     scene.release(northEast);
     ASSERT_EQ(scene.networkLoads[northEast], 1);
@@ -417,7 +496,7 @@ TEST(TerrainDEMSeam, HoldsWhenATileIsParsedAgainWhileItsNeighboursAreKept) {
 // from the cached copy, take the new heights too.
 TEST(TerrainDEMSeam, HoldsWhenATileIsReloadedWithNewHeights) {
     referenceFrame();
-    SeamScene scene({{northEast, {.cachedOffset = -40.0, .holdNetwork = true}}});
+    SeamScene scene({{northEast, held(-40.0)}});
     scene.release(northEast);
     ASSERT_EQ(scene.networkLoads[northEast], 1);
     expectSeamOnThePlane(scene, "after the network copy");
@@ -429,13 +508,132 @@ TEST(TerrainDEMSeam, HoldsWhenATileIsReloadedWithNewHeights) {
 TEST(TerrainDEMSeam, HoldsWhenNeighboursArriveAfterTheirParentStoodIn) {
     referenceFrame();
     const CanonicalTileID parent(demMaxZoom - 1, cornerX / 2, cornerY / 2);
-    SeamScene scene({{southEast, {.cachedOffset = std::nullopt, .holdNetwork = true}},
-                     {southWest, {.cachedOffset = std::nullopt, .holdNetwork = true}},
-                     {parent, {.cachedOffset = 0.0, .holdNetwork = true}}});
+    SeamScene scene({{southEast, held()}, {southWest, held()}, {parent, held(0.0)}});
     ASSERT_TRUE(scene.elevation({corner().latitude() - 0.01, corner().longitude() + 0.01}))
         << "no DEM stands in for the tiles still on their way";
     scene.rules[southEast].holdNetwork = false;
     scene.release(southWest);
     expectSeamOnThePlane(scene, "after the neighbours");
     expectFrameAsLoadedAtOnce(scene, "after the neighbours");
+}
+
+namespace {
+
+// The frame a map with these options draws when every DEM tile arrives at once, with the heights
+// the network sends under these rules (no cached copies, nothing held). Make it before the scene
+// it is compared with: each scene runs its own run loop.
+PremultipliedImage frameLoadedAtOnce(std::map<CanonicalTileID, TileRule> rules, const SceneOptions& options) {
+    for (auto& [id, rule] : rules) {
+        TileRule fresh;
+        fresh.networkOffset = rule.networkOffset;
+        fresh.networkBump = rule.networkBump;
+        rule = fresh;
+    }
+    SeamScene scene(std::move(rules), options);
+    return scene.image();
+}
+
+std::string multiPoint(const std::vector<LatLng>& points) {
+    std::string coordinates;
+    for (const auto& point : points) {
+        coordinates += (coordinates.empty() ? "[" : ",[") + std::to_string(point.longitude()) + "," +
+                       std::to_string(point.latitude()) + "]";
+    }
+    return R"({"type": "MultiPoint", "coordinates": [)" + coordinates + "]}";
+}
+
+} // namespace
+
+// A tile coming back from the tile cache that the server answers 304 Not Modified: it is not
+// parsed again, so its border is the one its neighbours kept up to date while it was away.
+TEST(TerrainDEMSeam, HoldsWhenTheTilesComeBackNotModified) {
+    referenceFrame();
+    SeamScene scene;
+    scene.lookAt({corner().latitude(), corner().longitude() + 3.0});
+    scene.notModified = true;
+    scene.lookAt(corner());
+    ASSERT_GT(scene.notModifiedLoads, 0) << "no tile was revalidated on the way back";
+    expectSeamOnThePlane(scene, "after a 304");
+    expectFrameAsLoadedAtOnce(scene, "after a 304");
+}
+
+// The packed terrain depth, against which symbols test whether the ground hides them: a tile whose
+// network copy has a 300 m bump its cached copy lacked must draw the depth again, or the icons
+// standing just behind and on the bump are tested against ground that is no longer there. Seen
+// from 70° pitch, so the bump stands up into the icons' line of sight. The bump leaves the tile's
+// height range, and so the terrain cover, as it was: only the DEM changes, and the depth would be
+// drawn again for nothing else.
+TEST(TerrainDEMSeam, HoldsInTheTerrainDepthWhenATileIsReloadedWithNewHeights) {
+    const LatLng origin = corner();
+    const double kmPerLng = kmPerDegree * std::cos(util::deg2rad(origin.latitude()));
+    std::vector<LatLng> icons;
+    for (const double northKm : {0.4, 0.5, 0.6}) {
+        for (const double eastKm : {-0.1, 0.0, 0.1}) {
+            icons.emplace_back(origin.latitude() + (bumpNorthKm + northKm) / kmPerDegree,
+                               origin.longitude() + (bumpEastKm + eastKm) / kmPerLng);
+        }
+    }
+    SceneOptions options;
+    options.pitch = 70.0;
+    options.points = multiPoint(icons);
+    options.pointLayer = R"({"id": "icons", "type": "symbol", "source": "points",
+        "layout": {"icon-image": "dot", "icon-allow-overlap": true, "icon-ignore-placement": true}})";
+    TileRule bumped = held(0.0);
+    bumped.networkBump = 300.0;
+    const std::map<CanonicalTileID, TileRule> rules{{northEast, bumped}};
+    const PremultipliedImage reference = frameLoadedAtOnce(rules, options);
+    SeamScene scene(rules, options);
+    scene.release(northEast);
+    ASSERT_EQ(scene.networkLoads[northEast], 1);
+    EXPECT_EQ(differingPixels(scene.image(), reference), 0)
+        << "the frame (icons hidden by the terrain depth) differs from the one drawn when every DEM tile "
+           "arrived at once";
+}
+
+// The color relief samples the DEM directly; a border backfilled after its drape was rendered
+// must render the drape again. Bands of colour every 20 m, so metres off at the seam show.
+TEST(TerrainDEMSeam, HoldsInTheColorReliefWhenANeighbourArrivesAfterTheTile) {
+    std::string stops;
+    for (int meters = 0; meters <= 8000; meters += 20) {
+        stops += ", " + std::to_string(meters) + (meters % 40 == 0 ? R"(, "blue")" : R"(, "yellow")");
+    }
+    SceneOptions options;
+    options.demLayer = R"({"id": "relief", "type": "color-relief", "source": "dem",
+        "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"])" +
+                       stops + "]}}";
+    const std::map<CanonicalTileID, TileRule> rules{{southEast, held()}};
+    const PremultipliedImage reference = frameLoadedAtOnce(rules, options);
+    SeamScene scene(rules, options);
+    scene.release(southEast);
+    EXPECT_EQ(differingPixels(scene.image(), reference), 0)
+        << "the color relief differs from the one drawn when every DEM tile arrived at once";
+}
+
+// Below the DEM's max zoom a 512 px GeoJSON tile spans four 256 px DEM tiles, and the layers that
+// stand on the terrain sample a DEM stitched from them, whose outer ring comes from their borders.
+// A neighbour outside the stitched tile reloaded after the stitch (its network copy a cliff
+// 2,000 m above its cached one, so the ring's change shows) backfills a child's border in place,
+// which must stitch the DEM again: circles a quarter of a DEM pixel inside the stitched tile's
+// north edge stand on a quarter of the cliff.
+TEST(TerrainDEMSeam, HoldsInAStitchedDEMWhenANeighbourIsReloadedAfterTheStitch) {
+    const LatLng origin = corner();
+    const double lngPerPixel = 360.0 / (std::pow(2.0, demMaxZoom) * demSize);
+    const double latPerPixel = lngPerPixel * std::cos(util::deg2rad(origin.latitude()));
+    std::vector<LatLng> circles;
+    for (const double pixels : {40.0, 128.0, 216.0}) {
+        circles.emplace_back(origin.latitude() - 0.25 * latPerPixel, origin.longitude() + pixels * lngPerPixel);
+    }
+    SceneOptions options;
+    options.zoom = 10.4;
+    options.points = multiPoint(circles);
+    options.pointLayer = R"({"id": "circles", "type": "circle", "source": "points",
+        "paint": {"circle-radius": 5, "circle-color": "red"}})";
+    TileRule cliff = held(0.0);
+    cliff.networkOffset = 2000.0;
+    const std::map<CanonicalTileID, TileRule> rules{{northEast, cliff}};
+    const PremultipliedImage reference = frameLoadedAtOnce(rules, options);
+    SeamScene scene(rules, options);
+    scene.release(northEast);
+    EXPECT_EQ(differingPixels(scene.image(), reference), 0)
+        << "the circles on the stitched DEM differ from those drawn when every DEM tile arrived at once";
 }

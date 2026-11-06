@@ -150,6 +150,26 @@ TEST(DEMData, BackfillNeighbor) {
     EXPECT_EQ(dem0.get(5, -2), dem1.get(1, 2));
 };
 
+// backfillBorder reports whether it changed the border, and only a change gives the data a new
+// revision: what was made from the texels (an uploaded texture, a stitched DEM) is redone then
+// and only then.
+TEST(DEMData, BackfillReportsAChangeAndRevisesTheData) {
+    PremultipliedImage image0 = fakeImage({4, 4});
+    PremultipliedImage image1 = fakeImage({4, 4});
+    image1.data[0] = static_cast<uint8_t>(image0.data[3 * 4] + 1); // not dem0's own edge
+    DEMData dem0(image0, Tileset::RasterEncoding::Mapbox);
+    const DEMData dem1(image1, Tileset::RasterEncoding::Mapbox);
+    EXPECT_NE(dem0.getRevision(), dem1.getRevision()) << "two decoded tiles share a revision";
+
+    const uint64_t fresh = dem0.getRevision();
+    EXPECT_TRUE(dem0.backfillBorder(dem1, 1, 0)) << "the right border held the tile's own edge";
+    const uint64_t backfilled = dem0.getRevision();
+    EXPECT_NE(backfilled, fresh);
+
+    EXPECT_FALSE(dem0.backfillBorder(dem1, 1, 0)) << "the same neighbour again changed the border";
+    EXPECT_EQ(dem0.getRevision(), backfilled);
+}
+
 TEST(DEMData, TerrariumNoData) {
     // A fresh image is all zeroes, i.e. terrarium no-data, bar one pixel put at a real
     // 256 m (129 * 256 - 32768). 128 would decode to 0 m and prove nothing.
