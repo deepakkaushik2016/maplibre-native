@@ -2,7 +2,9 @@
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
 
+#include <mln/gfx/context.hpp>
 #include <mln/gfx/headless_frontend.hpp>
+#include <mln/gfx/rendering_stats.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
 #include <mln/style/image.hpp>
@@ -151,6 +153,9 @@ TEST(TerrainDepth, ADEMTextureMadeAgainForAnotherLayerIsInTheDepth) {
         const PremultipliedImage expected = reference.render(secondView(bearing));
         AlpsScene scene;
         scene.render(firstView);
+        // The first view must take the path under test, or the comparison below proves nothing.
+        ASSERT_GT(scene.frontend.getBackend()->getContext().renderingStats().numDEMTexturesRemade, 0)
+            << "no DEM texture was made again on demand from the first view";
         const PremultipliedImage image = scene.render(secondView(bearing));
 
         ASSERT_GT(redPixels(expected), 0) << "no icon is drawn looking at bearing " << bearing;

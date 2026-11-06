@@ -1370,6 +1370,7 @@ std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const Un
             if (!texture) {
                 return std::nullopt;
             }
+            context.renderingStats().numDEMTexturesRemade++;
             entry = demTextures
                         .emplace(demRenderTile->id,
                                  DEMTextureEntry{.texture = std::move(texture),

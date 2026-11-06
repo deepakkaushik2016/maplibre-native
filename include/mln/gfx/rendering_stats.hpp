@@ -111,6 +111,9 @@ struct RenderingStats {
     int numDepthPasses = 0;
     /// Raycasts for the height of the ground a drag grabbed (Map::moveBy with an anchor)
     int numTerrainGrabRaycasts = 0;
+    /// DEM textures the terrain dropped for a tile no mesh tile was round, and made again on
+    /// demand for a layer standing on that tile (RenderTerrain::getTerrainData)
+    int numDEMTexturesRemade = 0;
 
     /// Per-phase CPU time of the terrain path this frame (seconds), for profiling
     /// where the terrain overhead goes when nothing re-renders
