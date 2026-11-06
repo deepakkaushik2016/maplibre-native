@@ -71,6 +71,8 @@ RenderingStats& RenderingStats::operator+=(const RenderingStats& r) {
     numDepthPasses += r.numDepthPasses;
     numTerrainGrabRaycasts += r.numTerrainGrabRaycasts;
     numDEMTexturesRemade += r.numDEMTexturesRemade;
+    numTextureUploadWaits += r.numTextureUploadWaits;
+    numTexturesReplacedInUse += r.numTexturesReplacedInUse;
     terrainUpdateTime += r.terrainUpdateTime;
     terrainTweakerTime += r.terrainTweakerTime;
     terrainDepthTime += r.terrainDepthTime;
@@ -132,6 +134,8 @@ std::string RenderingStats::toString(std::string_view sep) const {
     optionalStatLine(ss, numDepthPasses, "numDepthPasses", sep);
     optionalStatLine(ss, numTerrainGrabRaycasts, "numTerrainGrabRaycasts", sep);
     optionalStatLine(ss, numDEMTexturesRemade, "numDEMTexturesRemade", sep);
+    optionalStatLine(ss, numTextureUploadWaits, "numTextureUploadWaits", sep);
+    optionalStatLine(ss, numTexturesReplacedInUse, "numTexturesReplacedInUse", sep);
     optionalStatLine(ss, terrainUpdateTime, "terrainUpdateTime", sep);
     optionalStatLine(ss, terrainTweakerTime, "terrainTweakerTime", sep);
     optionalStatLine(ss, terrainDepthTime, "terrainDepthTime", sep);

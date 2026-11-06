@@ -26,6 +26,8 @@ public:
     const mtl::CommandEncoder& getCommandEncoder() const { return commandEncoder; }
 
     const MTLCommandBufferPtr& getCommandBuffer() const { return commandBuffer; }
+    /// The serial `Context::trackCommandBuffer` gave this pass's command buffer
+    std::uint64_t getCommandBufferSerial() const { return commandBufferSerial; }
     const MTLRenderCommandEncoderPtr& getMetalEncoder() const { return encoder; }
     const gfx::RenderPassDescriptor& getDescriptor() const { return descriptor; }
 
@@ -79,6 +81,7 @@ private:
     gfx::RenderPassDescriptor descriptor;
     mtl::CommandEncoder& commandEncoder;
     MTLCommandBufferPtr commandBuffer;
+    std::uint64_t commandBufferSerial = 0;
     MTLRenderCommandEncoderPtr encoder;
     MTLDepthStencilStatePtr currentDepthStencilState;
     MTLRenderPipelineStatePtr currentPipelineState;

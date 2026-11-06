@@ -19,6 +19,8 @@ RenderPass::RenderPass(CommandEncoder& commandEncoder_, const char* name, const 
 
     if (const auto& cmdBuff = resource.getCommandBuffer()) {
         commandBuffer = cmdBuff;
+        // Textures bound in this pass are read when this buffer runs (see Texture2D::bind)
+        commandBufferSerial = commandEncoder.context.trackCommandBuffer(commandBuffer);
         if (auto rpd = resource.getRenderPassDescriptor()) {
             if (descriptor.clearColor) {
                 if (auto copy = NS::TransferPtr(rpd->copy())) {

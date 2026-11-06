@@ -187,6 +187,8 @@ void Texture2D::createMetalTexture() {
 
     if (metalTexture) {
         textureDirty = false;
+        lastReadSerial = 0;
+        previousReadSerial = 0;
         context.threadSafeAccessRenderingStats([&](gfx::RenderingStats& stats) {
             stats.numCreatedTextures++;
             stats.numActiveTextures++;
@@ -257,6 +259,12 @@ void Texture2D::bind(RenderPass& renderPass, int32_t location) {
         updateSamplerConfiguration();
     }
 
+    // The pass's command buffer reads this texture on the GPU; a CPU write first checks it
+    if (const auto serial = renderPass.getCommandBufferSerial(); serial != lastReadSerial) {
+        previousReadSerial = lastReadSerial;
+        lastReadSerial = serial;
+    }
+
     // Bind to BOTH vertex and fragment stages to support vertex shader texture sampling (e.g., terrain DEM)
     renderPass.setVertexTexture(metalTexture, location);
     renderPass.setVertexSamplerState(metalSamplerState, location);
@@ -272,6 +280,13 @@ void Texture2D::unbind(RenderPass&, int32_t /*location*/) noexcept {
 
 void Texture2D::upload(const void* pixelData, const Size& size_) {
     setSize(size_);
+    if (const auto serial = committedReadSerial();
+        !textureDirty && pixelData && serial != 0 && context.isCommandBufferInFlight(serial)) {
+        // A frame in flight samples this texture. Upload to a new one instead of waiting for the
+        // frame: its command buffer keeps the old one alive until it completes.
+        textureDirty = true;
+        context.threadSafeAccessRenderingStats([](gfx::RenderingStats& stats) { stats.numTexturesReplacedInUse++; });
+    }
     if (textureDirty) {
         createMetalTexture();
     }
@@ -284,6 +299,20 @@ void Texture2D::upload(const void* pixelData, const Size& size_) {
 }
 
 void Texture2D::uploadSubRegion(const void* pixelData, const Size& size_, uint16_t xOffset, uint16_t yOffset) noexcept {
+    // Metal does not order a CPU write against the GPU: wait for the frames that read this texture
+    if (const auto serial = committedReadSerial(); serial != 0 && context.waitForCommandBuffers(serial)) {
+        context.threadSafeAccessRenderingStats([](gfx::RenderingStats& stats) { stats.numTextureUploadWaits++; });
+    }
+    writeRegion(pixelData, size_, xOffset, yOffset);
+}
+
+std::uint64_t Texture2D::committedReadSerial() const {
+    // A pass still being encoded runs after this write, as its frame expects; the GPU readers are
+    // the passes before it
+    return lastReadSerial != 0 && context.isCommandBufferPending(lastReadSerial) ? previousReadSerial : lastReadSerial;
+}
+
+void Texture2D::writeRegion(const void* pixelData, const Size& size_, uint16_t xOffset, uint16_t yOffset) noexcept {
     assert(metalTexture.get());
     assert(!textureDirty);
 

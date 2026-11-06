@@ -114,6 +114,13 @@ struct RenderingStats {
     /// DEM textures the terrain dropped for a tile no mesh tile was round, and made again on
     /// demand for a layer standing on that tile (RenderTerrain::getTerrainData)
     int numDEMTexturesRemade = 0;
+    /// CPU texture writes that waited for a frame in flight on the GPU that reads the texture
+    /// (Metal; a sub-region write into a texture such as an icon atlas). None on a frame that
+    /// writes no texture an unfinished frame draws
+    int numTextureUploadWaits = 0;
+    /// Whole-texture uploads that went to a new texture instead of waiting, because a frame in
+    /// flight on the GPU still reads the old one (Metal)
+    int numTexturesReplacedInUse = 0;
 
     /// Per-phase CPU time of the terrain path this frame (seconds), for profiling
     /// where the terrain overhead goes when nothing re-renders

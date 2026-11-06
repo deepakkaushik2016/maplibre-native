@@ -41,8 +41,15 @@ public:
 
     void create() override;
 
+    /// A whole-texture upload while a frame in flight on the GPU still samples the texture goes to a
+    /// new texture, so the frame keeps what it was encoded with and the CPU does not wait.
     void upload(const void* pixelData, const Size& size_) override;
+    /// A sub-region write keeps the rest of the texture, so while a frame in flight samples it, the
+    /// write waits for that frame (RenderingStats::numTextureUploadWaits). Render thread only.
     void uploadSubRegion(const void* pixelData, const Size& size, uint16_t xOffset, uint16_t yOffset) noexcept override;
+    /// Writes a region with no wait for the GPU, for a caller that knows no frame samples it, such
+    /// as a dynamic texture filling a region it has just reserved, from a worker thread.
+    void writeRegion(const void* pixelData, const Size& size, uint16_t xOffset, uint16_t yOffset) noexcept;
     void upload() override;
 
     bool needsUpload() const noexcept override { return !!image; };
@@ -79,6 +86,13 @@ private:
     SamplerState samplerState{};
 
     std::shared_ptr<PremultipliedImage> image{nullptr};
+    /// The command buffer serials of the last two render passes, on different command buffers, that
+    /// bound this texture (Context::trackCommandBuffer), or 0. While the last one is still being
+    /// encoded, the GPU readers to wait for are up to the one before.
+    std::uint64_t lastReadSerial = 0;
+    std::uint64_t previousReadSerial = 0;
+    /// The serial up to which committed command buffers may still read this texture, or 0
+    std::uint64_t committedReadSerial() const;
     bool textureDirty{true};
     bool samplerStateDirty{true};
 };

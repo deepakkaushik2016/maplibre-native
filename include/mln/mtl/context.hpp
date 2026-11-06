@@ -171,6 +171,25 @@ public:
     /// Unbind the global uniform buffers
     void unbindGlobalUniformBuffers(gfx::RenderPass&) const noexcept override {}
 
+    /// GPU readers of a resource that the CPU writes in place (Texture2D uploads).
+    ///
+    /// A host need not wait for a frame's GPU work before it encodes the next one, so a texture
+    /// that a frame in flight samples may be written again by the CPU, which Metal does not order
+    /// against the GPU. Each render pass registers its command buffer here and gets a serial; a
+    /// texture bound in the pass keeps that serial. Before a CPU write, the texture asks whether a
+    /// committed command buffer up to its serial is still on the GPU. One that has not been
+    /// committed yet runs after the write, as the frame being encoded expects.
+    ///
+    /// Render thread only. Cost: one entry per render pass, dropped once its buffer completes.
+    using CommandBufferSerial = uint64_t;
+    CommandBufferSerial trackCommandBuffer(const MTLCommandBufferPtr&);
+    /// Whether the command buffer with `serial` is registered and not yet committed.
+    bool isCommandBufferPending(CommandBufferSerial serial) const;
+    /// Whether a committed command buffer up to `serial` may still be running.
+    bool isCommandBufferInFlight(CommandBufferSerial serial);
+    /// Waits for every committed command buffer up to `serial`. Returns whether any was running.
+    bool waitForCommandBuffers(CommandBufferSerial serial);
+
 private:
     RendererBackend& backend;
     bool cleanupOnDestruction = true;
@@ -191,6 +210,15 @@ private:
     const gfx::Renderable* stencilStateRenderable = nullptr;
 
     UniformBufferArray globalUniformBuffers;
+
+    struct TrackedCommandBuffer {
+        CommandBufferSerial serial;
+        MTLCommandBufferPtr buffer;
+    };
+    /// In registration order, and so in serial order
+    std::vector<TrackedCommandBuffer> trackedCommandBuffers;
+    CommandBufferSerial lastCommandBufferSerial = 0;
+    void dropFinishedCommandBuffers();
 };
 
 } // namespace mtl

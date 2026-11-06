@@ -43,7 +43,91 @@ constexpr uint32_t maximumVertexBindingCount = 31;
 
 Context::Context(RendererBackend& backend_)
     : gfx::Context(mtl::maximumVertexBindingCount),
-      backend(backend_) {}
+      backend(backend_) {
+    // A few frames' render passes; reserved so registering one never allocates in steady state
+    trackedCommandBuffers.reserve(32);
+}
+
+namespace {
+// Committed, and maybe still running. A buffer not yet committed has no GPU work to wait for: a
+// CPU write lands before it runs. One that completed (or failed) has finished reading.
+bool isCommittedAndRunning(const MTL::CommandBuffer& buffer) {
+    const auto status = buffer.status();
+    return status == MTL::CommandBufferStatusCommitted || status == MTL::CommandBufferStatusScheduled;
+}
+
+bool isFinished(const MTL::CommandBuffer& buffer) {
+    const auto status = buffer.status();
+    return status == MTL::CommandBufferStatusCompleted || status == MTL::CommandBufferStatusError;
+}
+
+// A pass's buffer that is never committed would otherwise stay tracked for good. Every host in the
+// tree commits each render pass's buffer, so this bounds only a host that drops one.
+constexpr std::size_t maxTrackedCommandBuffers = 64;
+} // namespace
+
+Context::CommandBufferSerial Context::trackCommandBuffer(const MTLCommandBufferPtr& buffer) {
+    if (!buffer) {
+        return 0;
+    }
+    if (!trackedCommandBuffers.empty() && trackedCommandBuffers.back().buffer.get() == buffer.get()) {
+        return trackedCommandBuffers.back().serial;
+    }
+    dropFinishedCommandBuffers();
+    if (trackedCommandBuffers.size() >= maxTrackedCommandBuffers) {
+        // The oldest one still uncommitted, never one that is running
+        const auto dropped = std::find_if(
+            trackedCommandBuffers.begin(), trackedCommandBuffers.end(), [](const auto& tracked) {
+                return !isCommittedAndRunning(*tracked.buffer.get());
+            });
+        if (dropped != trackedCommandBuffers.end()) {
+            trackedCommandBuffers.erase(dropped);
+        }
+    }
+    trackedCommandBuffers.push_back({.serial = ++lastCommandBufferSerial, .buffer = buffer});
+    return lastCommandBufferSerial;
+}
+
+bool Context::isCommandBufferPending(CommandBufferSerial serial) const {
+    for (const auto& tracked : trackedCommandBuffers) {
+        if (tracked.serial == serial) {
+            const auto status = tracked.buffer->status();
+            return status == MTL::CommandBufferStatusNotEnqueued || status == MTL::CommandBufferStatusEnqueued;
+        }
+    }
+    return false;
+}
+
+bool Context::isCommandBufferInFlight(CommandBufferSerial serial) {
+    for (const auto& tracked : trackedCommandBuffers) {
+        if (tracked.serial > serial) {
+            break;
+        }
+        if (isCommittedAndRunning(*tracked.buffer.get())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Context::waitForCommandBuffers(CommandBufferSerial serial) {
+    bool waited = false;
+    for (const auto& tracked : trackedCommandBuffers) {
+        if (tracked.serial > serial) {
+            break;
+        }
+        if (isCommittedAndRunning(*tracked.buffer.get())) {
+            tracked.buffer->waitUntilCompleted();
+            waited = true;
+        }
+    }
+    dropFinishedCommandBuffers();
+    return waited;
+}
+
+void Context::dropFinishedCommandBuffers() {
+    std::erase_if(trackedCommandBuffers, [](const auto& tracked) { return isFinished(*tracked.buffer.get()); });
+}
 
 Context::~Context() noexcept {
     if (cleanupOnDestruction) {
