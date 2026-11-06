@@ -180,9 +180,15 @@ public:
     /// committed command buffer up to its serial is still on the GPU. One that has not been
     /// committed yet runs after the write, as the frame being encoded expects.
     ///
-    /// Render thread only. Cost: one entry per render pass, dropped once its buffer completes.
+    /// Render thread only. Cost: one entry per render pass, dropped once its buffer completes, or
+    /// once its renderable drops it uncommitted (untrackCommandBuffer, or when only the tracker
+    /// still holds it). A pending entry is never evicted to bound the list.
     using CommandBufferSerial = uint64_t;
     CommandBufferSerial trackCommandBuffer(const MTLCommandBufferPtr&);
+    /// Forgets a tracked command buffer that its renderable drops without committing, so the
+    /// tracker doesn't keep it (and what it references) alive. A buffer that may still be
+    /// committed must not be forgotten.
+    void untrackCommandBuffer(const MTL::CommandBuffer*);
     /// Whether the command buffer with `serial` is registered and not yet committed.
     bool isCommandBufferPending(CommandBufferSerial serial) const;
     /// Whether a committed command buffer up to `serial` may still be running.

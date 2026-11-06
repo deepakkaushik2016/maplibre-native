@@ -57,7 +57,13 @@ public:
         context.renderingStats().numFrameBuffers++;
     }
 
-    ~OffscreenTextureResource() noexcept override { context.renderingStats().numFrameBuffers--; }
+    ~OffscreenTextureResource() noexcept override {
+        // A pass bound but never swapped leaves its buffer uncommitted; it will never run
+        if (commandBuffer) {
+            context.untrackCommandBuffer(commandBuffer.get());
+        }
+        context.renderingStats().numFrameBuffers--;
+    }
 
     void bind() override {
         assert(context.getBackend().getCommandQueue());

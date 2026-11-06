@@ -260,7 +260,7 @@ void Texture2D::bind(RenderPass& renderPass, int32_t location) {
     }
 
     // The pass's command buffer reads this texture on the GPU; a CPU write first checks it
-    if (const auto serial = renderPass.getCommandBufferSerial(); serial != lastReadSerial) {
+    if (const auto serial = renderPass.getCommandBufferSerial(); serial != 0 && serial != lastReadSerial) {
         previousReadSerial = lastReadSerial;
         lastReadSerial = serial;
     }

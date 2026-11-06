@@ -363,4 +363,102 @@ TEST(MetalTexture, ABufferUpdateKeepsTheBytesAFrameInFlightStillReads) {
     EXPECT_EQ(std::memcmp(buffer.contents(), after.data(), texelBytes), 0);
 }
 
+// A texture read by two committed frames, both still on the GPU, waits for both: the newer frame
+// may finish first, as nothing orders two frames that only read the texture.
+TEST(MetalTexture, ASubRegionWriteWaitsForEveryFrameInFlightThatReadsTheTexture) {
+    GPUFixture gpu;
+    auto texture = makeTexture(gpu.context, 0x11);
+    auto older = NS::TransferPtr(gpu.context.getBackend().getDevice()->newSharedEvent());
+    const auto first = commitGatedRead(gpu.context, *gpu.target, older.get(), texture.get());
+    const auto second = commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture.get());
+    const auto stats = gpu.context.renderingStats();
+
+    // The newer frame is let go first, the older one later.
+    auto openNewer = gpu.openGateLater(std::chrono::milliseconds(50));
+    auto openOlder = std::thread([older] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        older->setSignaledValue(1);
+    });
+    const auto patch = filled(0x33);
+    texture->uploadSubRegion(patch.data(), {texels, texels}, 0, 0);
+    openNewer.join();
+    openOlder.join();
+
+    EXPECT_EQ(finish(first), filled(0x11)) << "the write overwrote texels the older frame reads";
+    EXPECT_EQ(finish(second), filled(0x11)) << "the write overwrote texels the newer frame reads";
+    EXPECT_EQ(gpu.context.renderingStats().numTextureUploadWaits, stats.numTextureUploadWaits + 1);
+}
+
+// The tracker never forgets a render pass whose command buffer has not been committed yet: once it
+// commits, it is a GPU reader like any other, however many other buffers were tracked meanwhile.
+TEST(MetalTexture, APassStillBeingEncodedStaysTrackedAmongManyOthers) {
+    GPUFixture gpu;
+    auto texture = makeTexture(gpu.context, 0x11);
+    const auto& device = gpu.context.getBackend().getDevice();
+    auto readback = NS::TransferPtr(device->newBuffer(texelBytes, MTL::ResourceStorageModeShared));
+
+    // The pass that reads the texture, not committed yet.
+    auto encoder = gpu.context.createCommandEncoder();
+    mtl::MTLCommandBufferPtr reader;
+    {
+        auto pass = encoder->createRenderPass("pending read", {*gpu.target, Color::white(), {}, {}});
+        auto& renderPass = static_cast<mtl::RenderPass&>(*pass);
+        texture->bind(renderPass, 0);
+        texture->unbind(renderPass, 0);
+        reader = renderPass.getCommandBuffer();
+    }
+
+    // Many other command buffers, also not committed, from a queue of their own so the backend's
+    // queue keeps buffers to hand out.
+    auto otherQueue = NS::TransferPtr(device->newCommandQueue(128));
+    std::vector<mtl::MTLCommandBufferPtr> others;
+    for (int index = 0; index < 100; ++index) {
+        others.push_back(NS::RetainPtr(otherQueue->commandBuffer()));
+        gpu.context.trackCommandBuffer(others.back());
+    }
+
+    reader->encodeWait(gpu.gate.get(), 1);
+    auto* blit = reader->blitCommandEncoder();
+    blit->copyFromTexture(texture->getMetalTexture(),
+                          0,
+                          0,
+                          MTL::Origin::Make(0, 0, 0),
+                          MTL::Size::Make(texels, texels, 1),
+                          readback.get(),
+                          0,
+                          texels * 4,
+                          texelBytes);
+    blit->endEncoding();
+    encoder->present(*gpu.target);
+
+    auto opener = gpu.openGateLater(std::chrono::milliseconds(200));
+    const auto patch = filled(0x33);
+    texture->uploadSubRegion(patch.data(), {texels, texels}, 0, 0);
+    opener.join();
+    reader->waitUntilCompleted();
+    const auto* bytes = static_cast<const uint8_t*>(readback->contents());
+    EXPECT_EQ(std::vector<uint8_t>(bytes, bytes + texelBytes), filled(0x11))
+        << "the tracker dropped the reader while it was being encoded";
+}
+
+// A small buffer (under 4 KB, not persistent) has no MTLBuffer: it lives in CPU memory and Metal
+// copies it into the command buffer when a pass binds it (setVertexBytes), so an update never
+// touches memory the GPU reads, and never waits.
+TEST(MetalTexture, ASmallBufferIsCopiedIntoTheFrameAndUpdatesWithoutAWait) {
+    GPUFixture gpu;
+    const auto before = filled(0x55);
+    auto buffer = gpu.context.createBuffer(
+        before.data(), 64, gfx::BufferUsageType::StaticDraw, false, /*persistent=*/false);
+    EXPECT_FALSE(buffer.getMetalBuffer()) << "a small buffer is backed by GPU-visible memory";
+
+    // A held frame binds it; the bytes are in that frame's command buffer now.
+    const auto read = commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), nullptr, &buffer);
+    const auto after = filled(0x66);
+    buffer.update(after.data(), 64, 0);
+    EXPECT_EQ(gpu.gate->signaledValue(), 0u) << "the update waited for the GPU";
+    EXPECT_EQ(std::memcmp(buffer.contents(), after.data(), 64), 0);
+    gpu.gate->setSignaledValue(1);
+    finish(read);
+}
+
 #endif
