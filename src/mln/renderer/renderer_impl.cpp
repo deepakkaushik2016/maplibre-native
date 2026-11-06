@@ -449,7 +449,13 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             // camera-independent (tile-local matrix), so the recomputed per-drawable camera
             // UBOs would go unused. A real change moves the signature and re-runs the tweaker
             // the same frame the drape re-renders, keeping the two consistent.
-            const bool skipDrapedTweaker = terrainActive && !drapedContentChanged && layerGroup.shouldRenderToTerrain();
+            // Never skip a group holding drawables the tweakers have not run on: drawables built
+            // anew over the same tiles and data (every frame on the Android emulator's GL, see
+            // enableAndroidEmulatorGoldfishMitigation) leave the signature as it was, and a drape
+            // target that enters the cover while the camera moves draws them - with no uniforms,
+            // which left those targets blank.
+            const bool skipDrapedTweaker = terrainActive && !drapedContentChanged &&
+                                           layerGroup.shouldRenderToTerrain() && !layerGroup.hasUntweakedDrawables();
             if (!skipDrapedTweaker) {
                 layerGroup.runTweakers(renderTree, parameters);
             }

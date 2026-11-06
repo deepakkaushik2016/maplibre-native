@@ -105,6 +105,11 @@ public:
 
     void runTweakers(const RenderTree&, PaintParameters&);
 
+    /// Whether a drawable has been added since the tweakers last ran: it has not had its uniforms
+    /// set yet, so the tweakers must run before it is drawn. A renderer that skips the tweakers of
+    /// a group whose content it judges unchanged (the terrain drape cache) checks this first.
+    bool hasUntweakedDrawables() const { return untweakedDrawables; }
+
     /// Get the uniform buffers attached to this layer group
     virtual const gfx::UniformBufferArray& getUniformBuffers() const = 0;
 
@@ -124,6 +129,8 @@ protected:
     std::string name;
     bool renderToTerrain;
     gfx::ContextObserver* observer;
+    /// See hasUntweakedDrawables
+    bool untweakedDrawables = false;
 };
 
 /**

@@ -13,6 +13,7 @@ void LayerGroupBase::addDrawable(gfx::UniqueDrawable& drawable) {
     for (const auto& tweaker : drawable->getTweakers()) {
         tweaker->init(*drawable);
     }
+    untweakedDrawables = true;
 }
 
 void LayerGroupBase::runTweakers(const RenderTree&, PaintParameters& parameters) {
@@ -24,6 +25,7 @@ void LayerGroupBase::runTweakers(const RenderTree&, PaintParameters& parameters)
             it = layerTweakers.erase(it);
         }
     }
+    untweakedDrawables = false;
 }
 
 void LayerGroupBase::setObserver(gfx::ContextObserver* observer_) {

@@ -42,6 +42,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_elevation.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_line_drape.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_dem_seam.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/renderer/terrain_motion_drape.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_depth_array.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/shader_registry.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/layer_min_zoom_tiles.test.cpp
