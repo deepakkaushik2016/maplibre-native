@@ -9,6 +9,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/api/custom_geometry_source.test.cpp
     ${PROJECT_SOURCE_DIR}/test/api/query.test.cpp
     ${PROJECT_SOURCE_DIR}/test/api/recycle_map.cpp
+    ${PROJECT_SOURCE_DIR}/test/api/still_image.test.cpp
     ${PROJECT_SOURCE_DIR}/test/geometry/dem_data.test.cpp
     ${PROJECT_SOURCE_DIR}/test/geometry/line_atlas.test.cpp
     ${PROJECT_SOURCE_DIR}/test/map/map.test.cpp
