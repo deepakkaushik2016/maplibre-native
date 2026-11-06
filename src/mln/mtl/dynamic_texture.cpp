@@ -15,9 +15,10 @@ void DynamicTexture::uploadImage(const uint8_t* pixelData, gfx::TextureHandle& t
 
     texture->create();
     // The region was just reserved: fresh shelf space, or a bin released by an earlier layout that
-    // gfx::DynamicTexture handed out again only once every command buffer that may have sampled it
-    // had completed (FrameSerials). So no frame samples it, and this may run on a worker thread:
-    // write it with no wait for the GPU.
+    // gfx::DynamicTexture hands out again only once the frame after the release has ended and every
+    // command buffer up to its last has completed (FrameSerials). A frame that drew the old image
+    // is one of those, unless a drawable outlived its layout by more than a frame. So no frame
+    // samples it, and this may run on a worker thread: write it with no wait for the GPU.
     static_cast<Texture2D&>(*texture).writeRegion(pixelData, imageSize, rect.x, rect.y);
 
     gfx::DynamicTexture::uploadImage(pixelData, texHandle);

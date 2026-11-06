@@ -9,22 +9,24 @@ namespace gfx {
 /// How far the GPU has got through the work a backend submitted, for a resource that the CPU frees
 /// on any thread while frames in flight may still read it (a glyph or icon atlas bin).
 ///
-/// A serial counts the backend's units of GPU work in submission order: frames on Vulkan and
-/// OpenGL, render-pass command buffers on Metal. The render thread advances both serials; any
-/// thread may read them. Neither ever waits for the GPU: `completed` is what the backend has
-/// already observed (a frame slot's fence it waited for anyway, or the status of a tracked command
-/// buffer).
+/// A serial counts the backend's frames, begun at Context::beginFrame, on every backend: a frame
+/// encodes many render passes, and a drawable may sample a resource in any of them, so a stamp in
+/// passes would not bound the readers. The render thread advances both serials; any thread may
+/// read them. Neither ever waits for the GPU: `completed` is what the backend has already observed
+/// (Vulkan: a frame slot's fence it waited for anyway; Metal: a frame has ended and every command
+/// buffer it tracked has finished; OpenGL: a frame has been issued, see gl::Context).
 class FrameSerials {
 public:
-    /// The serial of the newest unit of GPU work handed out (being encoded, or submitted).
+    /// The serial of the newest frame begun (being encoded, or submitted).
     uint64_t submitted() const noexcept { return submittedSerial.load(std::memory_order_acquire); }
 
-    /// Every unit of GPU work up to this serial has completed.
+    /// Every frame up to this serial has completed on the GPU.
     uint64_t completed() const noexcept { return completedSerial.load(std::memory_order_acquire); }
 
-    /// The serial a resource released now is stamped with: it may be read by the work handed out
-    /// so far, and by the next unit, which may already draw from state built before the release
-    /// (a drawable not yet rebuilt). It may be reused once `completed()` reaches it.
+    /// The serial a resource released now is stamped with: it may be read by the frames begun so
+    /// far, and by the next frame, which may still draw from state built before the release (a
+    /// drawable not yet rebuilt), in any of its passes. It may be reused once `completed()` reaches
+    /// it: once the frame after the release has ended and its GPU work has completed.
     uint64_t releaseStamp() const noexcept { return submitted() + 1; }
 
     /// Render thread. Serials only grow.

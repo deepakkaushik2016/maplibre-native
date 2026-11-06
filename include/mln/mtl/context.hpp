@@ -12,6 +12,7 @@
 #include <mln/util/noncopyable.hpp>
 #include <mln/util/containers.hpp>
 
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -224,7 +225,17 @@ private:
     /// In registration order, and so in serial order
     std::vector<TrackedCommandBuffer> trackedCommandBuffers;
     CommandBufferSerial lastCommandBufferSerial = 0;
+    /// Drops finished buffers from the tracker, and publishes the frames that have completed
     void dropFinishedCommandBuffers();
+
+    /// Frames for FrameSerials: the one being encoded, and each ended one with the last command
+    /// buffer it tracked, until that buffer and every one before it have completed.
+    struct EndedFrame {
+        uint64_t frame;
+        CommandBufferSerial lastCommandBuffer;
+    };
+    uint64_t frameSerial = 0;
+    std::deque<EndedFrame> endedFrames;
 };
 
 } // namespace mtl

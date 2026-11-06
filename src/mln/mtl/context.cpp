@@ -62,12 +62,11 @@ bool isFinished(const MTL::CommandBuffer& buffer) {
     return status == MTL::CommandBufferStatusCompleted || status == MTL::CommandBufferStatusError;
 }
 
-// Not committed, and only the tracker still holds it: nothing can commit it any more, so it will
-// never run. (A pass's buffer that its renderable dropped uncommitted.)
+// Never enqueued, and only the tracker still holds it: nothing can commit it any more, so it will
+// never run. (A pass's buffer that its renderable dropped uncommitted.) An enqueued buffer is on
+// its way to the GPU, whoever holds it.
 bool isAbandoned(const MTL::CommandBuffer& buffer) {
-    const auto status = buffer.status();
-    return (status == MTL::CommandBufferStatusNotEnqueued || status == MTL::CommandBufferStatusEnqueued) &&
-           buffer.retainCount() == 1;
+    return buffer.status() == MTL::CommandBufferStatusNotEnqueued && buffer.retainCount() == 1;
 }
 } // namespace
 
@@ -82,7 +81,6 @@ Context::CommandBufferSerial Context::trackCommandBuffer(const MTLCommandBufferP
     // it commits, so an entry goes only once its buffer has finished or can never run.
     dropFinishedCommandBuffers();
     trackedCommandBuffers.push_back({.serial = ++lastCommandBufferSerial, .buffer = buffer});
-    frameSerials->setSubmitted(lastCommandBufferSerial);
     return lastCommandBufferSerial;
 }
 
@@ -133,10 +131,16 @@ void Context::dropFinishedCommandBuffers() {
     std::erase_if(trackedCommandBuffers, [](const auto& tracked) {
         return isFinished(*tracked.buffer.get()) || isAbandoned(*tracked.buffer.get());
     });
-    // What is left may still run, or is still being encoded, so every serial before the oldest of
-    // them is done: a buffer drops out only once it has finished or can never run.
-    frameSerials->setCompleted(trackedCommandBuffers.empty() ? lastCommandBufferSerial
-                                                             : trackedCommandBuffers.front().serial - 1);
+    // What is left may still run, or is still being encoded, so every command buffer before the
+    // oldest of them is done: a buffer drops out only once it has finished or can never run.
+    const auto completedBuffer = trackedCommandBuffers.empty() ? lastCommandBufferSerial
+                                                               : trackedCommandBuffers.front().serial - 1;
+    // FrameSerials counts frames: a frame has completed once it has ended and its last command
+    // buffer has. Frames end in order, so this stops at the first one still running.
+    while (!endedFrames.empty() && endedFrames.front().lastCommandBuffer <= completedBuffer) {
+        frameSerials->setCompleted(endedFrames.front().frame);
+        endedFrames.pop_front();
+    }
 }
 
 Context::~Context() noexcept {
@@ -179,7 +183,12 @@ const gfx::Texture2DPtr& Context::getDummyTexture() {
 
 void Context::beginFrame() {
     backend.getThreadPool().runRenderJobs();
-    // Publishes how far the GPU got (FrameSerials), from the buffers' status; no wait.
+    // The frame before has ended: every command buffer it encoded has been tracked. A new frame
+    // starts, and how far the GPU got is published (FrameSerials), from the buffers' status, with
+    // no wait. Frames rather than render passes, since a frame encodes many passes and a drawable
+    // may sample an atlas bin in any of them.
+    endedFrames.push_back({.frame = frameSerial, .lastCommandBuffer = lastCommandBufferSerial});
+    frameSerials->setSubmitted(++frameSerial);
     dropFinishedCommandBuffers();
 }
 

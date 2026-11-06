@@ -475,9 +475,10 @@ TEST(MetalTexture, AReleasedAtlasBinIsNotReusedWhileAFrameInFlightSamplesIt) {
     auto* texture = static_cast<mtl::Texture2D*>(atlas->getTexture().get());
 
     // A frame that draws the image is held on the GPU; then its layout releases the bin, and the
-    // next frame, which still draws it, is held too. A frame starts.
+    // next frame, which still draws it, is held too. Both frames end, still on the GPU.
     const auto read = commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture);
     atlas->removeTexture(*handle);
+    gpu.context.beginFrame();
     const auto next = commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture);
     gpu.context.beginFrame();
 
@@ -499,6 +500,42 @@ TEST(MetalTexture, AReleasedAtlasBinIsNotReusedWhileAFrameInFlightSamplesIt) {
     ASSERT_TRUE(later) << "the bin never came back once its frames had completed";
     EXPECT_EQ(later->getRectangle(), handle->getRectangle());
     EXPECT_EQ(finish(commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture)), second);
+}
+
+// The release stamp counts frames, not render passes: a terrain frame encodes many passes, and a
+// drawable that still samples a released bin may be encoded in any of them, in this frame or the
+// next. So passes that complete after the release, in the same frame and in the next one, must
+// not free the bin; it is free once the frame after the release has ended and completed.
+TEST(MetalTexture, AReleasedAtlasBinWaitsForTheNextFrameNotTheNextPass) {
+    GPUFixture gpu;
+    gpu.gate->setSignaledValue(1); // no pass is held: each completes as soon as it is waited for
+    auto atlas = gpu.context.createDynamicTexture({texels, texels}, gfx::TexturePixelType::RGBA);
+    auto* texture = static_cast<mtl::Texture2D*>(atlas->getTexture().get());
+    const auto first = filled(0x11);
+    const auto second = filled(0x22);
+
+    gpu.context.beginFrame(); // the frame that releases the bin
+    const auto handle = atlas->addImage(first.data(), {texels, texels});
+    ASSERT_TRUE(handle);
+    finish(commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture));
+    atlas->removeTexture(*handle);
+    for (int pass = 0; pass < 3; ++pass) {
+        finish(commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture));
+    }
+    EXPECT_FALSE(atlas->addImage(second.data(), {texels, texels}))
+        << "passes completed later in the frame freed the bin";
+
+    gpu.context.beginFrame(); // the next frame may still draw it, in any of its passes
+    for (int pass = 0; pass < 3; ++pass) {
+        finish(commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture));
+    }
+    EXPECT_FALSE(atlas->addImage(second.data(), {texels, texels}))
+        << "the bin was freed while the frame after the release was still being encoded";
+
+    gpu.context.beginFrame(); // that frame has ended, and its passes have completed
+    const auto later = atlas->addImage(second.data(), {texels, texels});
+    ASSERT_TRUE(later) << "the bin never came back";
+    EXPECT_EQ(later->getRectangle(), handle->getRectangle());
 }
 
 #endif
