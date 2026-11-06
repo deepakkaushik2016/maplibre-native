@@ -295,6 +295,13 @@ struct ElevationScene {
         if (deliverDEM) {
             frontend.render(map);
         } else {
+            // The DEM request goes out on the file source's thread, so wait for it rather than
+            // count on some number of frames taking long enough; at most 30 s, so the check
+            // after it fails rather than hangs. Then some frames with terrain on and no DEM.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (demRequests == 0 && std::chrono::steady_clock::now() < deadline) {
+                frontend.renderOnce(map);
+            }
             for (int i = 0; i < 10; ++i) {
                 frontend.renderOnce(map);
             }
