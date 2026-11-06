@@ -41,7 +41,10 @@ public:
 
   void bind() override {
     if (!commandQueue) {
-      commandQueue = [mtlView.device newCommandQueue];
+      // The renderer's queue, which its offscreen passes (terrain drapes, heatmap, hillshade)
+      // commit on too: they are not waited for, and Metal orders this frame's reads of their
+      // textures after their writes only within one queue.
+      commandQueue = (__bridge id<MTLCommandQueue>)backend.getCommandQueue().get();
     }
 
     if (!commandBuffer) {

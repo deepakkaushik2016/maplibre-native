@@ -14,7 +14,9 @@ class MetalRenderableResource final : public mtl::RenderableResource {
 public:
   MetalRenderableResource(MetalBackend& backend)
       : rendererBackend(backend),
-        commandQueue(NS::TransferPtr(backend.getDevice()->newCommandQueue())),
+        // The renderer's queue, which its offscreen passes commit on too: they are not waited
+        // for, and Metal orders the frame's reads of their textures only within one queue.
+        commandQueue(backend.getCommandQueue()),
         swapchain(NS::TransferPtr(CA::MetalLayer::layer())) {
     swapchain->setDevice(backend.getDevice().get());
   }

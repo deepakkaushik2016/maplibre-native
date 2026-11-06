@@ -21,6 +21,9 @@ public:
     }
 
     virtual const mln::mtl::RendererBackend& getBackend() const = 0;
+    /// The command buffer this renderable encodes into. It must come from
+    /// RendererBackend::getCommandQueue(): offscreen passes commit there and are not waited for,
+    /// and Metal orders a later pass after them through hazard tracking only within one queue.
     virtual const mln::mtl::MTLCommandBufferPtr& getCommandBuffer() const = 0;
     virtual mln::mtl::MTLBlitPassDescriptorPtr getUploadPassDescriptor() const = 0;
     virtual const mln::mtl::MTLRenderPassDescriptorPtr& getRenderPassDescriptor() const = 0;

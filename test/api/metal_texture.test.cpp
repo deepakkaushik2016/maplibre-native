@@ -124,4 +124,27 @@ TEST(MetalTexture, EngineTexturesAreHazardTracked) {
     EXPECT_EQ(plain->hazardTrackingMode(), MTL::HazardTrackingModeTracked);
 }
 
+// Metal orders a pass after an unwaited one through hazard tracking only within one command
+// queue; across queues it takes an event. So the frame and every offscreen pass it samples must
+// commit on the renderer backend's queue. Hosts with their own renderable (MLNMapView, GLFW) take
+// that queue too.
+TEST(MetalTexture, TheFrameAndOffscreenPassesShareTheBackendQueue) {
+    mtl::HeadlessBackend backend({64, 64});
+    gfx::BackendScope scope{backend};
+    auto& context = static_cast<mtl::Context&>(backend.getContext());
+    const auto* queue = backend.getCommandQueue().get();
+    ASSERT_NE(queue, nullptr);
+
+    auto target = context.createOffscreenTexture({64, 64}, gfx::TextureChannelDataType::UnsignedByte, true, false);
+    auto& targetResource = target->getResource<mtl::RenderableResource>();
+    targetResource.bind();
+    EXPECT_EQ(targetResource.getCommandBuffer()->commandQueue(), queue) << "an offscreen pass";
+    targetResource.swap();
+
+    auto& frame = backend.getDefaultRenderable().getResource<mtl::RenderableResource>();
+    frame.bind();
+    EXPECT_EQ(frame.getCommandBuffer()->commandQueue(), queue) << "the frame";
+    frame.swap();
+}
+
 #endif
