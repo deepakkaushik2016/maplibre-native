@@ -165,13 +165,13 @@ RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrato
             if (overlaps) {
                 drawnTiles.insert(unwrapped);
             }
-            // The source bucket's identity, folded in as in the drape signature (see
-            // RendererImpl): new data under the same covering tiles - a GeoJSON source
-            // updated with setGeoJson, or a tile's own bucket replacing an over-zoomed
-            // ancestor's - is new content and must re-render the drape. Keying on the tiles
-            // alone judged it the same and kept the stale bake until the next zoom level.
-            // Bucket ids are stable across fades and paint changes, so this does not churn;
-            // hillshade is excluded as in the signature.
+            // The source's identity (drapedSourceHash), folded in as in the drape signature
+            // (see RendererImpl): new data under the same covering tiles - a GeoJSON source
+            // updated with setGeoJson, a tile's own bucket replacing an over-zoomed ancestor's,
+            // or a hillshade or color relief whose DEM changed - is new content and must
+            // re-render the drape. Keying on the tiles alone judged it the same and kept the
+            // stale bake until the next zoom level. Bucket ids and DEM textures are stable
+            // across fades and paint changes, so this does not churn.
             const std::size_t bucketHash = drapedSourceHash(drawable);
             if (overlaps) {
                 // Key on the COVERING TILE id, NOT the drawable-instance id. A tile's
