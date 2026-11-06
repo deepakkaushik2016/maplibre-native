@@ -151,6 +151,8 @@ public:
 
     const std::unique_ptr<BufferResource>& getDummyBuffer();
     const std::unique_ptr<Texture2D>& getDummyTexture();
+    /// Rate limit for the debug line when the dummy texture stands in for an image not created yet
+    FallbackLogLimiter& getDummyTextureFallbackLog() { return dummyTextureFallbackLog; }
 
     const vk::DescriptorSetLayout& getDescriptorSetLayout(DescriptorSetType type);
     DescriptorPoolGrowable& getDescriptorPool(DescriptorSetType type);
@@ -213,6 +215,8 @@ private:
 
     std::unique_ptr<BufferResource> dummyBuffer;
     std::unique_ptr<Texture2D> dummyTexture2D;
+    // One line per 10 s at most: a target no pass has drawn yet may be bound each frame until it is
+    FallbackLogLimiter dummyTextureFallbackLog{std::chrono::seconds(10)};
     vk::UniqueDescriptorSetLayout globalUniformDescriptorSetLayout;
     vk::UniqueDescriptorSetLayout layerUniformDescriptorSetLayout;
     vk::UniqueDescriptorSetLayout drawableUniformDescriptorSetLayout;

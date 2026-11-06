@@ -1,6 +1,5 @@
 #if MLN_RENDER_BACKEND_VULKAN
 #include <mln/test/util.hpp>
-#include <mln/test/fixture_log_observer.hpp>
 
 #include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/dynamic_texture.hpp>
@@ -15,8 +14,10 @@
 #include <mln/vulkan/render_pass.hpp>
 #include <mln/vulkan/renderable_resource.hpp>
 #include <mln/vulkan/texture2d.hpp>
+#include <mln/util/logging.hpp>
 
 #include <array>
+#include <atomic>
 #include <map>
 #include <set>
 #include <vector>
@@ -391,7 +392,9 @@ TEST(VulkanDescriptorSet, TheDummyTextureFallbackIsLoggedAtMostOncePerInterval) 
 
 #ifndef NDEBUG
 TEST(VulkanDescriptorSet, TheDummyTextureFallbackLogsADebugLine) {
-    FixtureLog log;
+    // Debug lines reach no Log::Observer (Log::record skips the observer for them), only stderr.
+    Log::useLogThread(false);
+    testing::internal::CaptureStderr();
     DescriptorTest<> test;
     auto& context = test.context;
     auto texture = context.createTexture2D();
@@ -407,7 +410,17 @@ TEST(VulkanDescriptorSet, TheDummyTextureFallbackLogsADebugLine) {
         images.bind(static_cast<vulkan::RenderPass&>(pass).getEncoder());
     });
 
-    EXPECT_EQ(log.count({EventSeverity::Debug, Event::Render, -1, "dummy texture"}, /*substring=*/true), 1u);
+    const auto output = testing::internal::GetCapturedStderr();
+    Log::useLogThread(true);
+    Log::useLogThread(false, EventSeverity::Error);
+    size_t lines = 0;
+    for (size_t at = output.find("[DEBUG]"); at != std::string::npos; at = output.find("[DEBUG]", at + 1)) {
+        const auto end = output.find('\n', at);
+        if (output.substr(at, end - at).find("bound the dummy texture") != std::string::npos) {
+            ++lines;
+        }
+    }
+    EXPECT_EQ(lines, 1u) << "the fallback was not logged once";
 }
 #endif
 // An atlas bin released while frames are in flight comes back once the frame slot fences show that
