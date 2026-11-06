@@ -304,6 +304,7 @@ void Context::beginFrame() {
     MBGL_VERIFY_THREAD(tid);
 
     frameResourceIndex = (frameResourceIndex + 1) % frameResources.size();
+    ++frameSerial;
 
     const auto& device = backend.getDevice();
     const auto& dispatcher = backend.getDispatcher();

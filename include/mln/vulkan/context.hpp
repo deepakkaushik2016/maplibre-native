@@ -167,6 +167,8 @@ public:
     vk::PipelineCache getPipelineCache();
 
     uint8_t getCurrentFrameResourceIndex() const { return frameResourceIndex; }
+    /// Counts the frames begun; a resource stamped with it is known to be used by this frame.
+    uint64_t getFrameSerial() const { return frameSerial; }
     vk::UniqueCommandBuffer& getCommandBuffer() { return frameResources[frameResourceIndex].commandBuffer; }
     void enqueueDeletion(DeletionTask&& function);
     void submitOneTimeCommand(const std::function<void(const vk::UniqueCommandBuffer&)>& function);
@@ -220,6 +222,7 @@ private:
     vk::UniquePipelineCache pipelineCache;
 
     uint8_t frameResourceIndex = 0;
+    uint64_t frameSerial = 1;
     std::vector<FrameResources> frameResources;
     bool surfaceUpdateRequested{false};
     // The platform surface must be recreated before the swapchain is rebuilt.

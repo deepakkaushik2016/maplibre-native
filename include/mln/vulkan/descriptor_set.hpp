@@ -66,12 +66,23 @@ public:
 protected:
     void createDescriptorPool(DescriptorPoolGrowable& growablePool);
 
+    /// Called by `update` before it writes the current frame's set. A set bound into the frame's
+    /// command buffer must not be written again while that buffer records or runs (the buffer is
+    /// invalidated: VUID-vkCmdBindDescriptorSets-commandBuffer-recording). If it was, the whole
+    /// group is retired until the frame completes and a fresh one is allocated, every slot dirty.
+    void prepareUpdate(uint8_t frameIndex);
+
+    /// Hands the sets back to their pool once the frames that may use them have completed.
+    void retire();
+
 protected:
     Context& context;
     DescriptorSetType type;
 
     std::vector<bool> dirty;
     std::vector<vk::DescriptorSet> descriptorSets;
+    /// Per frame slot, the frame serial (Context::getFrameSerial) its set was last bound in.
+    std::vector<uint64_t> boundFrame;
     int32_t descriptorPoolIndex{-1};
 };
 

@@ -20,6 +20,10 @@ DescriptorSet::DescriptorSet(Context& context_, DescriptorSetType type_)
       type(type_) {}
 
 DescriptorSet::~DescriptorSet() {
+    retire();
+}
+
+void DescriptorSet::retire() {
     if (descriptorPoolIndex < 0 || descriptorSets.empty()) {
         return;
     }
@@ -34,6 +38,19 @@ DescriptorSet::~DescriptorSet() {
             poolInfo.remainingSets += sets.size();
 #endif
         });
+    descriptorSets.clear();
+    descriptorPoolIndex = -1;
+}
+
+void DescriptorSet::prepareUpdate(uint8_t frameIndex) {
+    if (boundFrame[frameIndex] != context.getFrameSerial()) {
+        return;
+    }
+    // Bound earlier in this frame: e.g. the global set, whose paint params each terrain drape
+    // target swaps for its own between the frame's render passes. Only the rare set written
+    // twice in one frame pays for this; the retired sets are reused once the frame completes.
+    retire();
+    allocate();
 }
 
 void DescriptorSet::createDescriptorPool(DescriptorPoolGrowable& growablePool) {
@@ -122,6 +139,7 @@ void DescriptorSet::allocate() {
 
     descriptorPoolIndex = growablePool.currentPoolIndex;
     dirty = std::vector(descriptorSets.size(), true);
+    boundFrame = std::vector<uint64_t>(descriptorSets.size(), 0);
 }
 
 void DescriptorSet::markDirty() {
@@ -134,6 +152,7 @@ void DescriptorSet::bind(CommandEncoder& encoder) {
     auto& commandBuffer = encoder.getCommandBuffer();
 
     const uint8_t index = context.getCurrentFrameResourceIndex();
+    boundFrame[index] = context.getFrameSerial();
 
     commandBuffer->bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                       context.getGeneralPipelineLayout().get(),
@@ -158,6 +177,7 @@ void UniformDescriptorSet::update(const gfx::UniformBufferArray& uniforms,
     if (!dirty[frameIndex]) {
         return;
     }
+    prepareUpdate(frameIndex);
 
     const auto& backend = context.getBackend();
     const auto& device = backend.getDevice();
@@ -210,6 +230,7 @@ void ImageDescriptorSet::update(const std::array<gfx::Texture2DPtr, shaders::max
     if (!dirty[frameIndex]) {
         return;
     }
+    prepareUpdate(frameIndex);
 
     const auto& backend = context.getBackend();
     const auto& device = backend.getDevice();
