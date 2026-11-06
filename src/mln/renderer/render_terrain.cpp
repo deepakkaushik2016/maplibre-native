@@ -1053,7 +1053,8 @@ RenderTerrain::StitchedDEM* RenderTerrain::findStitchedDEM(const UnwrappedTileID
         const DEMData* data = under(renderTile) ? demDataOf(renderTile) : nullptr;
         if (data) {
             current = current && count < existing->second.sources.size() &&
-                      existing->second.sources[count].get() == data;
+                      existing->second.sources[count].get() == data &&
+                      existing->second.revisions[count] == data->getRevision();
             ++count;
         }
     }
@@ -1070,11 +1071,13 @@ RenderTerrain::StitchedDEM* RenderTerrain::findStitchedDEM(const UnwrappedTileID
 
     StitchedDEM stitched;
     stitched.sources.reserve(count);
+    stitched.revisions.reserve(count);
     std::vector<StitchSource> coarseToFine;
     coarseToFine.reserve(count);
     for (const auto& renderTile : *renderTiles) {
         if (const DEMData* data = under(renderTile) ? demDataOf(renderTile) : nullptr) {
             stitched.sources.push_back(sharedDEMDataOf(renderTile));
+            stitched.revisions.push_back(data->getRevision());
             coarseToFine.push_back({.id = renderTile.id.canonical, .dem = data});
         }
     }

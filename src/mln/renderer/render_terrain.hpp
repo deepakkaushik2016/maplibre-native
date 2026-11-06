@@ -484,8 +484,12 @@ private:
     struct StitchedDEM {
         std::shared_ptr<const DEMData> dem;
         /// The data it was stitched from, in DEM render tile order: while the same tiles hold
-        /// the same data it is still current. Held, so that no other data can take an address.
+        /// the same data, at the same revisions, it is still current. Held, so that no other
+        /// data can take an address.
         std::vector<std::shared_ptr<const DEMData>> sources;
+        /// The sources' DEMData::getRevision() when stitched: a border backfilled since (from a
+        /// neighbour that arrived later) changes the stitched DEM's outer ring.
+        std::vector<uint64_t> revisions;
         /// Uploaded on first bind
         std::shared_ptr<gfx::Texture2D> texture;
         uint64_t lastUsed = 0;
