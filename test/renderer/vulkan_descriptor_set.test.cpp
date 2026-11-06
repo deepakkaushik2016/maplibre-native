@@ -110,8 +110,8 @@ public:
                 auto pass = encoder->createRenderPass("probe",
                                                       {.renderable = backend.getDefaultRenderable(),
                                                        .clearColor = Color::white(),
-                                                       .clearDepth = {},
-                                                       .clearStencil = {}});
+                                                       .clearDepth = 1.0f,
+                                                       .clearStencil = 0});
                 record(*pass);
             }
             context.submitFrame();
