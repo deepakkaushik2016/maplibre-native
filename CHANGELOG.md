@@ -37,6 +37,7 @@
 ### 🐞 Bug fixes
 
 - *...Add new stuff here...*
+- [core] OpenGL: fix terrain that hid nothing behind it. A raster-dem tile's texture made again on demand for a layer standing on the terrain (after the terrain had dropped it in a frame whose mesh did not cover it) was not packed for the terrain depth pass. The mesh tiles drawn on it were left out of the depth, and symbols behind their ridges showed through until the tile's DEM changed.
 - [core] Fix heights at raster-dem tile seams after a tile loads again (from the network after the cache, or back out of the tile cache) or a neighbouring tile arrives later: the elevation query, the hillshade and the 3D terrain mesh read each tile's own edge pixel within half a DEM pixel of the seam (metres off on steep ground) until the tile left the view. The tile's border is backfilled again, the terrain uploads the DEM again, and the drape is drawn again when the DEM changes.
 - [core] Fix a source with a `minzoom` covering a view pitched past the level-of-detail threshold at that `minzoom` out to the horizon (thousands of tiles, and a still render or snapshot over terrain that did not finish). Where the view wants tiles coarser than the source has, it now has none, as in maplibre-gl-js.
 - [core] Fix rendered-feature queries near the final endpoint of an offset line.

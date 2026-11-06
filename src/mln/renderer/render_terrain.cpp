@@ -1377,6 +1377,12 @@ std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const Un
                                                  .lastUsed = demUpdateCounter,
                                                  .revision = demDataOf(*demRenderTile)->getRevision()})
                         .first;
+#if MLN_RENDER_BACKEND_OPENGL
+            // Pack it into the depth pass's array too, as update() does for a new texture: the
+            // entry is stored at the DEM's current revision, so update() will not pack it later,
+            // and a mesh tile drawn on it would be left out of the terrain depth.
+            packDEMArrayLayer(context, demRenderTile->id, *demDataOf(*demRenderTile));
+#endif
         }
         entry->second.lastUsed = demUpdateCounter;
         // Map tile-local coordinates (0..EXTENT) of the requested tile into
