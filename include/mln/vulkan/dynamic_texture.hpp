@@ -19,7 +19,6 @@ public:
 
     void uploadImage(const uint8_t* pixelData, gfx::TextureHandle& texHandle) override;
     void uploadDeferredImages(gfx::UploadPass&) override;
-    bool removeTexture(const gfx::TextureHandle& texHandle) override;
 
 #if DYNAMIC_TEXTURE_VULKAN_MULTITHREADED_UPLOAD
     using TexturesToBlit =
@@ -28,6 +27,9 @@ public:
     using TextureBuffersToUpload =
         std::unordered_map<gfx::TextureHandle, SharedBufferAllocation, gfx::TextureHandle::Hasher>;
 #endif
+
+protected:
+    void onBinReleased(const gfx::TextureHandle& texHandle) override;
 
 private:
     vulkan::Context& context;

@@ -91,18 +91,13 @@ void DynamicTexture::uploadDeferredImages(gfx::UploadPass&) {
     texturesToBlit.clear();
 }
 
-bool DynamicTexture::removeTexture(const gfx::TextureHandle& texHandle) {
-    if (gfx::DynamicTexture::removeTexture(texHandle)) {
-        std::scoped_lock lock(mutex);
-
-        const auto& tex = texturesToBlit.find(texHandle);
-        if (tex != texturesToBlit.end()) {
-            tex->second->destroy(false);
-            texturesToBlit.erase(tex);
-        }
-        return true;
+void DynamicTexture::onBinReleased(const gfx::TextureHandle& texHandle) {
+    // A bin released before its upload ran; the base holds `mutex`.
+    const auto& tex = texturesToBlit.find(texHandle);
+    if (tex != texturesToBlit.end()) {
+        tex->second->destroy(false);
+        texturesToBlit.erase(tex);
     }
-    return false;
 }
 #else
 
@@ -187,13 +182,9 @@ void DynamicTexture::uploadDeferredImages(gfx::UploadPass& uploadPass) {
     context.enqueueDeletion([buffers = std::move(textureBuffersToUpload)](Context&) {});
 }
 
-bool DynamicTexture::removeTexture(const gfx::TextureHandle& texHandle) {
-    if (gfx::DynamicTexture::removeTexture(texHandle)) {
-        std::scoped_lock lock(mutex);
-        textureBuffersToUpload.erase(texHandle);
-        return true;
-    }
-    return false;
+void DynamicTexture::onBinReleased(const gfx::TextureHandle& texHandle) {
+    // A bin released before its upload ran; the base holds `mutex`.
+    textureBuffersToUpload.erase(texHandle);
 }
 #endif
 

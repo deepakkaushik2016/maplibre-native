@@ -14,7 +14,9 @@ void DynamicTexture::uploadImage(const uint8_t* pixelData, gfx::TextureHandle& t
     const auto imageSize = Size(rect.w, rect.h);
 
     texture->create();
-    // The region was just reserved, so no frame samples it, and this may run on a worker thread:
+    // The region was just reserved: fresh shelf space, or a bin released by an earlier layout that
+    // gfx::DynamicTexture handed out again only once every command buffer that may have sampled it
+    // had completed (FrameSerials). So no frame samples it, and this may run on a worker thread:
     // write it with no wait for the GPU.
     static_cast<Texture2D&>(*texture).writeRegion(pixelData, imageSize, rect.x, rect.y);
 

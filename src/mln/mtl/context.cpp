@@ -46,6 +46,7 @@ Context::Context(RendererBackend& backend_)
       backend(backend_) {
     // A few frames' render passes; reserved so registering one never allocates in steady state
     trackedCommandBuffers.reserve(32);
+    frameSerials = std::make_shared<gfx::FrameSerials>();
 }
 
 namespace {
@@ -81,6 +82,7 @@ Context::CommandBufferSerial Context::trackCommandBuffer(const MTLCommandBufferP
     // it commits, so an entry goes only once its buffer has finished or can never run.
     dropFinishedCommandBuffers();
     trackedCommandBuffers.push_back({.serial = ++lastCommandBufferSerial, .buffer = buffer});
+    frameSerials->setSubmitted(lastCommandBufferSerial);
     return lastCommandBufferSerial;
 }
 
@@ -131,6 +133,10 @@ void Context::dropFinishedCommandBuffers() {
     std::erase_if(trackedCommandBuffers, [](const auto& tracked) {
         return isFinished(*tracked.buffer.get()) || isAbandoned(*tracked.buffer.get());
     });
+    // What is left may still run, or is still being encoded, so every serial before the oldest of
+    // them is done: a buffer drops out only once it has finished or can never run.
+    frameSerials->setCompleted(trackedCommandBuffers.empty() ? lastCommandBufferSerial
+                                                             : trackedCommandBuffers.front().serial - 1);
 }
 
 Context::~Context() noexcept {
@@ -173,6 +179,8 @@ const gfx::Texture2DPtr& Context::getDummyTexture() {
 
 void Context::beginFrame() {
     backend.getThreadPool().runRenderJobs();
+    // Publishes how far the GPU got (FrameSerials), from the buffers' status; no wait.
+    dropFinishedCommandBuffers();
 }
 
 void Context::endFrame() {}

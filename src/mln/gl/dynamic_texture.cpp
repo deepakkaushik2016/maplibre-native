@@ -36,13 +36,9 @@ void DynamicTexture::uploadDeferredImages(gfx::UploadPass&) {
     imagesToUpload.clear();
 }
 
-bool DynamicTexture::removeTexture(const gfx::TextureHandle& texHandle) {
-    if (gfx::DynamicTexture::removeTexture(texHandle)) {
-        std::scoped_lock lock(mutex);
-        imagesToUpload.erase(texHandle);
-        return true;
-    }
-    return false;
+void DynamicTexture::onBinReleased(const gfx::TextureHandle& texHandle) {
+    // A bin released before its upload ran; the base holds `mutex`.
+    imagesToUpload.erase(texHandle);
 }
 
 } // namespace gl

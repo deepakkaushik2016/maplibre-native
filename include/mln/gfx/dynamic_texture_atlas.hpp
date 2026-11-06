@@ -41,6 +41,11 @@ public:
 
     void removeTextures(const std::vector<TextureHandle>& textureHandles, const DynamicTexturePtr& dynamicTexture);
     void removeUnusedDynamicTextures();
+    /// Returns released bins whose frames have completed on the GPU to their textures. Render
+    /// thread, once per frame; never waits.
+    void retireCompletedBins();
+    /// Released bins still waiting for their frames, over the atlas's textures.
+    size_t numPendingBins();
 
 private:
     // Image allocations are shared only within one immutable image revision and usage (icon or pattern).
@@ -76,7 +81,8 @@ private:
     std::optional<TextureHandle> reserveImage(const DynamicTexturePtr&,
                                               const Immutable<style::Image::Impl>&,
                                               ImageType);
-    void releaseTexture(const DynamicTexturePtr&, const TextureHandle&);
+    /// `unused`: a reservation of this pass, rolled back before anything used it
+    void releaseTexture(const DynamicTexturePtr&, const TextureHandle&, bool unused = false);
 
     Context& context;
     std::vector<DynamicTexturePtr> dynamicTextures;

@@ -198,6 +198,8 @@ private:
     std::shared_ptr<gl::Fence> frameInFlightFence;
     std::unique_ptr<gl::UniformBufferAllocator> uboAllocator;
     size_t frameNum = 0;
+    /// Frames begun, for FrameSerials
+    uint64_t frameSerial = 0;
     UniformBufferArrayGL globalUniformBuffers;
 
 public:

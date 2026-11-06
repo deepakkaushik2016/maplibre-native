@@ -65,6 +65,8 @@ Context::Context(RendererBackend& backend_)
         }
     }
 
+    frameSerials = std::make_shared<gfx::FrameSerials>();
+    frameSerials->setSubmitted(frameSerial);
     initFrameResources();
 }
 
@@ -273,6 +275,8 @@ void Context::updateSurface() {
     for (auto& frame : frameResources) {
         frame.runDeletionQueue(*this);
     }
+    // Every frame submitted before this one has completed.
+    frameSerials->setCompleted(frameSerial - 1);
 
     // sync resources with swapchain
     frameResourceIndex = 0;
@@ -305,6 +309,7 @@ void Context::beginFrame() {
 
     frameResourceIndex = (frameResourceIndex + 1) % frameResources.size();
     ++frameSerial;
+    frameSerials->setSubmitted(frameSerial);
 
     const auto& device = backend.getDevice();
     const auto& dispatcher = backend.getDispatcher();
@@ -322,6 +327,10 @@ void Context::beginFrame() {
     for (; std::cmp_less(attempt, maximumSurfaceUpdateRetries); ++attempt) {
         if (!waitFrame()) {
             throw std::runtime_error("waitFrame failed");
+        }
+        // The slot's fence covers its last frame and, in queue order, every frame before it.
+        if (frameSerial > frameResources.size()) {
+            frameSerials->setCompleted(frameSerial - frameResources.size());
         }
 
         frameResources[frameResourceIndex].runDeletionQueue(*this);

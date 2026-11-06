@@ -1019,6 +1019,7 @@ MLN_DRAWABLES_HEADERS = [
     "include/mln/gfx/drawable_custom_layer_host_tweaker.hpp",
     "include/mln/gfx/dynamic_texture.hpp",
     "include/mln/gfx/dynamic_texture_atlas.hpp",
+    "include/mln/gfx/frame_serials.hpp",
     "include/mln/gfx/gpu_expression.hpp",
     "include/mln/gfx/uniform_buffer.hpp",
     "include/mln/gfx/vertex_attribute.hpp",

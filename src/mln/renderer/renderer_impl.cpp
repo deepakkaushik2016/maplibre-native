@@ -1,6 +1,7 @@
 #include <mln/renderer/renderer_impl.hpp>
 
 #include <mln/geometry/line_atlas.hpp>
+#include <mln/gfx/dynamic_texture_atlas.hpp>
 #include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/context.hpp>
 #include <mln/gfx/cull_face_mode.hpp>
@@ -177,6 +178,12 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     // Blocks execution until the renderable is available.
     backend.getDefaultRenderable().wait();
     context.beginFrame();
+
+    // The backend has just observed how far the GPU got; atlas bins released by evicted tiles
+    // whose frames have completed may be packed again.
+    if (dynamicTextureAtlas) {
+        dynamicTextureAtlas->retireCompletedBins();
+    }
 
     if (!staticData) {
         staticData = std::make_unique<RenderStaticData>(std::make_unique<gfx::ShaderRegistry>());

@@ -48,7 +48,8 @@ public:
     /// write waits for that frame (RenderingStats::numTextureUploadWaits). Render thread only.
     void uploadSubRegion(const void* pixelData, const Size& size, uint16_t xOffset, uint16_t yOffset) noexcept override;
     /// Writes a region with no wait for the GPU, for a caller that knows no frame samples it, such
-    /// as a dynamic texture filling a region it has just reserved, from a worker thread.
+    /// as a dynamic texture filling a region it has just reserved, from a worker thread (a released
+    /// bin is reserved again only after its frames have completed: gfx::DynamicTexture).
     void writeRegion(const void* pixelData, const Size& size, uint16_t xOffset, uint16_t yOffset) noexcept;
     void upload() override;
 

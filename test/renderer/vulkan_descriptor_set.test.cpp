@@ -2,6 +2,7 @@
 #include <mln/test/util.hpp>
 
 #include <mln/gfx/backend_scope.hpp>
+#include <mln/gfx/dynamic_texture.hpp>
 #include <mln/gfx/render_pass.hpp>
 #include <mln/shaders/layer_ubo.hpp>
 #include <mln/shaders/shader_defines.hpp>
@@ -291,5 +292,34 @@ TEST(VulkanDescriptorSet, AnUncreatedTextureBindsTheDummyTexture) {
     ASSERT_FALSE(test.state.imageViews.empty());
     const VkImageView dummy = context.getDummyTexture()->getVulkanImageView().get();
     EXPECT_EQ(test.state.imageViews.front(), dummy) << "the uncreated texture's slot is not the dummy texture";
+}
+
+// An atlas bin released while frames are in flight comes back once the frame slot fences show that
+// every frame that may have drawn it has completed: with two slots, the release in frame 2 (stamped
+// 3, as frame 3 may still draw it) is free from frame 5, whose slot's fence covers frame 3.
+TEST(VulkanDynamicTexture, AReleasedBinComesBackOnceTheFrameFencesCoverItsFrames) {
+    DescriptorTest<TwoSlotBackend> test;
+    auto& context = test.context;
+    auto atlas = context.createDynamicTexture({16, 16}, gfx::TexturePixelType::Alpha);
+    std::vector<uint8_t> pixels(16 * 16, 0xff);
+
+    context.beginFrame(); // frame 1
+    const auto drawn = atlas->addImage(pixels.data(), {16, 16});
+    ASSERT_TRUE(drawn);
+    context.submitFrame();
+
+    context.beginFrame(); // frame 2
+    atlas->removeTexture(*drawn);
+    int frame = 2;
+    std::optional<gfx::TextureHandle> reused;
+    while (!(reused = atlas->reserveSize({16, 16}, -1)) && frame < 8) {
+        context.submitFrame();
+        context.beginFrame();
+        ++frame;
+    }
+    context.submitFrame();
+    ASSERT_TRUE(reused) << "the bin never came back";
+    EXPECT_EQ(frame, 5) << "the bin came back in the wrong frame";
+    EXPECT_EQ(reused->getRectangle(), drawn->getRectangle());
 }
 #endif

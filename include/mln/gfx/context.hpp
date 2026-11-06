@@ -5,6 +5,7 @@
 #include <mln/gfx/command_encoder.hpp>
 #include <mln/gfx/context_observer.hpp>
 #include <mln/gfx/draw_scope.hpp>
+#include <mln/gfx/frame_serials.hpp>
 #include <mln/gfx/renderbuffer.hpp>
 #include <mln/gfx/rendering_stats.hpp>
 #include <mln/gfx/types.hpp>
@@ -98,6 +99,11 @@ public:
     DrawScope createDrawScope() { return DrawScope{createDrawScopeResource()}; }
 
     virtual std::unique_ptr<CommandEncoder> createCommandEncoder() = 0;
+
+    /// The GPU's progress through this context's frames, for resources released while frames in
+    /// flight may still read them (DynamicTexture bins). Null for a backend that doesn't track it,
+    /// whose resources are then free at once.
+    const std::shared_ptr<FrameSerials>& getFrameSerials() const { return frameSerials; }
 
     gfx::RenderingStats& renderingStats() { return stats; }
     const gfx::RenderingStats& renderingStats() const { return stats; }
@@ -228,6 +234,8 @@ protected:
 
     std::shared_mutex renderingStatsMutex;
     gfx::RenderingStats stats;
+    /// Set by a backend that advances it (see getFrameSerials).
+    std::shared_ptr<FrameSerials> frameSerials;
     ContextObserver* observer;
 
     // Progressive new-tile build budget (see resetNewTileBuildBudget). Defaults to

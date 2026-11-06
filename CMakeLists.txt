@@ -174,6 +174,7 @@ list(APPEND INCLUDE_FILES
     ${PROJECT_SOURCE_DIR}/include/mln/gfx/drawable_custom_layer_host_tweaker.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/gfx/dynamic_texture.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/gfx/dynamic_texture_atlas.hpp
+    ${PROJECT_SOURCE_DIR}/include/mln/gfx/frame_serials.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/gfx/gpu_expression.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/gfx/uniform_buffer.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/gfx/vertex_attribute.hpp

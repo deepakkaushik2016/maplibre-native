@@ -119,6 +119,13 @@ Context::Context(RendererBackend& backend_)
     uboAllocator = std::make_unique<gl::UniformBufferAllocator>();
 
     texturePool = std::make_unique<Texture2DPool>(this);
+
+    // A released atlas bin is written again only by this context, on the render thread (its
+    // uploads are queued and run in a frame's upload pass), and GL orders a texture write after the
+    // draws issued before it. So a frame needs no GPU completion, only to have been issued: the
+    // serials count frames begun, and every earlier frame counts as complete. The frame fence
+    // (frameInFlightFence) would only delay the reuse further, at a glClientWaitSync per frame.
+    frameSerials = std::make_shared<gfx::FrameSerials>();
 }
 
 Context::~Context() noexcept {
@@ -148,6 +155,9 @@ void Context::beginFrame() {
     MLN_TRACE_FUNC();
 
     backend.getThreadPool().runRenderJobs();
+
+    frameSerials->setCompleted(frameSerial);
+    frameSerials->setSubmitted(++frameSerial);
 
     frameInFlightFence = std::make_shared<gl::Fence>();
 

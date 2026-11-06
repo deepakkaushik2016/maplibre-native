@@ -13,10 +13,12 @@ public:
 
     void uploadImage(const uint8_t* pixelData, gfx::TextureHandle& texHandle) override;
     void uploadDeferredImages(gfx::UploadPass&) override;
-    bool removeTexture(const gfx::TextureHandle& texHandle) override;
 
     using ImagesToUpload =
         std::unordered_map<gfx::TextureHandle, std::unique_ptr<uint8_t[]>, gfx::TextureHandle::Hasher>;
+
+protected:
+    void onBinReleased(const gfx::TextureHandle& texHandle) override;
 
 private:
     bool deferredCreation = false;

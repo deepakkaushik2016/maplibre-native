@@ -75,7 +75,7 @@ GlyphAtlas DynamicTextureAtlas::uploadGlyphs(const GlyphMap& glyphs) {
             }
             if (!hasSpace) {
                 for (const auto& [texHandle, glyph, fontStack_] : glyphsToUpload) {
-                    glyphAtlas.dynamicTexture->removeTexture(texHandle);
+                    glyphAtlas.dynamicTexture->releaseUnusedReservation(texHandle);
                 }
                 glyphsToUpload.clear();
                 glyphAtlas.dynamicTexture = nullptr;
@@ -167,11 +167,11 @@ ImageAtlas DynamicTextureAtlas::uploadIconsAndPatterns(const ImageMap& icons,
         }
         if (!hasSpace) {
             for (const auto& [texHandle, icon] : iconsToUpload) {
-                releaseTexture(imageAtlas.dynamicTexture, texHandle);
+                releaseTexture(imageAtlas.dynamicTexture, texHandle, /*unused=*/true);
             }
             iconsToUpload.clear();
             for (const auto& [texHandle, pattern] : patternsToUpload) {
-                releaseTexture(imageAtlas.dynamicTexture, texHandle);
+                releaseTexture(imageAtlas.dynamicTexture, texHandle, /*unused=*/true);
             }
             patternsToUpload.clear();
             imageAtlas.dynamicTexture = nullptr;
@@ -247,8 +247,10 @@ std::optional<TextureHandle> DynamicTextureAtlas::reserveImage(const DynamicText
     return texHandle;
 }
 
-void DynamicTextureAtlas::releaseTexture(const DynamicTexturePtr& dynamicTexture, const TextureHandle& texHandle) {
-    if (!dynamicTexture->removeTexture(texHandle)) {
+void DynamicTextureAtlas::releaseTexture(const DynamicTexturePtr& dynamicTexture,
+                                         const TextureHandle& texHandle,
+                                         bool unused) {
+    if (!(unused ? dynamicTexture->releaseUnusedReservation(texHandle) : dynamicTexture->removeTexture(texHandle))) {
         return;
     }
 
@@ -272,6 +274,27 @@ void DynamicTextureAtlas::removeTextures(const std::vector<TextureHandle>& textu
     for (const auto& texHandle : textureHandles) {
         releaseTexture(dynamicTexture, texHandle);
     }
+}
+
+void DynamicTextureAtlas::retireCompletedBins() {
+    // Render thread, at the start of a frame. A worker holding the lock is packing, which retires
+    // completed bins itself; don't wait for it.
+    std::unique_lock lock(mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return;
+    }
+    for (const auto& dynamicTexture : dynamicTextures) {
+        dynamicTexture->retireCompletedBins();
+    }
+}
+
+size_t DynamicTextureAtlas::numPendingBins() {
+    std::scoped_lock lock(mutex);
+    size_t pending = 0;
+    for (const auto& dynamicTexture : dynamicTextures) {
+        pending += dynamicTexture->numPendingBins();
+    }
+    return pending;
 }
 
 void DynamicTextureAtlas::removeUnusedDynamicTextures() {

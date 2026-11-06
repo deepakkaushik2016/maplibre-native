@@ -14,6 +14,7 @@
 #include <mln/gfx/rendering_stats.hpp>
 #include <mln/mtl/buffer_resource.hpp>
 #include <mln/mtl/context.hpp>
+#include <mln/mtl/dynamic_texture.hpp>
 #include <mln/mtl/headless_backend.hpp>
 #include <mln/mtl/render_pass.hpp>
 #include <mln/mtl/renderable_resource.hpp>
@@ -459,6 +460,45 @@ TEST(MetalTexture, ASmallBufferIsCopiedIntoTheFrameAndUpdatesWithoutAWait) {
     EXPECT_EQ(std::memcmp(buffer.contents(), after.data(), 64), 0);
     gpu.gate->setSignaledValue(1);
     finish(read);
+}
+
+// A glyph or icon atlas bin that a layout releases (a tile evicted) must not be handed to the next
+// image while a frame that drew the released one is still on the GPU: a worker writes the new
+// image into the bin at once, with no wait, and the frame in flight would sample it. The bin goes
+// back to the atlas only once every command buffer that may have sampled it has completed.
+TEST(MetalTexture, AReleasedAtlasBinIsNotReusedWhileAFrameInFlightSamplesIt) {
+    GPUFixture gpu;
+    auto atlas = gpu.context.createDynamicTexture({texels, texels}, gfx::TexturePixelType::RGBA);
+    const auto first = filled(0x11);
+    const auto handle = atlas->addImage(first.data(), {texels, texels});
+    ASSERT_TRUE(handle);
+    auto* texture = static_cast<mtl::Texture2D*>(atlas->getTexture().get());
+
+    // A frame that draws the image is held on the GPU; then its layout releases the bin, and the
+    // next frame, which still draws it, is held too. A frame starts.
+    const auto read = commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture);
+    atlas->removeTexture(*handle);
+    const auto next = commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture);
+    gpu.context.beginFrame();
+
+    // Another image of the same size, from a worker. The atlas has room only in that bin.
+    const auto second = filled(0x22);
+    const auto reused = atlas->addImage(second.data(), {texels, texels});
+    EXPECT_FALSE(reused) << "the released bin was handed out while frames in flight sample it";
+    EXPECT_EQ(gpu.gate->signaledValue(), 0u) << "the allocation waited for the GPU";
+    gpu.gate->setSignaledValue(1);
+    EXPECT_EQ(finish(read), first) << "a frame in flight sampled an image written into its bin";
+    EXPECT_EQ(finish(next), first) << "the next frame sampled an image written into its bin";
+    if (reused) {
+        atlas->removeTexture(*reused);
+    }
+
+    // Once those frames have completed, the bin is free again, from the next frame on.
+    gpu.context.beginFrame();
+    const auto later = atlas->addImage(second.data(), {texels, texels});
+    ASSERT_TRUE(later) << "the bin never came back once its frames had completed";
+    EXPECT_EQ(later->getRectangle(), handle->getRectangle());
+    EXPECT_EQ(finish(commitGatedRead(gpu.context, *gpu.target, gpu.gate.get(), texture)), second);
 }
 
 #endif
