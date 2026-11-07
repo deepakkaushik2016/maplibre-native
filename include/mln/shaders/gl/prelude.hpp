@@ -174,6 +174,11 @@ vec4 apply_drape_transform(vec4 clip, mat4 matrix, vec4 target_tile) {
 // unorm8 that holds n / 255, an error of up to 0.002 - far more than the depth differences the
 // test looks for at native's 1 px near plane). Converted back to clip-space NDC z to match the
 // pos.z / pos.w compared in calculate_visibility.
+//
+// The packed depth needs every bit of highp: the depth texture is sampled through highp
+// samplers (u_depth and the parameters below), as in gl-js. GLSL ES samplers default to lowp,
+// and a GPU may sample a lowp texture in half floats, whose step near the far plane (2^-11 NDC)
+// is far larger than the self-occlusion bias and enough to hide every label on the terrain.
 float unpack_depth(vec4 rgba_depth) {
     const highp vec4 weights = vec4(1.0 / 256.0, 1.0 / 65536.0, 1.0 / 16777216.0, 1.0 / 4294967296.0);
     highp vec4 digits = floor(rgba_depth * 255.0 + 0.5);
@@ -188,7 +193,7 @@ float unpack_depth(vec4 rgba_depth) {
 // view centre), which compresses every fragment's NDC depth into the top ~0.1%. Scaling by the
 // near-plane ratio keeps gl-js's behaviour (fully hidden ~0.11 view-heights behind the surface
 // at the centre distance, self-occlusion bias ~5 px).
-highp float depth_opacity(vec3 frag, sampler2D depth_texture, highp float depth_ramp) {
+highp float depth_opacity(vec3 frag, highp sampler2D depth_texture, highp float depth_ramp) {
     highp float bias = 0.05 / depth_ramp; // gl-js: 0.0001 * 500
     highp float d = unpack_depth(texture(depth_texture, frag.xy * 0.5 + 0.5)) + bias - frag.z;
     return 1.0 - max(0.0, min(1.0, -d * depth_ramp));
@@ -200,7 +205,7 @@ highp float depth_opacity(vec3 frag, sampler2D depth_texture, highp float depth_
 // passed as arguments. The near-plane ratio (height / 50) gives a ramp of
 // 500 * height / 50 = 10 * height at any field of view; `units_to_pixels_y` is the
 // GlobalPaintParamsUBO's units_to_pixels.y, -/+ height / 2.
-float calculate_visibility(vec4 pos, sampler2D depth_texture, float depth_enabled, highp float units_to_pixels_y) {
+float calculate_visibility(vec4 pos, highp sampler2D depth_texture, float depth_enabled, highp float units_to_pixels_y) {
     if (depth_enabled == 0.0) {
         return 1.0;
     }

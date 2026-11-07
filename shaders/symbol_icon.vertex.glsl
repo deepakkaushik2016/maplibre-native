@@ -53,7 +53,7 @@ layout (std140) uniform SymbolDrawableUBO {
 };
 
 uniform sampler2D u_dem;
-uniform sampler2D u_depth;
+uniform highp sampler2D u_depth;
 
 layout (std140) uniform SymbolEvaluatedPropsUBO {
     highp vec4 u_text_fill_color;
