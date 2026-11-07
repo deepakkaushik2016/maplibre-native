@@ -36,6 +36,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -449,13 +450,29 @@ double differingShare(const PremultipliedImage& a, const PremultipliedImage& b) 
 constexpr double maxMismatch = 0.002;
 constexpr double minChange = 0.001;
 
-// A frame of `scene` matches a fresh scene that draws `ids` selected with no feature state.
-void expectShowsSelected(Scene& scene, const std::string& source, const std::vector<int>& ids) {
+using Selection = std::vector<int>;
+using References = std::map<Selection, PremultipliedImage>;
+
+// Frames of fresh scenes that draw each selection (and none) as an ["id"] paint with no feature
+// state. Made before the scene under test: two maps alive at once on one thread share its current
+// run loop, and the inner one's teardown leaves the outer one, and later tests, without it.
+References references(const std::string& source, std::initializer_list<Selection> selections) {
+    References out;
+    out.emplace(Selection{}, Scene(trailsSelectedByID(source, {})).image());
+    for (const auto& ids : selections) {
+        if (!out.contains(ids)) {
+            out.emplace(ids, Scene(trailsSelectedByID(source, ids)).image());
+        }
+    }
+    return out;
+}
+
+// A frame of `scene` matches the fresh scene drawn with `ids` selected.
+void expectShowsSelected(Scene& scene, const References& refs, const Selection& ids) {
     scene.settle();
-    const auto reference = Scene(trailsSelectedByID(source, ids)).image();
-    const auto unselected = Scene(trailsSelectedByID(source, {})).image();
+    const auto& reference = refs.at(ids);
     if (!ids.empty()) {
-        ASSERT_GE(differingShare(reference, unselected), minChange) << "the selection does not show: no proof";
+        ASSERT_GE(differingShare(reference, refs.at({})), minChange) << "the selection does not show: no proof";
     }
     EXPECT_LE(differingShare(scene.image(), reference), maxMismatch) << "the frame does not show the selection";
 }
@@ -468,6 +485,7 @@ class TerrainFeatureState : public ::testing::TestWithParam<std::string> {};
 // rest uploads no vertex and bakes no drape target.
 TEST_P(TerrainFeatureState, AtRestNothingIsUploadedOrBaked) {
     const std::string source = GetParam();
+    const auto refs = references(source, {{centreFeature}});
     Scene scene(selectableTrails(source));
     const auto change = scene.frameAfter(
         [&] { scene.renderer().setFeatureState(source, sourceLayerOf(source), "5", selectedState()); });
@@ -479,13 +497,14 @@ TEST_P(TerrainFeatureState, AtRestNothingIsUploadedOrBaked) {
     RecordProperty("restBakes", std::to_string(rest.bakes));
     EXPECT_EQ(rest.uploadBytes, 0u) << "vertex bytes uploaded over " << restFrameCount << " frames at rest";
     EXPECT_EQ(rest.bakes, 0) << "drape targets baked over " << restFrameCount << " frames at rest";
-    expectShowsSelected(scene, source, {centreFeature});
+    expectShowsSelected(scene, refs, {centreFeature});
 }
 
 // R1(b): a change to one tile's feature uploads and bakes only what covers that feature. The
 // tiles' buckets are alike (the same trail in each), so each tile's upload is the same size.
 TEST_P(TerrainFeatureState, AChangeUploadsAndBakesOnlyItsTiles) {
     const std::string source = GetParam();
+    const auto refs = references(source, {{1, 2, 3, 6, 7, 8, 9}});
     Scene scene(selectableTrails(source));
     const auto layer = sourceLayerOf(source);
 
@@ -526,12 +545,13 @@ TEST_P(TerrainFeatureState, AChangeUploadsAndBakesOnlyItsTiles) {
             selected.push_back(id);
         }
     }
-    expectShowsSelected(scene, source, selected);
+    expectShowsSelected(scene, refs, selected);
 }
 
 // Removing a state that does not exist, and setting a state to the value it has, change nothing.
 TEST_P(TerrainFeatureState, ANoOpChangeUploadsAndBakesNothing) {
     const std::string source = GetParam();
+    const auto refs = references(source, {{centreFeature}});
     Scene scene(selectableTrails(source));
     const auto layer = sourceLayerOf(source);
     scene.frameAfter([&] { scene.renderer().setFeatureState(source, layer, "5", selectedState()); });
@@ -549,22 +569,24 @@ TEST_P(TerrainFeatureState, ANoOpChangeUploadsAndBakesNothing) {
     EXPECT_EQ(missingKey.bakes, 0) << "removing a missing key baked";
     EXPECT_EQ(sameValue.uploadBytes, 0u) << "setting the same value uploaded";
     EXPECT_EQ(sameValue.bakes, 0) << "setting the same value baked";
-    expectShowsSelected(scene, source, {centreFeature});
+    expectShowsSelected(scene, refs, {centreFeature});
 }
 
 // A state set before the tile that holds the feature has loaded is drawn once it loads.
 TEST_P(TerrainFeatureState, AStateSetBeforeTheTileLoadsIsDrawn) {
     const std::string source = GetParam();
+    const auto refs = references(source, {{centreFeature}});
     Scene scene(selectableTrails(source), {}, [&](Scene& s) {
         s.renderer().setFeatureState(source, sourceLayerOf(source), "5", selectedState());
     });
-    expectShowsSelected(scene, source, {centreFeature});
+    expectShowsSelected(scene, refs, {centreFeature});
     EXPECT_EQ(scene.restCost().uploadBytes, 0u);
 }
 
 // removeFeatureState with a feature and no key, and with no feature (the whole source layer).
 TEST_P(TerrainFeatureState, RemovingStatesIsDrawn) {
     const std::string source = GetParam();
+    const auto refs = references(source, {{4, 5, 6}, {4, 6}, {6}});
     Scene scene(selectableTrails(source));
     const auto layer = sourceLayerOf(source);
     scene.frameAfter([&] {
@@ -572,21 +594,21 @@ TEST_P(TerrainFeatureState, RemovingStatesIsDrawn) {
             scene.renderer().setFeatureState(source, layer, id, selectedState());
         }
     });
-    expectShowsSelected(scene, source, {4, 5, 6});
+    expectShowsSelected(scene, refs, {4, 5, 6});
 
     const auto one = scene.frameAfter(
         [&] { scene.renderer().removeFeatureState(source, layer, std::string("5"), std::nullopt); });
     EXPECT_GT(one.uploadBytes, 0u);
-    expectShowsSelected(scene, source, {4, 6});
+    expectShowsSelected(scene, refs, {4, 6});
     EXPECT_EQ(scene.restCost().uploadBytes, 0u);
 
     scene.frameAfter([&] { scene.renderer().removeFeatureState(source, layer, std::nullopt, std::nullopt); });
-    expectShowsSelected(scene, source, {});
+    expectShowsSelected(scene, refs, {});
     EXPECT_EQ(scene.restCost().uploadBytes, 0u);
 
     // A state set again after the whole layer was cleared.
     scene.frameAfter([&] { scene.renderer().setFeatureState(source, layer, "6", selectedState()); });
-    expectShowsSelected(scene, source, {6});
+    expectShowsSelected(scene, refs, {6});
 }
 
 INSTANTIATE_TEST_SUITE_P(Sources,
@@ -596,9 +618,10 @@ INSTANTIATE_TEST_SUITE_P(Sources,
 
 // A reloaded tile (new data for the GeoJSON source, the same features) draws the states again.
 TEST(TerrainFeatureStateReload, AReloadedTileDrawsTheState) {
+    const auto refs = references("overlay", {{centreFeature}});
     Scene scene(selectableTrails("overlay"));
     scene.frameAfter([&] { scene.renderer().setFeatureState("overlay", std::nullopt, "5", selectedState()); });
-    expectShowsSelected(scene, "overlay", {centreFeature});
+    expectShowsSelected(scene, refs, {centreFeature});
 
     auto* geojson = static_cast<style::GeoJSONSource*>(scene.map.getStyle().getSource("overlay"));
     ASSERT_NE(geojson, nullptr);
@@ -606,7 +629,7 @@ TEST(TerrainFeatureStateReload, AReloadedTileDrawsTheState) {
     const auto data = style::conversion::convertJSON<GeoJSON>(trailsGeoJSON(), error);
     ASSERT_TRUE(data) << error.message;
     geojson->setGeoJSON(*data);
-    expectShowsSelected(scene, "overlay", {centreFeature});
+    expectShowsSelected(scene, refs, {centreFeature});
     EXPECT_EQ(scene.restCost().uploadBytes, 0u);
 }
 
