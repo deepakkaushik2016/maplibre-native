@@ -201,6 +201,10 @@ public:
     /// Remove all the drawables for tiles
     virtual std::size_t removeAllDrawables();
 
+    /// Whether the layer draws an image pattern (fill-pattern, line-pattern, background-pattern),
+    /// whose pixels an image update can replace in place (RenderOrchestrator).
+    virtual bool usesImagePattern() const { return false; }
+
     /// Records that the evaluated paint may have changed for a reason other than the camera, so a
     /// terrain drape holding this layer re-renders (LayerGroupBase::getPaintRevision). O(1).
     void markPaintChanged() {

@@ -333,11 +333,15 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
         imageManager->addImage(entry.second);
     }
 
-    // Update changed images.
+    // Update changed images. One replaced at the same size (and SDF flag) is patched into the
+    // tiles' atlases in place, with no relayout (GeometryTileRenderData::prepare / upload).
+    bool imagesPatchedInPlace = false;
     for (const auto& entry : imageDiff.changed) {
         if (imageManager->updateImage(entry.second.after)) {
             patternAtlas->removePattern(entry.first);
             hasImageDiff = true;
+        } else {
+            imagesPatchedInPlace = true;
         }
     }
 
@@ -434,6 +438,12 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
             if (previousMask != layer.evaluatedProperties->constantsMask()) {
                 constantsMaskChanged.insert(id);
             }
+        }
+        // An image patched in place keeps every bucket and tile, so a drape holding a layer that
+        // draws image patterns must be told. Any pattern layer is marked, not only those naming a
+        // changed image: a pattern may be an expression, and image updates are rare.
+        if (imagesPatchedInPlace && layer.usesImagePattern()) {
+            layer.markPaintChanged();
         }
     }
 

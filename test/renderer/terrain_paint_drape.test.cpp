@@ -19,6 +19,7 @@
 #include <mln/style/layers/hillshade_layer.hpp>
 #include <mln/style/layers/line_layer.hpp>
 #include <mln/style/layers/raster_layer.hpp>
+#include <mln/style/image.hpp>
 #include <mln/style/style.hpp>
 #include <mln/tile/tile_id.hpp>
 #include <mln/util/constants.hpp>
@@ -112,12 +113,13 @@ std::string lonLat(const LatLng& p) {
     return "[" + std::to_string(p.longitude()) + ", " + std::to_string(p.latitude()) + "]";
 }
 
-// A trail (feature 1) across the view and an area (feature 2) below it, as GeoJSON.
+// A trail (feature 1) across the view and an area (feature 2) around it, as GeoJSON.
 std::string overlayData() {
     const LatLng a = waypoint(-3.0, viewNorthKm + 0.6), b = waypoint(0.0, viewNorthKm + 0.9),
                  c = waypoint(3.0, viewNorthKm + 0.6);
-    const LatLng sw = waypoint(-1.2, viewNorthKm - 0.9), se = waypoint(1.2, viewNorthKm - 0.9),
-                 ne = waypoint(1.2, viewNorthKm + 0.2), nw = waypoint(-1.2, viewNorthKm + 0.2);
+    // The area holds the whole trail, so the two layers' stacking shows wherever the trail is.
+    const LatLng sw = waypoint(-3.2, viewNorthKm - 0.9), se = waypoint(3.2, viewNorthKm - 0.9),
+                 ne = waypoint(3.2, viewNorthKm + 1.5), nw = waypoint(-3.2, viewNorthKm + 1.5);
     // Points for the heatmap, on a grid around the view's centre.
     std::string points;
     for (int i = -3; i <= 3; ++i) {
@@ -202,7 +204,7 @@ const std::string fillLayer = R"JSON({"id": "area", "type": "fill", "source": "o
     "paint": {"fill-color": "#20c040", "fill-opacity": 0.8}})JSON";
 const std::string lineLayer = R"JSON({"id": "trail", "type": "line", "source": "overlay",
     "filter": ["==", ["geometry-type"], "LineString"],
-    "paint": {"line-color": "#e02020", "line-width": 28}})JSON";
+    "paint": {"line-color": "#e02020", "line-width": 16}})JSON";
 // The selected-trail highlight driven by feature state: blue and wider when selected.
 const std::string featureStateLineLayer = R"JSON({"id": "trail", "type": "line", "source": "overlay",
     "filter": ["==", ["geometry-type"], "LineString"],
@@ -252,7 +254,8 @@ struct PaintScene {
     MapAdapter map{
         frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
 
-    explicit PaintScene(const std::string& layers) {
+    /// `setup` runs on the style right after it is loaded (to add images, say).
+    explicit PaintScene(const std::string& layers, const std::function<void(style::Style&)>& setup = {}) {
         fileSource->tileResponse = [](const Resource& resource) -> std::optional<Response> {
             Response res;
             if (!resource.tileData) {
@@ -276,6 +279,9 @@ struct PaintScene {
             return res;
         };
         map.getStyle().loadJSON(paintStyle(layers));
+        if (setup) {
+            setup(map.getStyle());
+        }
         map.jumpTo(
             CameraOptions().withCenter(waypoint(0, viewNorthKm)).withZoom(13.0).withPitch(45.0).withBearing(0.0));
         settle();
@@ -377,15 +383,20 @@ constexpr double minChange = 0.01;
 // Rest frames drawn before and after the change, which must re-render no drape target.
 constexpr int restFrameCount = 8;
 
-// Draws `before` at rest, applies `change`, draws one frame, and compares it with a scene loaded
-// as `after`. Also checks that the drape re-renders on the change frame and never at rest.
+// Draws `before` at rest, applies `change`, draws the next frame, and compares it with a scene
+// loaded as `after`. Also checks that the drape re-renders on the change frame and never at rest.
+// "The next frame" is the first frame the map draws after the change (PaintScene::nextFrame waits
+// for the frame counter to move, so the frame read is at least one frame after the change; in
+// practice the change is applied on that first frame, as the reads show).
 void expectNextFrameShows(const std::string& before,
                           const std::function<void(PaintScene&)>& change,
                           const std::string& after,
-                          bool draped = true) {
-    const PremultipliedImage reference = PaintScene(after).image();
+                          bool draped = true,
+                          const std::function<void(style::Style&)>& beforeSetup = {},
+                          const std::function<void(style::Style&)>& afterSetup = {}) {
+    const PremultipliedImage reference = PaintScene(after, afterSetup).image();
 
-    PaintScene scene(before);
+    PaintScene scene(before, beforeSetup);
     const PremultipliedImage old = scene.image();
     ASSERT_GE(differingShare(old, reference), minChange)
         << "the change does not show even in a fresh scene: the test proves nothing";
@@ -528,19 +539,100 @@ TEST(TerrainPaintDrape, FeatureStateOnALineShowsOnTheNextFrame) {
         join({backgroundLayer, hillshadeLayer, selectedLineLayer}));
 }
 
-// A paint transition re-renders the drape while it runs, ends at the new paint, and the drape is
-// cached again once it has ended.
+// A paint transition re-renders the drape while it runs - frames in the middle of it show paint
+// between the old and the new, not the old until the last frame - ends at the new paint, and the
+// drape is cached again once it has ended.
 TEST(TerrainPaintDrape, LineColorTransitionEndsAtTheNewPaint) {
     const PremultipliedImage reference = PaintScene(join({backgroundLayer, hillshadeLayer, lineBlue})).image();
     PaintScene scene(join({backgroundLayer, hillshadeLayer, lineLayer}));
+    const PremultipliedImage old = scene.image();
+    ASSERT_GE(differingShare(old, reference), minChange) << "the change does not show: the test proves nothing";
+
     auto& line = scene.layer<style::LineLayer>("trail");
-    line.setLineColorTransition(style::TransitionOptions{Milliseconds(300), Milliseconds(0)});
-    line.setLineWidthTransition(style::TransitionOptions{Milliseconds(300), Milliseconds(0)});
+    line.setLineColorTransition(style::TransitionOptions{Milliseconds(800), Milliseconds(0)});
+    line.setLineWidthTransition(style::TransitionOptions{Milliseconds(800), Milliseconds(0)});
     line.setLineColor(Color{0x20 / 255.0f, 0x40 / 255.0f, 0xe0 / 255.0f, 1.0f});
     line.setLineWidth(28.0f);
+
+    // Read every frame of the transition: some must be neither the old frame nor the new one.
+    int frames = 0;
+    int between = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < deadline && scene.nextFrame()) {
+        ++frames;
+        const PremultipliedImage frame = scene.image();
+        const double fromOld = differingShare(frame, old);
+        const double fromNew = differingShare(frame, reference);
+        if (fromNew <= maxMismatch) {
+            break;
+        }
+        if (fromOld > maxMismatch) {
+            ++between;
+        }
+    }
+    EXPECT_GE(between, 1) << "no frame of " << frames << " during the transition showed paint between the two";
+
     scene.settle();
     EXPECT_LE(differingShare(scene.image(), reference), maxMismatch) << "the transition did not end at the new paint";
     const int afterSettle = scene.drapeTargetsRendered();
     scene.restFrames(restFrameCount);
     EXPECT_EQ(scene.drapeTargetsRendered(), afterSettle) << "the drape re-renders at rest after the transition";
+}
+
+// A pattern image replaced at the same size is patched into the tiles' atlases in place, with no
+// relayout, so no bucket, tile or layer revision moves on its own.
+namespace {
+std::unique_ptr<style::Image> stripeImage(uint8_t r, uint8_t g, uint8_t b) {
+    PremultipliedImage image({16, 16});
+    for (uint32_t row = 0; row < 16; ++row) {
+        for (uint32_t col = 0; col < 16; ++col) {
+            uint8_t* px = image.data.get() + (static_cast<size_t>(row) * 16 + col) * 4;
+            // The outermost pixels are the same in every version: an in-place update patches the
+            // image into the atlas but not the padding copied from its edges, so edges that
+            // changed would leave seams that no drape could fix.
+            const bool edge = row == 0 || row == 15 || col == 0 || col == 15;
+            const bool stripe = !edge && (row / 4) % 2 == 0;
+            px[0] = stripe ? r : 240;
+            px[1] = stripe ? g : 240;
+            px[2] = stripe ? b : 240;
+            px[3] = 255;
+        }
+    }
+    return std::make_unique<style::Image>("stripe", std::move(image), 1.0f);
+}
+
+const std::string patternFillLayer = R"JSON({"id": "area", "type": "fill", "source": "overlay",
+    "filter": ["==", ["geometry-type"], "Polygon"],
+    "paint": {"fill-pattern": "stripe"}})JSON";
+} // namespace
+
+TEST(TerrainPaintDrape, FillPatternImageUpdateShowsOnTheNextFrame) {
+    expectNextFrameShows(
+        join({backgroundLayer, hillshadeLayer, patternFillLayer}),
+        [](PaintScene& scene) { scene.map.getStyle().addImage(stripeImage(30, 60, 200)); },
+        join({backgroundLayer, hillshadeLayer, patternFillLayer}),
+        /*draped=*/true,
+        [](style::Style& style) { style.addImage(stripeImage(200, 40, 30)); },
+        [](style::Style& style) { style.addImage(stripeImage(30, 60, 200)); });
+}
+
+// Moving a draped layer above another changes only their stacking: the same tiles, buckets and
+// paint. The fill is translucent so both draw in the same pass (an opaque fill draws in the opaque
+// pass, below every translucent layer, whatever the order).
+TEST(TerrainPaintDrape, LayerReorderShowsOnTheNextFrame) {
+    const std::string translucentFill = R"JSON({"id": "area", "type": "fill", "source": "overlay",
+        "filter": ["==", ["geometry-type"], "Polygon"],
+        "paint": {"fill-color": "#20c040", "fill-opacity": 0.95}})JSON";
+    const std::string wideLine = R"JSON({"id": "trail", "type": "line", "source": "overlay",
+        "filter": ["==", ["geometry-type"], "LineString"],
+        "paint": {"line-color": "#e02020", "line-width": 40}})JSON";
+    expectNextFrameShows(
+        join({backgroundLayer, hillshadeLayer, wideLine, translucentFill}),
+        [](PaintScene& scene) {
+            auto& style = scene.map.getStyle();
+            auto trail = style.removeLayer("trail");
+            ASSERT_TRUE(trail);
+            style.addLayer(std::move(trail)); // on top
+        },
+        join({backgroundLayer, hillshadeLayer, translucentFill, wideLine}));
 }

@@ -20,6 +20,7 @@ class ChangeRequest;
 
 class RenderBackgroundLayer final : public RenderLayer {
 public:
+    bool usesImagePattern() const override { return !unevaluated.get<style::BackgroundPattern>().isUndefined(); }
     explicit RenderBackgroundLayer(Immutable<style::BackgroundLayer::Impl>);
     ~RenderBackgroundLayer() override;
 

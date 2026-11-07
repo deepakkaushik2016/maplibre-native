@@ -15,6 +15,7 @@ using FillLayerTweakerPtr = std::shared_ptr<FillLayerTweaker>;
 
 class RenderFillLayer final : public RenderLayer {
 public:
+    bool usesImagePattern() const override { return !unevaluated.get<style::FillPattern>().isUndefined(); }
     enum class FillVariant : uint8_t {
         Fill,
         FillPattern,

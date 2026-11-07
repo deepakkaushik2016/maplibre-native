@@ -117,6 +117,9 @@ void RenderTarget::updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& par
 std::size_t RenderTarget::drapedSourceHash(const LayerGroupBase& layerGroup, const gfx::Drawable& drawable) {
     std::size_t hash = 0;
     util::hash_combine(hash, layerGroup.getPaintRevision());
+    // The layer's place in the stack: a reorder keeps every tile, bucket and paint, and a moved
+    // layer's new group restarts at paint revision 0.
+    util::hash_combine(hash, layerGroup.getLayerIndex());
     // The hillshade's drawable samples its tile's prepare target, made anew (with a new texture)
     // when the tile's DEM changes; the color relief's samples the DEM itself, uploaded anew then.
     std::optional<size_t> demTexture;

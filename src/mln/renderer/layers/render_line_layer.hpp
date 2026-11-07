@@ -26,6 +26,7 @@ using LineLayerTweakerPtr = std::shared_ptr<LineLayerTweaker>;
 
 class RenderLineLayer final : public RenderLayer {
 public:
+    bool usesImagePattern() const override { return !unevaluated.get<style::LinePattern>().isUndefined(); }
     explicit RenderLineLayer(Immutable<style::LineLayer::Impl>);
     ~RenderLineLayer() override;
 
