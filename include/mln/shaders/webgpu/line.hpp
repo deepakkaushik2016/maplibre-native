@@ -386,7 +386,10 @@ fn main(in: VertexInput) -> VertexOutput {
     out.position = position;
     out.v_width2 = vec2<f32>(outset, inset);
     out.v_normal = v_normal;
-    out.v_gamma_scale = extrude_length_without_perspective / extrude_length_with_perspective;
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
+    out.v_gamma_scale = select(
+        extrude_length_without_perspective / extrude_length_with_perspective, 1.0, drawable.pad1 != 0.0);
     out.v_lineprogress = v_lineprogress;
     out.v_blur = blur;
     out.v_opacity = opacity;
@@ -625,7 +628,9 @@ fn main(in: VertexInput) -> VertexOutput {
     out.position = position;
     out.v_width2 = vec2<f32>(outset, inset);
     out.v_normal = v_normal;
-    out.v_gamma_scale = gamma_scale;
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
+    out.v_gamma_scale = select(gamma_scale, 1.0, drawable.pad1 != 0.0);
     out.v_linesofar = v_linesofar;
     out.v_blur = blur;
     out.v_opacity = opacity;
@@ -963,7 +968,10 @@ fn main(in: VertexInput) -> VertexOutput {
     out.position = position;
     out.v_width2 = vec2<f32>(outset, inset);
     out.v_normal = v_normal;
-    out.v_gamma_scale = extrude_length_without_perspective / extrude_length_with_perspective;
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
+    out.v_gamma_scale = select(
+        extrude_length_without_perspective / extrude_length_with_perspective, 1.0, drawable.pad1 != 0.0);
     out.v_tex_a = tex_a;
     out.v_tex_b = tex_b;
     out.v_color = color;
@@ -1240,7 +1248,10 @@ fn main(in: VertexInput) -> VertexOutput {
     out.position = position;
     out.v_width2 = vec2<f32>(outset, inset);
     out.v_normal = v_normal;
-    out.v_gamma_scale = extrude_length_without_perspective / extrude_length_with_perspective;
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
+    out.v_gamma_scale = select(
+        extrude_length_without_perspective / extrude_length_with_perspective, 1.0, drawable.pad1 != 0.0);
     out.v_tex_a = tex_a;
     out.v_tex_b = tex_b;
     out.v_blur = blur;

@@ -299,7 +299,8 @@ Implemented:
 - CPU elevation queries (`RenderTerrain::getElevation`) with DEM tile ancestor
   fallback and bilinear interpolation
 - Line antialiasing gamma handled per drawable (1.0 when draped into a terrain
-  render target, perspective ratio otherwise)
+  render target, perspective ratio otherwise) for every line variant (plain,
+  gradient, pattern, SDF, gradient-SDF)
 - Mesh skirts on all four backends: each tile edge is extruded into a curtain
   that hangs below the surface by `u_elevation_offset` (gl-js `u_ele_delta`),
   hiding the cracks/stitches between neighbouring tiles at different zoom
@@ -1339,7 +1340,14 @@ terrain during placement sees the previous frame's state - the same first-frame 
   is now a single `demSubTileOffset` helper. The remaining logs in
   render_terrain.cpp are one-time warning/error logs; terrain_layer_tweaker.cpp
   has no per-frame logging.
-- Extend the draped-flag gamma handling to the line gradient/pattern/SDF variants
+- **(done)** Extend the draped-flag gamma handling to the line gradient/pattern/SDF variants:
+  `LineLayerTweaker` sets the draped flag (`pad1`) for every line variant, and the gradient,
+  pattern, SDF and gradient-SDF vertex shaders on all four backends use gamma 1.0 when it is set.
+  The gradient-SDF variant's missing `apply_drape_transform` was fixed upstream by #4894
+  (`TerrainDrape.ADashedGradientLineLandsWhereItIs`). Proven on
+  Metal by `TerrainLineDrape.EveryLineVariantDrapesLikeTheSolidLine` (terrain at exaggeration 0
+  vs terrain off); the gl-js oracles `terrain/line-{solid,dasharray,gradient}` are known
+  failures until the camera is anchored to the terrain (native renders them blank).
 - **(done)** Heatmap is elevated, not draped, as in gl-js (which does not drape it): each
   kernel is lifted to the DEM height at its centre in the kernel vertex shader, and the
   colour-ramp composite stays a screen-space pass.
@@ -1864,4 +1872,4 @@ draws before the main pass (null until it has drawn); iOS hands them over as
 ## Credits
 
 Implementation based on maplibre-gl-js terrain rendering architecture.
-Generated with assistance from Claude Code.
+Generated with AI assistance.

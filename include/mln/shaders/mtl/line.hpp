@@ -49,7 +49,7 @@ struct alignas(16) LineGradientDrawableUBO {
     /* 76 */ float gapwidth_t;
     /* 80 */ float offset_t;
     /* 84 */ float width_t;
-    /* 88 */ float pad1;
+    /* 88 */ float pad1; // Reused padding slot to flag terrain render-to-texture tiles
     /* 92 */ float pad2;
     /* 96 */
 };
@@ -71,7 +71,7 @@ struct alignas(16) LinePatternDrawableUBO {
     /* 88 */ float pattern_from_t;
     /* 92 */ float pattern_to_t;
     /* 96 */ float floorwidth_t;
-    /* 100 */ float pad1;
+    /* 100 */ float pad1; // Reused padding slot to flag terrain render-to-texture tiles
     /* 104 */ float pad2;
     /* 108 */ float pad3;
     /* 112 */
@@ -108,7 +108,7 @@ struct alignas(16) LineSDFDrawableUBO {
     /* 108 */ float offset_t;
     /* 112 */ float width_t;
     /* 116 */ float floorwidth_t;
-    /* 120 */ float pad1;
+    /* 120 */ float pad1; // Reused padding slot to flag terrain render-to-texture tiles
     /* 124 */ float pad2;
     /* 128 */
 };
@@ -473,7 +473,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     float4 rawPosition = drawable.matrix * float4(pos + offset2 / drawable.ratio, 0.0, 1.0) + projected_extrude;
     const float4 position = apply_drape_transform(rawPosition, drawable.matrix, paintParams.drape_tile);
 
-    // calculate how much the perspective view squishes or stretches the extrude
+    // calculate how much the perspective view squishes or stretches the extrude.
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
     const float extrude_length_without_perspective = length(dist);
     const float extrude_length_with_perspective = length(projected_extrude.xy / position.w * paintParams.units_to_pixels);
 
@@ -481,7 +483,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .position     = position,
         .width2       = float2(outset, inset),
         .normal       = half2(v_normal),
-        .gamma_scale  = half(extrude_length_without_perspective / extrude_length_with_perspective),
+        .gamma_scale  = drawable.pad1 != 0.0
+                            ? half(1.0)
+                            : half(extrude_length_without_perspective / extrude_length_with_perspective),
         .lineprogress = v_lineprogress,
 
 #if !defined(HAS_UNIFORM_u_blur)
@@ -663,7 +667,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     float4 rawPosition = drawable.matrix * float4(pos + offset2 / drawable.ratio, 0.0, 1.0) + projected_extrude;
     const float4 position = apply_drape_transform(rawPosition, drawable.matrix, paintParams.drape_tile);
 
-    // calculate how much the perspective view squishes or stretches the extrude
+    // calculate how much the perspective view squishes or stretches the extrude.
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
     const float extrude_length_without_perspective = length(dist);
     const float extrude_length_with_perspective = length(projected_extrude.xy / position.w * paintParams.units_to_pixels);
 
@@ -671,7 +677,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .position     = position,
         .width2       = float2(outset, inset),
         .normal       = half2(v_normal),
-        .gamma_scale  = half(extrude_length_without_perspective / extrude_length_with_perspective),
+        .gamma_scale  = drawable.pad1 != 0.0
+                            ? half(1.0)
+                            : half(extrude_length_without_perspective / extrude_length_with_perspective),
         .linesofar    = linesofar,
 
 #if !defined(HAS_UNIFORM_u_blur)
@@ -912,7 +920,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     float4 rawPosition = drawable.matrix * float4(pos + offset2 / drawable.ratio, 0.0, 1.0) + projected_extrude;
     const float4 position = apply_drape_transform(rawPosition, drawable.matrix, paintParams.drape_tile);
 
-    // calculate how much the perspective view squishes or stretches the extrude
+    // calculate how much the perspective view squishes or stretches the extrude.
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
     const float extrude_length_without_perspective = length(dist);
     const float extrude_length_with_perspective = length(projected_extrude.xy / position.w * paintParams.units_to_pixels);
 
@@ -920,7 +930,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .position     = position,
         .width2       = float2(outset, inset),
         .normal       = v_normal,
-        .gamma_scale  = half(extrude_length_without_perspective / extrude_length_with_perspective),
+        .gamma_scale  = drawable.pad1 != 0.0
+                            ? half(1.0)
+                            : half(extrude_length_without_perspective / extrude_length_with_perspective),
         .tex_a        = float2(linesofar * drawable.patternscale_a.x / floorwidth, v_normal.y * drawable.patternscale_a.y + drawable.tex_y_a),
         .tex_b        = float2(linesofar * drawable.patternscale_b.x / floorwidth, v_normal.y * drawable.patternscale_b.y + drawable.tex_y_b),
 
@@ -1130,7 +1142,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const float4 rawPosition = drawable.matrix * float4(pos + offset2 / drawable.ratio, 0.0, 1.0) + projected_extrude;
     const float4 position = apply_drape_transform(rawPosition, drawable.matrix, paintParams.drape_tile);
 
-    // calculate how much the perspective view squishes or stretches the extrude
+    // calculate how much the perspective view squishes or stretches the extrude.
+    // A value of 1.0 is used when drawn into a terrain render-to-texture tile with an
+    // orthographic matrix; perspective scaling happens when the terrain mesh is projected
     const float extrude_length_without_perspective = length(dist);
     const float extrude_length_with_perspective = length(projected_extrude.xy / position.w * paintParams.units_to_pixels);
 
@@ -1140,7 +1154,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .normal       = v_normal,
         .tex_a        = float2(linesofar * drawable.patternscale_a.x / floorwidth, v_normal.y * drawable.patternscale_a.y + drawable.tex_y_a),
         .tex_b        = float2(linesofar * drawable.patternscale_b.x / floorwidth, v_normal.y * drawable.patternscale_b.y + drawable.tex_y_b),
-        .gamma_scale  = half(extrude_length_without_perspective / extrude_length_with_perspective),
+        .gamma_scale  = drawable.pad1 != 0.0
+                            ? half(1.0)
+                            : half(extrude_length_without_perspective / extrude_length_with_perspective),
         .lineprogress = v_lineprogress,
 
 #if !defined(HAS_UNIFORM_u_blur)
