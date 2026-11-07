@@ -23,7 +23,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-GTEST_FILTER='*Terrain*:*DEM*:*TileLod*:*TileCover*'
+# GeoJSONTile.* holds the tile-level test of the feature-state revision (Task 33).
+GTEST_FILTER='*Terrain*:*DEM*:*TileLod*:*TileCover*:GeoJSONTile.*'
 RENDER_FILTER='terrain/'
 KNOWN="metrics/ignores/terrain-known.json"
 
