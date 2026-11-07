@@ -215,6 +215,30 @@ std::string trailsGeoJSON() {
     return R"({"type": "FeatureCollection", "features": [)" + features + "]}";
 }
 
+// Per tile of the 3x3 block, a square area and a point, both with the tile's feature id (1..9): a
+// fill, a fill-extrusion and a symbol layer each draw one of them. The square stays out of the
+// neighbours' tile buffers; the point sits towards the view's centre, so the half-shown
+// neighbours' icons are in view.
+std::string shapesGeoJSON() {
+    std::string features;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const auto at = [&](double fx, double fy) {
+                return lonLat(tilePoint(centreTile.x + dx + fx, centreTile.y + dy + fy));
+            };
+            const std::string id = std::to_string(featureID(dx, dy));
+            features += (features.empty() ? "" : ",\n") + std::string(R"({"type": "Feature", "id": )") + id +
+                        R"(, "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[)" + at(0.3, 0.3) +
+                        ", " + at(0.7, 0.3) + ", " + at(0.7, 0.7) + ", " + at(0.3, 0.7) + ", " + at(0.3, 0.3) +
+                        R"(]]}},
+      {"type": "Feature", "id": )" +
+                        id + R"(, "properties": {}, "geometry": {"type": "Point", "coordinates": )" +
+                        at(0.5 - 0.3 * dx, 0.5 - 0.3 * dy) + "}}";
+        }
+    }
+    return R"({"type": "FeatureCollection", "features": [)" + features + "]}";
+}
+
 std::string style(const std::string& layers) {
     return R"STYLE({
   "version": 8,
@@ -235,7 +259,9 @@ std::string style(const std::string& layers) {
            std::to_string(tileZoom) + R"STYLE(, "maxzoom": )STYLE" + std::to_string(tileZoom) + R"STYLE(
     },
     "overlay": {"type": "geojson", "data": )STYLE" +
-           trailsGeoJSON() + R"STYLE(}
+           trailsGeoJSON() + R"STYLE(},
+    "shapes": {"type": "geojson", "data": )STYLE" +
+           shapesGeoJSON() + R"STYLE(}
   },
   "terrain": {"source": "dem", "exaggeration": 1.25},
   "layers": [
@@ -457,15 +483,21 @@ using References = std::map<Selection, PremultipliedImage>;
 // Frames of fresh scenes that draw each selection (and none) as an ["id"] paint with no feature
 // state. Made before the scene under test: two maps alive at once on one thread share its current
 // run loop, and the inner one's teardown leaves the outer one, and later tests, without it.
-References references(const std::string& source, std::initializer_list<Selection> selections) {
+References references(const std::function<std::string(const Selection&)>& layers,
+                      std::initializer_list<Selection> selections,
+                      const std::function<void(style::Style&)>& setup = {}) {
     References out;
-    out.emplace(Selection{}, Scene(trailsSelectedByID(source, {})).image());
+    out.emplace(Selection{}, Scene(layers({}), setup).image());
     for (const auto& ids : selections) {
         if (!out.contains(ids)) {
-            out.emplace(ids, Scene(trailsSelectedByID(source, ids)).image());
+            out.emplace(ids, Scene(layers(ids), setup).image());
         }
     }
     return out;
+}
+
+References references(const std::string& source, std::initializer_list<Selection> selections) {
+    return references([&](const Selection& ids) { return trailsSelectedByID(source, ids); }, selections);
 }
 
 // A frame of `scene` matches the fresh scene drawn with `ids` selected.
@@ -617,6 +649,108 @@ INSTANTIATE_TEST_SUITE_P(Sources,
                          ::testing::Values(std::string("overlay"), std::string("vt")),
                          [](const auto& info) { return info.param == "vt" ? "VectorTiles" : "GeoJSON"; });
 
+// --- Feature state on the other bucket kinds: fill, fill-extrusion, symbol ---
+
+namespace {
+
+const std::string stateSelected = R"(["boolean", ["feature-state", "selected"], false])";
+
+std::string idsSelected(const Selection& ids) {
+    std::string list;
+    for (const int id : ids) {
+        list += (list.empty() ? "" : ", ") + std::to_string(id);
+    }
+    return ids.empty() ? "false" : R"(["in", ["id"], ["literal", [)" + list + "]]]";
+}
+
+// One layer of `kind` on the shapes, whose colour is chosen by `selected` (a boolean expression).
+std::string shapesLayer(const std::string& kind, const std::string& selected) {
+    const std::string color = R"(["case", )" + selected + R"(, "#2040e0", "#e02020"])";
+    if (kind == "fill") {
+        return R"({"id": "shapes", "type": "fill", "source": "shapes", "filter": ["==", ["geometry-type"], "Polygon"],
+          "paint": {"fill-color": )" +
+               color + "}}";
+    }
+    if (kind == "fill-extrusion") {
+        return R"({"id": "shapes", "type": "fill-extrusion", "source": "shapes",
+          "filter": ["==", ["geometry-type"], "Polygon"],
+          "paint": {"fill-extrusion-color": )" +
+               color + R"(, "fill-extrusion-height": 100}})";
+    }
+    // An SDF icon, so icon-color shows; drawn whatever the collisions.
+    return R"({"id": "shapes", "type": "symbol", "source": "shapes", "filter": ["==", ["geometry-type"], "Point"],
+      "layout": {"icon-image": "dot", "icon-size": 4, "icon-allow-overlap": true, "icon-ignore-placement": true},
+      "paint": {"icon-color": )" +
+           color + "}}";
+}
+
+void addDot(style::Style& style) {
+    PremultipliedImage image({16, 16});
+    for (uint32_t row = 0; row < 16; ++row) {
+        for (uint32_t col = 0; col < 16; ++col) {
+            uint8_t* px = image.data.get() + (static_cast<size_t>(row) * 16 + col) * 4;
+            const bool inside = row >= 2 && row < 14 && col >= 2 && col < 14;
+            px[0] = px[1] = px[2] = 0;
+            px[3] = inside ? 255 : 0;
+        }
+    }
+    style.addImage(std::make_unique<style::Image>("dot", std::move(image), 1.0f, /*sdf=*/true));
+}
+
+class TerrainFeatureStateBucket : public ::testing::TestWithParam<std::string> {};
+
+} // namespace
+
+// Each bucket kind uploads nothing at rest once a state is set, uploads only the tile whose
+// feature changed, and draws the change. Fills are draped, so their bakes are checked too.
+TEST_P(TerrainFeatureStateBucket, UploadsOnlyWhatChangedAndDrawsIt) {
+    const std::string kind = GetParam();
+    const Selection selected = {1, 2, 3, 6, 7, 8, 9};
+    const auto refs = references(
+        [&](const Selection& ids) { return shapesLayer(kind, idsSelected(ids)); }, {selected}, addDot);
+    Scene scene(shapesLayer(kind, stateSelected), addDot);
+
+    const auto all = scene.frameAfter([&] {
+        for (int id = 1; id <= 9; ++id) {
+            scene.renderer().setFeatureState("shapes", std::nullopt, std::to_string(id), selectedState());
+        }
+    });
+    scene.settle();
+    const auto one = scene.frameAfter(
+        [&] { scene.renderer().setFeatureState("shapes", std::nullopt, "5", selectedState(false)); });
+    scene.settle();
+    const auto other = scene.frameAfter(
+        [&] { scene.renderer().setFeatureState("shapes", std::nullopt, "4", selectedState(false)); });
+    scene.settle();
+    RecordProperty("oneTileUploadBytes", std::to_string(one.uploadBytes));
+    RecordProperty("everyTileUploadBytes", std::to_string(all.uploadBytes));
+    RecordProperty("oneTileBakes", std::to_string(one.bakes));
+    RecordProperty("everyTileBakes", std::to_string(all.bakes));
+
+    EXPECT_GT(one.uploadBytes, 0u) << "the change uploaded nothing";
+    EXPECT_EQ(one.uploadBytes, other.uploadBytes) << "two alike tiles uploaded different amounts";
+    EXPECT_GE(all.uploadBytes, 4 * one.uploadBytes)
+        << "one tile's change uploaded " << one.uploadBytes << " bytes, every tile's " << all.uploadBytes;
+    if (kind == "fill") {
+        EXPECT_GE(one.bakes, 1) << "the change did not re-bake the drape under its tile";
+        EXPECT_GE(all.bakes, 4 * one.bakes)
+            << "one tile's change baked " << one.bakes << " targets, every tile's " << all.bakes;
+    }
+    const auto rest = scene.restCost();
+    RecordProperty("restUploadBytes", std::to_string(rest.uploadBytes));
+    EXPECT_EQ(rest.uploadBytes, 0u) << "vertex bytes uploaded at rest";
+    EXPECT_EQ(rest.bakes, 0) << "drape targets baked at rest";
+    expectShowsSelected(scene, refs, selected);
+}
+
+INSTANTIATE_TEST_SUITE_P(Kinds,
+                         TerrainFeatureStateBucket,
+                         ::testing::Values(std::string("fill"), std::string("fill-extrusion"), std::string("symbol")),
+                         [](const auto& info) {
+                             return info.param == "fill" ? "Fill"
+                                                         : (info.param == "symbol" ? "Symbol" : "FillExtrusion");
+                         });
+
 // A reloaded tile (new data for the GeoJSON source, the same features) draws the states again.
 TEST(TerrainFeatureStateReload, AReloadedTileDrawsTheState) {
     const auto refs = references("overlay", {{centreFeature}});
@@ -750,6 +884,11 @@ void addImages(style::Style& style) {
 struct PatternScene : Scene {
     explicit PatternScene(const std::string& pattern)
         : Scene(patternLayers(pattern), addImages) {}
+    struct Layers {
+        std::string json;
+    };
+    explicit PatternScene(const Layers& layers)
+        : Scene(layers.json, addImages) {}
 
     // The drape targets the trails cover: every target in view.
     int allTargets() {
@@ -794,6 +933,45 @@ TEST(TerrainImageUpdate, OnlyTheUpdatedPatternsTargetsBake) {
     EXPECT_LE(patternBakes[0] * 4, all) << "updating the pattern's image re-baked targets the pattern does not cover";
     EXPECT_EQ(patternBakes[1], patternBakes[0]);
     EXPECT_EQ(patternBakes[2], patternBakes[0]);
+}
+
+// A line-pattern (the centre tile's trail only, over the plain trails): an unused image bakes
+// nothing, and the pattern's own image bakes only that trail's targets.
+TEST(TerrainImageUpdate, OnlyTheUpdatedLinePatternsTargetsBake) {
+    PatternScene scene(PatternScene::Layers{R"({"id": "trail", "type": "line", "source": "overlay",
+      "filter": ["==", ["geometry-type"], "LineString"], "paint": {"line-color": "#e02020", "line-width": 8}},
+    {"id": "trail-pattern", "type": "line", "source": "overlay", "filter": ["==", ["id"], 5],
+      "paint": {"line-pattern": "stripe", "line-width": 16}})"});
+    const int all = scene.allTargets();
+    ASSERT_GT(all, 1);
+    int unusedBakes = 0;
+    for (int frame = 0; frame < restFrameCount; ++frame) {
+        unusedBakes += scene.bakesForUpdateOf("marker", static_cast<uint8_t>(10 * frame));
+    }
+    EXPECT_EQ(unusedBakes, 0) << "an image no layer draws baked the drape";
+    const int patternBakes = scene.bakesForUpdateOf("stripe", 60);
+    RecordProperty("patternImageBakes", std::to_string(patternBakes));
+    RecordProperty("allTargets", std::to_string(all));
+    EXPECT_GE(patternBakes, 1) << "updating the line pattern's image did not re-bake its drape";
+    EXPECT_LE(patternBakes * 4, all) << "updating the line pattern's image re-baked targets it does not cover";
+    EXPECT_EQ(scene.restCost(2).bakes, 0);
+}
+
+// A background-pattern covers every target: an unused image bakes nothing, and the pattern's own
+// image bakes the drape.
+TEST(TerrainImageUpdate, OnlyAnUpdateOfTheBackgroundPatternsImageBakes) {
+    PatternScene scene(PatternScene::Layers{R"({"id": "trail", "type": "line", "source": "overlay",
+      "filter": ["==", ["geometry-type"], "LineString"], "paint": {"line-color": "#e02020", "line-width": 8}},
+    {"id": "background-pattern", "type": "background", "paint": {"background-pattern": "stripe"}})"});
+    int unusedBakes = 0;
+    for (int frame = 0; frame < restFrameCount; ++frame) {
+        unusedBakes += scene.bakesForUpdateOf("marker", static_cast<uint8_t>(10 * frame));
+    }
+    EXPECT_EQ(unusedBakes, 0) << "an image no layer draws baked the drape";
+    const int patternBakes = scene.bakesForUpdateOf("stripe", 60);
+    RecordProperty("patternImageBakes", std::to_string(patternBakes));
+    EXPECT_GE(patternBakes, 1) << "updating the background pattern's image did not re-bake the drape";
+    EXPECT_EQ(scene.restCost(2).bakes, 0);
 }
 
 // A data-driven pattern can draw only the images its expression names.
