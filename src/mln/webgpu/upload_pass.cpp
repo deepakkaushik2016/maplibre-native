@@ -70,6 +70,7 @@ std::unique_ptr<gfx::VertexBufferResource> UploadPass::createVertexBufferResourc
 void UploadPass::updateVertexBufferResource(gfx::VertexBufferResource& resource, const void* data, std::size_t size) {
     auto& buffer = static_cast<VertexBufferResource&>(resource);
     buffer.update(data, size);
+    getContext().renderingStats().vertexUpdateBytes += size;
 }
 
 std::unique_ptr<gfx::IndexBufferResource> UploadPass::createIndexBufferResource(const void* data,
