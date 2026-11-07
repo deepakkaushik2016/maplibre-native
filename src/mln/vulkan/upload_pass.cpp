@@ -77,6 +77,8 @@ const gfx::UniqueVertexBufferResource& UploadPass::getBuffer(const gfx::VertexVe
             if (rawBufSize <= resource.getSizeInBytes()) {
                 if (vec->isModifiedAfter(resource.getLastUpdated())) {
                     // updateVertexBufferResource(resource, rawBufPtr, rawBufSize);
+                    // Replaced by a new buffer below: counted as an update, as on the other backends.
+                    commandEncoder.context.renderingStats().vertexUpdateBytes += rawBufSize;
                 } else {
                     return rawData->resource;
                 }
