@@ -30,6 +30,8 @@ CacheControl CacheControl::parse(const std::string& value) {
     qi::phrase_parse(value.begin(),
                      value.end(),
                      (qi::lit("must-revalidate")[phoenix::ref(result.mustRevalidate) = true] |
+                      (qi::lit("no-store") >> &(qi::lit(',') | qi::eoi))[phoenix::ref(result.noStore) = true] |
+                      (qi::lit("no-cache") >> &(qi::lit(',') | qi::eoi))[phoenix::ref(result.noCache) = true] |
                       (qi::lit("max-age") >> '=' >> qi::ulong_long[phoenix::ref(result.maxAge) = qi::_1]) |
                       (*(('"' >> *(('\\' >> qi::char_) | (qi::char_ - '"')) >> '"') | (qi::char_ - '"' - ',')))) %
                          ',',
@@ -38,6 +40,9 @@ CacheControl CacheControl::parse(const std::string& value) {
 }
 
 std::optional<Timestamp> CacheControl::toTimePoint() const {
+    if (noCache || noStore) {
+        return util::now();
+    }
     return maxAge ? util::now() + Seconds(*maxAge) : std::optional<Timestamp>{};
 }
 

@@ -14,7 +14,14 @@ public:
 
     std::optional<uint64_t> maxAge;
     bool mustRevalidate = false;
+    /// `no-cache` (not the field-qualified `no-cache="..."`, which only restricts the named fields):
+    /// the response must be revalidated before every reuse.
+    bool noCache = false;
+    /// `no-store`: the response must not be reused.
+    bool noStore = false;
 
+    /// When the response expires: now for `no-cache` or `no-store` (it is stale at once), after
+    /// `max-age` otherwise, or none.
     std::optional<Timestamp> toTimePoint() const;
 };
 

@@ -1,4 +1,5 @@
 #include <mln/test/util.hpp>
+#include <mln/util/chrono.hpp>
 #include <mln/util/http_header.hpp>
 
 TEST(HTTPHeader, Parsing) {
@@ -66,4 +67,37 @@ TEST(HTTPHeader, Parsing) {
     ASSERT_TRUE(bool(cc.maxAge));
     EXPECT_EQ(3600u, *cc.maxAge);
     EXPECT_TRUE(cc.mustRevalidate);
+    // Field-qualified: only the named fields may not be reused.
+    EXPECT_FALSE(cc.noCache);
+}
+
+// no-store and no-cache make the response stale at once, whatever max-age says.
+TEST(HTTPHeader, NoStoreAndNoCache) {
+    using namespace mln;
+
+    auto cc = http::CacheControl::parse("no-store");
+    EXPECT_TRUE(cc.noStore);
+    EXPECT_FALSE(cc.noCache);
+    ASSERT_TRUE(cc.toTimePoint());
+    EXPECT_LE(*cc.toTimePoint(), util::now());
+
+    cc = http::CacheControl::parse("public, no-cache");
+    EXPECT_TRUE(cc.noCache);
+    EXPECT_FALSE(cc.noStore);
+    ASSERT_TRUE(cc.toTimePoint());
+    EXPECT_LE(*cc.toTimePoint(), util::now());
+
+    cc = http::CacheControl::parse("max-age=3600, no-cache");
+    EXPECT_TRUE(cc.noCache);
+    EXPECT_LE(*cc.toTimePoint(), util::now());
+
+    cc = http::CacheControl::parse("max-age=3600");
+    EXPECT_FALSE(cc.noCache);
+    EXPECT_FALSE(cc.noStore);
+    EXPECT_GT(*cc.toTimePoint(), util::now());
+
+    // Neither is a prefix match.
+    cc = http::CacheControl::parse("no-storex, no-cachey");
+    EXPECT_FALSE(cc.noStore);
+    EXPECT_FALSE(cc.noCache);
 }
