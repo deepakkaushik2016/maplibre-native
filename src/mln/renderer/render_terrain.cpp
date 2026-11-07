@@ -1493,6 +1493,10 @@ void RenderTerrain::prepareDepthTarget(PaintParameters& parameters) {
         fresh = true;
         // Far plane everywhere the terrain does not cover (unpack_depth(1,1,1,1) ~ 1.0)
         depthRenderTarget->setClearColor(Color::white());
+        // The packed window depth must be the NDC depth itself on every backend, as
+        // unpack_depth assumes: no layer depth range compressing it (#4868 applies the
+        // range on Metal, Vulkan and WebGPU too).
+        depthRenderTarget->setFullDepthRange(true);
         // The packed digits must not be filtered: blending neighbouring texels'
         // channels decodes to garbage (offscreen textures default to Linear)
         depthRenderTarget->getTexture()->setSamplerConfiguration({.filter = gfx::TextureFilterType::Nearest,

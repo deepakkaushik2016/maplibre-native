@@ -502,8 +502,10 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
 
         // draw layer groups, opaque pass
         parameters.pass = RenderPass::Opaque;
-        parameters.depthRangeSize = 1 - (numLayerGroups() + 2) * PaintParameters::numSublayers *
-                                            PaintParameters::depthEpsilon;
+        const float depthRangeSize = fullDepthRange ? 1.0f
+                                                    : 1 - (numLayerGroups() + 2) * PaintParameters::numSublayers *
+                                                              PaintParameters::depthEpsilon;
+        parameters.depthRangeSize = depthRangeSize;
 
         parameters.currentLayer = 0;
         visitLayerGroupsReversed([&](LayerGroupBase& layerGroup) {
@@ -513,8 +515,7 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
 
         // draw layer groups, translucent pass
         parameters.pass = RenderPass::Translucent;
-        parameters.depthRangeSize = 1 - (numLayerGroups() + 2) * PaintParameters::numSublayers *
-                                            PaintParameters::depthEpsilon;
+        parameters.depthRangeSize = depthRangeSize;
 
         parameters.currentLayer = static_cast<uint32_t>(numLayerGroups()) - 1;
         visitLayerGroups([&](LayerGroupBase& layerGroup) {

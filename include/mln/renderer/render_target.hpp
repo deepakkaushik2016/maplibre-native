@@ -205,9 +205,14 @@ protected:
     // holds valid (if stale) content. Only such targets may be deferred by the drape budget;
     // a never-rendered target is always rendered to avoid showing a blank tile.
     bool hasRenderedContent = false;
+    // Draw 3D drawables over the whole depth range [0, 1] rather than the [0, depthRangeSize]
+    // that leaves room for 2D sublayers. Set for the terrain depth target, whose fragment
+    // shaders pack the window depth for calculate_visibility to compare with clip-space NDC z.
+    bool fullDepthRange = false;
 
 public:
     void setRenderOnce(bool value) { renderOnce = value; }
+    void setFullDepthRange(bool value) { fullDepthRange = value; }
 
     /// What a draped drawable's content is drawn from, folded into the drape signatures with its
     /// covering tile: its source bucket's id, or, for the hillshade and color-relief layers
