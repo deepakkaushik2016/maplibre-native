@@ -1,0 +1,612 @@
+#include <mln/test/util.hpp>
+#include <mln/test/stub_file_source.hpp>
+#include <mln/test/map_adapter.hpp>
+
+#include <mln/gfx/backend_scope.hpp>
+#include <mln/gfx/headless_frontend.hpp>
+#include <mln/map/camera.hpp>
+#include <mln/map/map_observer.hpp>
+#include <mln/map/map_options.hpp>
+#include <mln/renderer/renderer.hpp>
+#include <mln/storage/response.hpp>
+#include <mln/style/style.hpp>
+#include <mln/tile/tile_id.hpp>
+#include <mln/util/chrono.hpp>
+#include <mln/util/constants.hpp>
+#include <mln/util/image.hpp>
+#include <mln/util/run_loop.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+using namespace mln;
+
+// A sparse raster-dem tileset, as the production terrain tileset is: every tile to z12, z13-14
+// only inside some boxes, and an empty answer (204 No Content, or a 404) for every tile it does not
+// have. A tile that answers empty at or below the source's maxzoom means "no finer data here": the
+// map draws the terrain, and answers elevation queries, from the nearest ancestor that has data,
+// overzoomed - as maplibre-gl-js falls back to a loaded parent for a tile that failed or is empty.
+//
+// The ground is a cone, so a frame drawn flat (or an elevation of 0 m, or none) is easy to tell
+// from the cone overzoomed from z12. Each scene reaches z13.5 outside the boxes in the ways a user
+// does: zooming in from z12, where the z12 tiles are loaded already (and from z13.2, within the
+// level), and a cold jump straight to z13.5 (a new map, no frame before), where nothing is.
+
+namespace {
+
+constexpr uint32_t viewWidth = 400;
+constexpr uint32_t viewHeight = 600;
+constexpr int planetMaxZoom = 12;
+constexpr int demMaxZoom = 14;
+constexpr uint32_t demSize = 512;
+constexpr double kmPerDegree = 6371.0088 * M_PI / 180.0;
+
+// The z12 tile the cone stands on: its apex is the tile's centre (about 46.6 N, 10.3 E).
+constexpr uint32_t apexX = 2165;
+constexpr uint32_t apexY = 1447;
+constexpr double coneBase = 400.0;
+constexpr double conePeak = 2400.0;
+constexpr double coneRadiusKm = 15.0;
+
+LatLng tilePoint(double x, double y, int z = planetMaxZoom) {
+    const double n = std::pow(2.0, z);
+    return {util::rad2deg(std::atan(std::sinh(M_PI * (1.0 - 2.0 * y / n)))), x / n * 360.0 - 180.0};
+}
+
+// Where `point` is in z12 tile units.
+std::pair<double, double> tileCoordinates(const LatLng& point) {
+    const double n = std::pow(2.0, planetMaxZoom);
+    const double lat = util::deg2rad(point.latitude());
+    return {(point.longitude() + 180.0) / 360.0 * n,
+            (1.0 - std::log(std::tan(lat) + 1.0 / std::cos(lat)) / M_PI) / 2.0 * n};
+}
+
+const LatLng apex = tilePoint(apexX + 0.5, apexY + 0.5);
+
+double coneMeters(const LatLng& point) {
+    const double northKm = (point.latitude() - apex.latitude()) * kmPerDegree;
+    const double eastKm = (point.longitude() - apex.longitude()) * kmPerDegree *
+                          std::cos(util::deg2rad(apex.latitude()));
+    const double km = std::hypot(northKm, eastKm);
+    return coneBase + (conePeak - coneBase) * std::max(0.0, 1.0 - km / coneRadiusKm);
+}
+
+// The box with z13-14 tiles: the z12 tile two east and two south of the apex's, out of every view
+// below that does not look into it. Its z13-14 tiles hold a bump the z12 tile does not: the finer
+// detail the production tileset has inside a park.
+const CanonicalTileID subBox(planetMaxZoom, apexX + 2, apexY + 2);
+const LatLng bump = tilePoint(subBox.x + 0.5, subBox.y + 0.5);
+constexpr double bumpMeters = 120.0;
+constexpr double bumpWidthKm = 0.25;
+
+double bumpAt(const LatLng& point) {
+    const double northKm = (point.latitude() - bump.latitude()) * kmPerDegree;
+    const double eastKm = (point.longitude() - bump.longitude()) * kmPerDegree *
+                          std::cos(util::deg2rad(bump.latitude()));
+    return bumpMeters * std::exp(-(northKm * northKm + eastKm * eastKm) / (bumpWidthKm * bumpWidthKm));
+}
+
+// The cut-out (Japan, the Northern Territories, Takeshima in the production tileset): the column
+// of two z12 tiles south-east of the apex's, (apexX + 1, apexY + 1) and (apexX + 1, apexY + 2), at
+// 0 m. They are the west half of z11 tile (1083, 724), whose east half is real ground, so that
+// tile (and every one above it) straddles the coast and holds 0 m pixels on the cut's side; the z12
+// tiles inside, and every tile under them, answer empty.
+bool inCut(const CanonicalTileID& id) {
+    if (id.z < planetMaxZoom) {
+        return false; // a z11 tile spans two z12 columns: it straddles at most
+    }
+    const uint32_t x = id.x >> (id.z - planetMaxZoom);
+    const uint32_t y = id.y >> (id.z - planetMaxZoom);
+    return x == apexX + 1 && (y == apexY + 1 || y == apexY + 2);
+}
+
+bool inCut(const LatLng& point) {
+    const auto [x, y] = tileCoordinates(point);
+    return std::floor(x) == apexX + 1 && (std::floor(y) == apexY + 1 || std::floor(y) == apexY + 2);
+}
+
+// The coast: the cut's west edge, at x = apexX + 1 in z12 tile units.
+const double coastX = apexX + 1.0;
+
+enum class Ground {
+    Cone,
+    ConeWithCut,
+};
+
+double groundMeters(Ground ground, const LatLng& point, bool withBump) {
+    if (ground == Ground::ConeWithCut && inCut(point)) {
+        return 0.0;
+    }
+    return coneMeters(point) + (withBump ? bumpAt(point) : 0.0);
+}
+
+// The DEM tile z/x/y of the ground in Terrarium, each pixel holding the height at its centre.
+// Memoized: a 512 px tile takes a while to encode, and the scenes ask for the same ones.
+std::shared_ptr<const std::string> demTile(Ground ground, const CanonicalTileID& id) {
+    static std::map<std::pair<int, CanonicalTileID>, std::shared_ptr<const std::string>> tiles;
+    auto& tile = tiles[{static_cast<int>(ground), id}];
+    if (tile) {
+        return tile;
+    }
+    const bool withBump = id.z > planetMaxZoom;
+    const double n = std::pow(2.0, id.z);
+    PremultipliedImage image({demSize, demSize});
+    for (uint32_t row = 0; row < demSize; ++row) {
+        const double mercatorY = (id.y + (row + 0.5) / demSize) / n;
+        const double latitude = util::rad2deg(std::atan(std::sinh(M_PI * (1.0 - 2.0 * mercatorY))));
+        for (uint32_t col = 0; col < demSize; ++col) {
+            const double longitude = (id.x + (col + 0.5) / demSize) / n * 360.0 - 180.0;
+            const double value = groundMeters(ground, {latitude, longitude}, withBump) + 32768.0;
+            const auto whole = static_cast<uint32_t>(std::floor(value));
+            uint8_t* px = image.data.get() + (static_cast<size_t>(row) * demSize + col) * 4;
+            px[0] = static_cast<uint8_t>(whole >> 8);
+            px[1] = static_cast<uint8_t>(whole & 0xFF);
+            px[2] = static_cast<uint8_t>(std::floor((value - whole) * 256.0));
+            px[3] = 255;
+        }
+    }
+    tile = std::make_shared<const std::string>(encodePNG(image));
+    return tile;
+}
+
+// How the tileset answers a tile it does not have.
+enum class Missing {
+    NoContent, // 204 with an empty body, as the production tileset answers
+    NotFound,  // 404
+};
+
+// Which tiles the tileset has.
+enum class TilesetKind {
+    Sparse, // z0-12 everywhere, z13-14 in the sub-box only (and nothing inside the cut)
+    Dense,  // every tile to z14: the reference a sparse tileset is drawn against
+};
+
+// Lines every 250 m around the apex, draped on the terrain, so that the drawn mesh's height shows:
+// a mesh drawn at the wrong height moves the lines on the screen.
+std::string gridGeoJSON() {
+    const double kmPerLng = kmPerDegree * std::cos(util::deg2rad(apex.latitude()));
+    std::string lines;
+    for (int i = -60; i <= 60; ++i) {
+        const double km = i * 0.25;
+        const double lat = apex.latitude() + km / kmPerDegree;
+        const double lng = apex.longitude() + km / kmPerLng;
+        const double south = apex.latitude() - 15.0 / kmPerDegree;
+        const double north = apex.latitude() + 15.0 / kmPerDegree;
+        const double west = apex.longitude() - 15.0 / kmPerLng;
+        const double east = apex.longitude() + 15.0 / kmPerLng;
+        if (!lines.empty()) {
+            lines += ",";
+        }
+        lines += "[[" + std::to_string(west) + "," + std::to_string(lat) + "],[" + std::to_string(east) + "," +
+                 std::to_string(lat) + "]],";
+        lines += "[[" + std::to_string(lng) + "," + std::to_string(south) + "],[" + std::to_string(lng) + "," +
+                 std::to_string(north) + "]]";
+    }
+    return R"({"type": "MultiLineString", "coordinates": [)" + lines + "]}";
+}
+
+// The production source's shape: one raster-dem source `terrain`, Terrarium, 512 px, maxzoom 14.
+// A colour relief and a hillshade of it, and the grid, all draped. `terrain` false leaves the
+// terrain out: the same layers, drawn flat.
+std::string sparseStyle(bool terrain = true) {
+    return R"STYLE({
+  "version": 8,
+  "sources": {
+    "terrain": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/terrain/{z}/{x}/{y}.png"],
+      "encoding": "terrarium",
+      "maxzoom": )STYLE" +
+           std::to_string(demMaxZoom) + R"STYLE(,
+      "tileSize": 512
+    },
+    "grid": {"type": "geojson", "data": )STYLE" +
+           gridGeoJSON() + R"STYLE(}
+  },)STYLE" +
+           (terrain ? R"STYLE(
+  "terrain": {"source": "terrain", "exaggeration": 1},)STYLE"
+                    : "") +
+           R"STYLE(
+  "layers": [
+    {"id": "background", "type": "background", "paint": {"background-color": "#dddddd"}},
+    {"id": "relief", "type": "color-relief", "source": "terrain",
+     "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"],
+        0, "rgb(20, 60, 160)", 400, "rgb(20, 120, 40)", 2400, "rgb(150, 90, 30)"]}},
+    {"id": "hillshade", "type": "hillshade", "source": "terrain", "paint": {"hillshade-exaggeration": 0.4}},
+    {"id": "grid", "type": "line", "source": "grid", "paint": {"line-color": "black", "line-width": 2}}
+  ]
+})STYLE";
+}
+
+// A file source that, like DefaultFileSource, answers each tile from its (here empty) cache first
+// and from the network after.
+class CachingFileSource : public StubFileSource {
+public:
+    CachingFileSource()
+        : StubFileSource(ResourceOptions::Default(), ClientOptions()) {}
+    bool supportsCacheOnlyRequests() const override { return true; }
+};
+
+class FrameObserver : public MapObserver {
+public:
+    void onDidFinishRenderingFrame(const RenderFrameStatus& status) override {
+        ++frames;
+        idleFrame = !status.needsRepaint;
+    }
+    void onTileAction(TileOperation op, const OverscaledTileID& id, const std::string& sourceID) override {
+        if (op == TileOperation::StartParse) {
+            parsing.emplace(id, sourceID);
+            idleFrame = false;
+        } else if (op == TileOperation::EndParse || op == TileOperation::Cancelled || op == TileOperation::Error) {
+            parsing.erase({id, sourceID});
+            idleFrame = false;
+        }
+    }
+    void onCameraDidChange(CameraChangeMode mode) override {
+        if (mode == CameraChangeMode::Animated) {
+            ++transitionsEnded;
+        }
+    }
+    int frames = 0;
+    std::set<std::pair<OverscaledTileID, std::string>> parsing;
+    bool idleFrame = false;
+    int transitionsEnded = 0;
+};
+
+struct SceneOptions {
+    TilesetKind tileset = TilesetKind::Sparse;
+    Missing missing = Missing::NoContent;
+    Ground ground = Ground::Cone;
+    bool terrain = true;
+};
+
+// A map run continuously, so tiles arrive across frames as they do in an app. Nothing is drawn
+// until the first camera is set: a new scene is a cold start.
+struct SparseScene {
+    util::RunLoop loop;
+    std::shared_ptr<CachingFileSource> fileSource = std::make_shared<CachingFileSource>();
+    HeadlessFrontend frontend{{viewWidth, viewHeight}, 1};
+    FrameObserver observer;
+    MapAdapter map{
+        frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
+    SceneOptions options;
+    /// Network requests per DEM tile.
+    std::map<CanonicalTileID, int> networkRequests;
+
+    explicit SparseScene(SceneOptions options_ = {})
+        : options(options_) {
+        fileSource->tileResponse = [this](const Resource& resource) -> std::optional<Response> {
+            Response res;
+            if (!resource.tileData || resource.url.find("/terrain/") == std::string::npos) {
+                res.noContent = true;
+                return res;
+            }
+            if (resource.loadingMethod == Resource::LoadingMethod::CacheOnly) {
+                res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "not cached");
+                return res;
+            }
+            const CanonicalTileID id(
+                resource.tileData->z, static_cast<uint32_t>(resource.tileData->x), resource.tileData->y);
+            ++networkRequests[id];
+            if (!has(id)) {
+                if (options.missing == Missing::NoContent) {
+                    res.noContent = true;
+                } else {
+                    res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "no tile");
+                }
+                return res;
+            }
+            res.data = demTile(options.ground, id);
+            return res;
+        };
+        map.getStyle().loadJSON(sparseStyle(options.terrain));
+    }
+
+    bool has(const CanonicalTileID& id) const {
+        if (options.tileset == TilesetKind::Dense) {
+            return true; // the cut too, its tiles at 0 m
+        }
+        if (options.ground == Ground::ConeWithCut && inCut(id)) {
+            return false;
+        }
+        if (id.z <= planetMaxZoom) {
+            return true;
+        }
+        return CanonicalTileID(planetMaxZoom, id.x >> (id.z - planetMaxZoom), id.y >> (id.z - planetMaxZoom)) == subBox;
+    }
+
+    double ground(const LatLng& point) const {
+        // Only the sub-box's z13-14 tiles hold the bump, and in a dense tileset every tile there
+        // does; the scenes below look at the bump only where it is drawn from those.
+        return groundMeters(options.ground, point, false) + bumpAt(point);
+    }
+
+    CameraOptions camera(const LatLng& center, double zoom, double pitch) const {
+        return CameraOptions().withCenter(center).withZoom(zoom).withPitch(pitch).withBearing(0.0).withCenterAltitude(
+            options.terrain ? ground(center) : 0.0);
+    }
+
+    void jumpTo(const CameraOptions& camera) {
+        map.jumpTo(camera);
+        settle();
+    }
+
+    // Zooms there as a user does, a frame at a time over a second, and waits for the tiles.
+    void easeTo(const CameraOptions& camera) {
+        const int ended = observer.transitionsEnded;
+        map.easeTo(camera, AnimationOptions(Milliseconds(1000)));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (observer.transitionsEnded == ended && std::chrono::steady_clock::now() < deadline) {
+            loop.runOnce();
+        }
+        EXPECT_NE(observer.transitionsEnded, ended) << "the zoom did not end";
+        settle();
+    }
+
+    // Runs the map until every tile that can arrive has, has been parsed and drawn, and a frame
+    // has found nothing more to draw: at most 30 s, failing the test past that.
+    void settle() {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        const int start = observer.frames;
+        observer.idleFrame = false;
+        const auto quiet = [&] {
+            return observer.frames > start && observer.parsing.empty() && observer.idleFrame;
+        };
+        while (std::chrono::steady_clock::now() < deadline) {
+            loop.runOnce();
+            if (quiet()) {
+                const auto settled = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+                while (std::chrono::steady_clock::now() < settled) {
+                    loop.runOnce();
+                }
+                if (quiet()) {
+                    return;
+                }
+            }
+        }
+        ADD_FAILURE() << "the map did not settle within 30 s";
+    }
+
+    PremultipliedImage image() {
+        gfx::BackendScope guard{*frontend.getBackend()};
+        return frontend.readStillImage();
+    }
+
+    std::optional<double> elevation(const LatLng& point) {
+        return frontend.getRenderer()->queryTerrainElevation(point);
+    }
+
+    int requestsAbove(int zoom) const {
+        int count = 0;
+        for (const auto& [id, n] : networkRequests) {
+            if (id.z > zoom) {
+                count += n;
+            }
+        }
+        return count;
+    }
+};
+
+// The share of pixels that differ from `reference` by more than 8 levels in a channel, leaving out
+// the columns within `bandHalfWidth` pixels of the screen's vertical centre line.
+double mismatch(const PremultipliedImage& image, const PremultipliedImage& reference, double bandHalfWidth = -1.0) {
+    if (image.size != reference.size) {
+        return 1.0;
+    }
+    size_t count = 0;
+    size_t total = 0;
+    const double middle = image.size.width / 2.0;
+    for (uint32_t row = 0; row < image.size.height; ++row) {
+        for (uint32_t col = 0; col < image.size.width; ++col) {
+            if (std::abs(col + 0.5 - middle) <= bandHalfWidth) {
+                continue;
+            }
+            ++total;
+            const size_t i = (static_cast<size_t>(row) * image.size.width + col) * 4;
+            for (size_t c = 0; c < 4; ++c) {
+                if (std::abs(image.data[i + c] - reference.data[i + c]) > 8) {
+                    ++count;
+                    break;
+                }
+            }
+        }
+    }
+    return total ? static_cast<double>(count) / static_cast<double>(total) : 1.0;
+}
+
+// The view: the centre of the z12 tile south-west of the apex's, about 9.5 km from the apex, on
+// the cone's flank at about 1130 m, looking north up the slope. At z13.5 it sees z12 tile
+// (apexX - 1, apexY + 1) and the one north of it, none of the sub-box or the cut.
+const LatLng flank = tilePoint(apexX - 0.5, apexY + 1.5);
+constexpr double arrivalZoom = 13.5;
+constexpr double pitch = 50.0;
+
+// Points round the view's centre, on the flank: the ground the view looks at.
+std::vector<LatLng> flankPoints() {
+    const double kmPerLng = kmPerDegree * std::cos(util::deg2rad(flank.latitude()));
+    std::vector<LatLng> points;
+    for (const double northKm : {-0.4, 0.0, 0.5, 1.0}) {
+        for (const double eastKm : {-0.5, 0.0, 0.5}) {
+            points.emplace_back(flank.latitude() + northKm / kmPerDegree, flank.longitude() + eastKm / kmPerLng);
+        }
+    }
+    return points;
+}
+
+// The most the drawn frame may differ from the dense reference's, which draws the cone from z14
+// DEM tiles where the sparse scene overzooms its z12 ones (3.3 m against 13 m a DEM pixel). The
+// surface is the same (the cone is linear in distance: bilinear interpolation of it misses by under
+// a millimetre at either size); the colour relief and hillshade sample textures of different
+// resolutions, within the 8 levels a channel may differ by, and the grid's anti-aliased edges may
+// fall a fraction of a pixel apart. Measured: 0 on Metal. A frame drawn flat moves the grid by tens
+// of pixels, 21 % of the frame: the scene checks first that the flat frame differs from the
+// reference by many times this. A drape baked at another zoom draws the grid's lines 2^0.3 too
+// wide: 8-11 % of the frame.
+constexpr double maxMismatch = 0.02;
+constexpr double minFlatMismatch = 0.10;
+// The cut drawn from the z11 tile against z12-14 tiles at 0 m: the frames differ only where the
+// coarser DEM draws the coast itself. On the cut's side the z11 surface runs down the cliff over a
+// z11 DEM pixel (26 m) instead of a z14 one; on the land's side the z12 tile's border, with no
+// neighbour to backfill it, repeats its edge pixels, so the hillshade there does not see the cliff.
+// The band left out is a z11 DEM pixel and a half either side of the coast, and 2 px of
+// anti-aliasing; outside it the frames match (measured: 0 on Metal).
+constexpr double maxCoastMismatch = 0.002;
+double coastBand(double zoom) {
+    return 1.5 * std::exp2(zoom - (planetMaxZoom - 1)) + 2.0;
+}
+
+// The elevation query reads the cone at every point: overzoomed from z12, the bilinear surface is
+// the cone to well under a millimetre, and Terrarium holds heights to 1/256 m.
+void expectTheCone(SparseScene& scene, const std::string& when) {
+    for (const auto& point : flankPoints()) {
+        const auto meters = scene.elevation(point);
+        ASSERT_TRUE(meters) << when << ": no elevation at " << point.latitude() << ", " << point.longitude();
+        EXPECT_NEAR(*meters, coneMeters(point), 0.25)
+            << when << ": at " << point.latitude() << ", " << point.longitude();
+    }
+    // The ground under the middle of the screen, raycast from the camera: where the camera looks.
+    const auto ground = scene.frontend.getRenderer()->queryTerrainLatLng({viewWidth / 2.0, viewHeight / 2.0});
+    ASSERT_TRUE(ground) << when << ": no ground under the screen's centre";
+    EXPECT_NEAR(ground->latitude(), flank.latitude(), 0.0005) << when;
+    EXPECT_NEAR(ground->longitude(), flank.longitude(), 0.0005) << when;
+}
+
+PremultipliedImage reference(double zoom, const LatLng& center, SceneOptions options) {
+    options.tileset = TilesetKind::Dense;
+    SparseScene scene(options);
+    scene.jumpTo(scene.camera(center, zoom, pitch));
+    return scene.image();
+}
+
+void expectDrawnAsTheCone(SparseScene& scene, const std::string& when) {
+    static const PremultipliedImage dense = reference(arrivalZoom, flank, {});
+    static const PremultipliedImage flat = [] {
+        SceneOptions options;
+        options.terrain = false;
+        return reference(arrivalZoom, flank, options);
+    }();
+    ASSERT_GE(mismatch(flat, dense), minFlatMismatch) << "a flat frame looks like the cone: the test proves nothing";
+    const double share = mismatch(scene.image(), dense);
+    EXPECT_LE(share, maxMismatch) << when << ": " << share * 100.0 << " % of the frame differs from the cone ("
+                                  << mismatch(scene.image(), flat) * 100.0 << " % from the flat frame)";
+}
+
+// (A) zoom in from z12, where the z12 tiles are loaded, to z13.5 outside the sub-box.
+void expectZoomInKeepsTheShape(Missing missing) {
+    SceneOptions options;
+    options.missing = missing;
+    SparseScene scene(options);
+    scene.jumpTo(scene.camera(flank, planetMaxZoom, pitch));
+    expectTheCone(scene, "at z12");
+    scene.easeTo(scene.camera(flank, arrivalZoom, pitch));
+    ASSERT_GT(scene.requestsAbove(planetMaxZoom), 0) << "the map never asked for a z13-14 tile";
+    expectTheCone(scene, "zoomed in to z13.5");
+    expectDrawnAsTheCone(scene, "zoomed in to z13.5");
+}
+
+// (A) within a zoom level: from z13.2, where the mesh is on z13 tiles, to z13.5, where it is on z14
+// ones. The integer zoom and every draped tile stay the same, and so does the DEM, all overzoomed
+// from z12: only the drape targets are new.
+void expectZoomWithinALevelKeepsTheShape(Missing missing) {
+    SceneOptions options;
+    options.missing = missing;
+    SparseScene scene(options);
+    scene.jumpTo(scene.camera(flank, 13.2, pitch));
+    expectTheCone(scene, "at z13.2");
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    expectTheCone(scene, "zoomed in to z13.5");
+    expectDrawnAsTheCone(scene, "zoomed in to z13.5");
+}
+
+// (B) a cold jump: a new map straight at z13.5, no frame drawn before.
+void expectColdJumpKeepsTheShape(Missing missing) {
+    SceneOptions options;
+    options.missing = missing;
+    SparseScene scene(options);
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    ASSERT_GT(scene.requestsAbove(planetMaxZoom), 0) << "the map never asked for a z13-14 tile";
+    expectTheCone(scene, "jumped to z13.5");
+    expectDrawnAsTheCone(scene, "jumped to z13.5");
+}
+
+} // namespace
+
+TEST(TerrainSparseDEM, ZoomingInPastTheDataKeepsTheShapeOn204) {
+    expectZoomInKeepsTheShape(Missing::NoContent);
+}
+
+TEST(TerrainSparseDEM, ZoomingInPastTheDataKeepsTheShapeOn404) {
+    expectZoomInKeepsTheShape(Missing::NotFound);
+}
+
+TEST(TerrainSparseDEM, ZoomingWithinALevelPastTheDataKeepsTheShapeOn204) {
+    expectZoomWithinALevelKeepsTheShape(Missing::NoContent);
+}
+
+TEST(TerrainSparseDEM, ZoomingWithinALevelPastTheDataKeepsTheShapeOn404) {
+    expectZoomWithinALevelKeepsTheShape(Missing::NotFound);
+}
+
+TEST(TerrainSparseDEM, AColdJumpPastTheDataKeepsTheShapeOn204) {
+    expectColdJumpKeepsTheShape(Missing::NoContent);
+}
+
+TEST(TerrainSparseDEM, AColdJumpPastTheDataKeepsTheShapeOn404) {
+    expectColdJumpKeepsTheShape(Missing::NotFound);
+}
+
+// Where z13-14 tiles exist, they are drawn and queried, not their z12 parent: the bump only they
+// hold is there, at z13.5 and at z14.5 (overzoomed from z14).
+TEST(TerrainSparseDEM, TheSubBoxUsesItsOwnTiles) {
+    for (const double zoom : {13.5, 14.5}) {
+        SCOPED_TRACE("zoom " + std::to_string(zoom));
+        SparseScene scene;
+        scene.jumpTo(scene.camera(bump, zoom, 0.0));
+        const auto meters = scene.elevation(bump);
+        ASSERT_TRUE(meters);
+        EXPECT_NEAR(*meters, coneMeters(bump) + bumpMeters, 1.0);
+    }
+}
+
+// The cut-out: a z11 tile that straddles the coast holds 0 m pixels on the cut's side, and every
+// tile wholly inside the cut answers empty, z12 included. At every zoom the cut is drawn and
+// queried at 0 m from the nearest real ancestor, and the real ground beside it keeps its heights,
+// with no step but the coast's.
+TEST(TerrainSparseDEM, ACutOutRegionStaysAtSeaLevelAtEveryZoom) {
+    const double kmPerLng = kmPerDegree * std::cos(util::deg2rad(apex.latitude()));
+    // Half way down the cut's west coast, a z12 tile from its north and south coasts: the only
+    // coast in view at every zoom below.
+    const LatLng coast = tilePoint(coastX, apexY + 2.0);
+    for (const double zoom : {11.5, 12.5, 13.5, 14.5}) {
+        SCOPED_TRACE("zoom " + std::to_string(zoom));
+        SceneOptions options;
+        options.ground = Ground::ConeWithCut;
+        SparseScene scene(options);
+        scene.jumpTo(scene.camera(coast, zoom, 0.0));
+        // Across the coast, from 1 km west (real ground) to 1 km east (the cut), but not within a z11
+        // DEM pixel (26 m) of it, where the z11 tile's bilinear surface runs down the cliff.
+        for (const double eastKm : {-1.0, -0.5, -0.2, -0.05, 0.05, 0.2, 0.5, 1.0}) {
+            const LatLng point(coast.latitude(), coast.longitude() + eastKm / kmPerLng);
+            const auto meters = scene.elevation(point);
+            ASSERT_TRUE(meters) << "no elevation " << eastKm << " km east of the coast";
+            EXPECT_NEAR(*meters, eastKm < 0 ? coneMeters(point) : 0.0, 0.25) << eastKm << " km east of the coast";
+        }
+        // Drawn as a tileset with the cut's tiles at 0 m would draw it.
+        SceneOptions denseOptions = options;
+        denseOptions.tileset = TilesetKind::Dense;
+        SparseScene dense(denseOptions);
+        dense.jumpTo(dense.camera(coast, zoom, 0.0));
+        const double share = mismatch(scene.image(), dense.image(), coastBand(zoom));
+        EXPECT_LE(share, maxCoastMismatch) << share * 100.0 << " % of the frame away from the coast differs";
+    }
+}

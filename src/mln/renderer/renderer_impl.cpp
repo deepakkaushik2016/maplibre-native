@@ -258,6 +258,9 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     // Number of terrain drape targets in this frame's cover; drives the re-enable follow-up
     // frame and the drape re-bake trigger below (0 while terrain is off or its cover is empty).
     std::size_t frameDrapeTargetCount = 0;
+    // Whether this frame's cover has a drape target it did not have last frame. A new target bakes
+    // this frame, so the draped tweakers must run (see skipDrapedTweaker below).
+    bool drapeTargetCreated = false;
     if (auto* terrain = orchestrator.getRenderTerrain()) {
         // Drape targets must exist before RenderTerrain::update drapes into them,
         // so build the same mesh cover it will use - the elevation-aware LOD ideal
@@ -272,7 +275,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         terrain->prepareSource(orchestrator);
         const std::set<UnwrappedTileID> demTileIDs = terrain->computeMeshCover(state, updateParameters);
         for (const auto& id : demTileIDs) {
-            texturePool.createRenderTarget(context, id, renderTreeParameters.backgroundColor);
+            drapeTargetCreated |= texturePool.createRenderTarget(context, id, renderTreeParameters.backgroundColor);
         }
         texturePool.removeStaleRenderTargets(demTileIDs);
         frameDrapeTargetCount = demTileIDs.size();
@@ -410,7 +413,15 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             // re-establish tile-local drape UBOs before the targets are baked, or the map is
             // blank until the view moves.
             const bool coverJustReappeared = frameDrapeTargetCount > 0 && !terrainHadCoverLastFrame;
-            drapedContentChanged = (lastDrapedContentSignature != signature) || coverJustReappeared;
+            // Likewise on a frame that adds a drape target: it bakes now, with the draped
+            // drawables' UBOs as their tweakers last left them. Those carry the camera's zoom of
+            // that frame, so a target that enters the cover within the same integer zoom with no
+            // draped tile changing - the mesh moving from z13 to z14 tiles between z13.2 and z13.5
+            // over a DEM drawn from its z12 tiles - drew lines 2^0.3 too wide, for as long as it
+            // lived. Targets kept from earlier frames are not re-rendered by this (their coverage
+            // is unchanged), and a cover that only loses targets bakes nothing.
+            drapedContentChanged = (lastDrapedContentSignature != signature) || coverJustReappeared ||
+                                   drapeTargetCreated;
             lastDrapedContentSignature = signature;
 
             // Rebuild the per-target signature map only when the drape content actually

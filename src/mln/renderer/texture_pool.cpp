@@ -8,12 +8,12 @@ TexturePool::TexturePool(uint32_t tilesize)
 
 TexturePool::~TexturePool() = default;
 
-void TexturePool::createRenderTarget(gfx::Context& context, const UnwrappedTileID& id, const Color& backgroundColor) {
+bool TexturePool::createRenderTarget(gfx::Context& context, const UnwrappedTileID& id, const Color& backgroundColor) {
     // Keep an existing render target; recreating it every frame churns GL
     // texture memory and invalidates the texture bound to the terrain drawable
     if (auto it = renderTargets.find(id); it != renderTargets.end() && it->second) {
         it->second->setClearColor(backgroundColor);
-        return;
+        return false;
     }
     // Drape targets render several overlapping draped tiles (a parent standing in for missing
     // children beside already-loaded children); the stencil clips them against each other,
@@ -23,6 +23,7 @@ void TexturePool::createRenderTarget(gfx::Context& context, const UnwrappedTileI
     renderTarget->setClearColor(backgroundColor);
     renderTarget->setDrapeTileID(id);
     renderTargets[id] = std::move(renderTarget);
+    return true;
 }
 
 void TexturePool::removeStaleRenderTargets(const std::set<UnwrappedTileID>& currentTiles) {
