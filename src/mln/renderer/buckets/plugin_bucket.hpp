@@ -198,7 +198,7 @@ public:
     void upload(gfx::UploadPass&) override { uploaded = true; }
     bool hasData() const override { return indices && !indices->empty() && !drawables.empty(); }
     float getQueryRadius(const RenderLayer&) const override;
-    void update(const FeatureStates&, const GeometryTileLayer&, const std::string&, const ImagePositions&) override;
+    bool update(const FeatureStates&, const GeometryTileLayer&, const std::string&, const ImagePositions&) override;
 
     // The render layer retains one immutable snapshot until its evaluated paint
     // changes. Tiles compare identity instead of copying/comparing every property.

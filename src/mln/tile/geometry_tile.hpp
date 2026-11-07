@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -105,7 +106,7 @@ public:
     void performedFadePlacement() override;
     std::shared_ptr<FeatureIndex> getFeatureIndex() const;
 
-    void setFeatureState(const LayerFeatureStates&, bool changed) override;
+    void setFeatureState(const LayerFeatureStates&, uint64_t revision) override;
 
 protected:
     const GeometryTileData* getData() const;
@@ -130,6 +131,9 @@ private:
 
     std::shared_ptr<LayoutResult> layoutResult;
     std::shared_ptr<TileAtlasTextures> atlasTextures;
+    // The source's feature-state revision that layoutResult's buckets hold (setFeatureState).
+    // None for buckets that have never been given the states, as after a new layout.
+    std::optional<uint64_t> appliedFeatureStateRevision;
 
     const MapMode mode;
 

@@ -136,10 +136,11 @@ public:
     // placement and will have time to finish by the second placement.
     virtual void performedFadePlacement() {}
 
-    /// Applies the source's feature states to the tile's buckets. `changed` is false when the
-    /// states are only re-applied (SourceFeatureState::coalesceChanges sends every current state
-    /// on each frame once any is set) and true when a state was set or removed since the last call.
-    virtual void setFeatureState(const LayerFeatureStates&, bool /*changed*/) {}
+    /// Applies the source's current feature states to the tile's buckets.
+    /// SourceFeatureState::coalesceChanges sends them on every frame once any is set, with a
+    /// revision that moves only when a state changed: a tile that has applied that revision to
+    /// its buckets already has nothing to do.
+    virtual void setFeatureState(const LayerFeatureStates&, uint64_t /*revision*/) {}
 
     void dumpDebugLogs() const;
 

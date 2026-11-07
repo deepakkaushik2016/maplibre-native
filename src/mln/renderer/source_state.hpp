@@ -3,6 +3,8 @@
 #include <mln/style/conversion.hpp>
 #include <mln/util/feature.hpp>
 
+#include <cstdint>
+
 namespace mln {
 
 class RenderTile;
@@ -28,6 +30,8 @@ private:
     LayerFeatureStates currentStates;
     LayerFeatureStates stateChanges;
     LayerFeatureStates deletedStates;
+    // Moves whenever coalesceChanges changes currentStates (GeometryTile::setFeatureState).
+    uint64_t revision = 0;
 };
 
 } // namespace mln

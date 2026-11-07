@@ -120,16 +120,21 @@ bool SymbolBucket::hasData() const {
            hasTextCollisionBoxData() || hasIconCollisionCircleData() || hasTextCollisionCircleData();
 }
 
-void SymbolBucket::update(const FeatureStates& states,
+bool SymbolBucket::update(const FeatureStates& states,
                           const GeometryTileLayer& layer,
                           const std::string& layerID,
                           const ImagePositions& imagePositions) {
     auto it = paintProperties.find(layerID);
-    if (it != paintProperties.end()) {
-        it->second.iconBinders.updateVertexVectors(states, layer, imagePositions);
-        it->second.textBinders.updateVertexVectors(states, layer, imagePositions);
-        uploaded = false;
+    if (it == paintProperties.end()) {
+        return false;
     }
+    const bool iconChanged = it->second.iconBinders.updateVertexVectors(states, layer, imagePositions);
+    const bool textChanged = it->second.textBinders.updateVertexVectors(states, layer, imagePositions);
+    if (!iconChanged && !textChanged) {
+        return false;
+    }
+    uploaded = false;
+    return true;
 }
 
 bool SymbolBucket::hasTextData() const {

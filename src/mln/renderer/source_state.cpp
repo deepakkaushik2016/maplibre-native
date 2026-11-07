@@ -45,69 +45,70 @@ void SourceFeatureState::getState(FeatureState& result,
 void SourceFeatureState::coalesceChanges(std::vector<RenderTile>& tiles) {
     MLN_TRACE_FUNC();
 
-    // A state was set or removed since the last call (the current states are re-sent below on
-    // every call, for tiles loaded since).
-    const bool changed = !stateChanges.empty() || !deletedStates.empty();
-    LayerFeatureStates changes;
-    for (const auto& layerStatesEntry : stateChanges) {
-        const auto& sourceLayer = layerStatesEntry.first;
-        FeatureStates layerStates;
-        for (const auto& featureStatesEntry : stateChanges[sourceLayer]) {
-            const auto& featureID = featureStatesEntry.first;
-            for (const auto& stateEntry : stateChanges[sourceLayer][featureID]) {
-                const auto& stateKey = stateEntry.first;
-                const auto& stateVal = stateEntry.second;
-
-                auto currentState = currentStates[sourceLayer][featureID].find(stateKey);
-                if (currentState != currentStates[sourceLayer][featureID].end()) {
-                    currentState->second = stateVal;
-                } else {
-                    currentStates[sourceLayer][featureID].insert(std::make_pair(stateKey, stateVal));
+    // Fold the pending sets and removals into the current states. Only a real change moves the
+    // revision: setting a state to the value it has, or removing one that is not there, does not.
+    bool changed = false;
+    for (const auto& [sourceLayer, layerChanges] : stateChanges) {
+        auto& layerStates = currentStates[sourceLayer];
+        for (const auto& [featureID, featureChanges] : layerChanges) {
+            auto& featureState = layerStates[featureID];
+            for (const auto& [stateKey, stateVal] : featureChanges) {
+                auto current = featureState.find(stateKey);
+                if (current == featureState.end()) {
+                    featureState.emplace(stateKey, stateVal);
+                    changed = true;
+                } else if (!(current->second == stateVal)) {
+                    current->second = stateVal;
+                    changed = true;
                 }
             }
-            layerStates[featureID] = currentStates[sourceLayer][featureID];
         }
-        changes[sourceLayer] = std::move(layerStates);
     }
 
-    for (const auto& layerStatesEntry : deletedStates) {
-        const auto& sourceLayer = layerStatesEntry.first;
-        FeatureStates layerStates = {{}, {}};
-
-        if (deletedStates[sourceLayer].empty()) {
-            for (const auto& featureStatesEntry : currentStates[sourceLayer]) {
-                const auto& featureID = featureStatesEntry.first;
-                layerStates[featureID] = {};
-                currentStates[sourceLayer][featureID] = {};
+    for (const auto& [sourceLayer, layerDeletions] : deletedStates) {
+        const auto layerStates = currentStates.find(sourceLayer);
+        if (layerStates == currentStates.end()) {
+            continue;
+        }
+        // A removed state stays as an empty entry, so a tile that applies the states later still
+        // resets the feature (GeometryTile::setFeatureState).
+        if (layerDeletions.empty()) {
+            for (auto& [featureID, featureState] : layerStates->second) {
+                changed = changed || !featureState.empty();
+                featureState.clear();
             }
-        } else {
-            for (const auto& feature : deletedStates[sourceLayer]) {
-                const auto& featureID = feature.first;
-                bool deleteWholeFeatureState = deletedStates[sourceLayer][featureID].empty();
-                if (deleteWholeFeatureState) {
-                    currentStates[sourceLayer][featureID] = {};
-                } else {
-                    for (const auto& stateEntry : deletedStates[sourceLayer][featureID]) {
-                        currentStates[sourceLayer][featureID].erase(stateEntry.first);
-                    }
+            continue;
+        }
+        for (const auto& [featureID, keys] : layerDeletions) {
+            const auto featureState = layerStates->second.find(featureID);
+            if (featureState == layerStates->second.end()) {
+                continue;
+            }
+            if (keys.empty()) {
+                changed = changed || !featureState->second.empty();
+                featureState->second.clear();
+            } else {
+                for (const auto& key : keys) {
+                    changed = featureState->second.erase(key.first) > 0 || changed;
                 }
-                layerStates[featureID] = currentStates[sourceLayer][featureID];
             }
         }
-        changes[sourceLayer] = std::move(layerStates);
     }
 
     stateChanges.clear();
     deletedStates.clear();
+    if (changed) {
+        ++revision;
+    }
 
-    changes.insert(currentStates.begin(), currentStates.end());
-
-    if (changes.empty()) {
+    if (currentStates.empty()) {
         return;
     }
 
+    // Every current state goes to every tile, for tiles loaded or laid out since; a tile that has
+    // applied this revision already returns at once.
     for (auto& tile : tiles) {
-        tile.setFeatureState(changes, changed);
+        tile.setFeatureState(currentStates, revision);
     }
 }
 

@@ -43,7 +43,11 @@ public:
                             std::size_t,
                             const CanonicalTileID&) {}
 
-    virtual void update(const FeatureStates&, const GeometryTileLayer&, const std::string&, const ImagePositions&) {}
+    /// Applies feature states to the paint attributes of `layerID`. Returns whether any vertex
+    /// changed; only then is the bucket re-uploaded.
+    virtual bool update(const FeatureStates&, const GeometryTileLayer&, const std::string&, const ImagePositions&) {
+        return false;
+    }
 
     virtual void recordSDFPattern(const std::string&, bool) {}
     virtual bool isSDFPattern(const std::string&) const { return false; }

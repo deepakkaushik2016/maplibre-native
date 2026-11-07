@@ -354,6 +354,8 @@ void GeometryTile::onLayout(std::shared_ptr<LayoutResult>&& result, const uint64
     const ErrorScope errorScope{observer};
 
     layoutResult = std::move(result);
+    // New buckets are laid out without the feature states: give them all on the next frame.
+    appliedFeatureStateRevision.reset();
     if (!atlasTextures) {
         atlasTextures = std::make_shared<TileAtlasTextures>();
     }
@@ -601,13 +603,19 @@ void GeometryTile::performedFadePlacement() {
     }
 }
 
-void GeometryTile::setFeatureState(const LayerFeatureStates& states, bool changed) {
+void GeometryTile::setFeatureState(const LayerFeatureStates& states, uint64_t revision) {
     MLN_TRACE_FUNC();
 
+    // At rest (no state changed since these buckets were given the states) there is nothing to
+    // do: re-applying every state on every frame re-evaluated and re-uploaded the buckets.
+    if (appliedFeatureStateRevision == revision) {
+        return;
+    }
     const auto layers = getData();
     if ((layers == nullptr) || states.empty() || !layoutResult) {
         return;
     }
+    appliedFeatureStateRevision = revision;
 
     for (auto& layerIdToLayerRenderData = layoutResult->layerRenderData;
          auto& [layerID, renderData] : layerIdToLayerRenderData) {
@@ -622,10 +630,10 @@ void GeometryTile::setFeatureState(const LayerFeatureStates& states, bool change
                 continue;
             }
             if (const auto bucket = renderData.bucket; bucket && bucket->hasData()) {
-                bucket->update(featureStates, *sourceLayer, layerID, layoutResult->imageAtlas.patternPositions);
-                // Only a real change re-renders the terrain drape: the states are re-applied on
-                // every frame once any is set, and that must not invalidate the drape at rest.
-                if (changed) {
+                // Every current state is applied, but a bucket is re-uploaded, and the terrain
+                // drape over it re-rendered, only when a state changed one of its vertices: a
+                // hover elsewhere costs this bucket one lookup per state.
+                if (bucket->update(featureStates, *sourceLayer, layerID, layoutResult->imageAtlas.patternPositions)) {
                     bucket->markFeatureStateChanged();
                 }
             }

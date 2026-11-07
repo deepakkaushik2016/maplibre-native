@@ -406,12 +406,12 @@ void PluginPaintPropertyBinders::appendStatistics(
     }
 }
 
-void PluginBucket::update(const FeatureStates& states,
+bool PluginBucket::update(const FeatureStates& states,
                           const GeometryTileLayer& layer,
                           const std::string& layerID,
                           const ImagePositions&) {
     const auto it = paintPropertyBinders.find(layerID);
-    if (it == paintPropertyBinders.end()) return;
+    if (it == paintPropertyBinders.end()) return false;
     bool changed = false;
     for (auto& [key, binders] : it->second) {
         (void)key;
@@ -425,6 +425,7 @@ void PluginBucket::update(const FeatureStates& states,
             updateQueryRadius(layerID, *properties->second, zoom->second);
         }
     }
+    return changed;
 }
 
 float PluginBucket::getQueryRadius(const RenderLayer& layer) const {

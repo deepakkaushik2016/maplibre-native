@@ -53,6 +53,13 @@ struct InterleavedVertexBuffer {
         memcpy(const_cast<void*>(data), &value, sizeof(value));
     }
 
+    /// Whether the vertex at `index` holds `value` at `offset`.
+    template <typename T>
+    bool holds(std::size_t index, std::size_t offset, const T& value) const {
+        assert(stride * index + offset + sizeof(T) <= sharedVertexVector->bytes());
+        return memcmp(sharedVertexVector->data() + stride * index + offset, &value, sizeof(value)) == 0;
+    }
+
     template <typename T>
     const T& get(std::size_t index, std::size_t offset) {
         assert(stride * index + offset + sizeof(T) <= sharedVertexVector->bytes());
@@ -164,9 +171,13 @@ public:
                                       const CanonicalTileID& canonical,
                                       const style::expression::Value&) = 0;
 
-    virtual void updateVertexVectors(const FeatureStates&, const GeometryTileLayer&, const ImagePositions&) {}
+    /// Re-evaluates the features in `states` with their state. Returns whether any vertex changed.
+    virtual bool updateVertexVectors(const FeatureStates&, const GeometryTileLayer&, const ImagePositions&) {
+        return false;
+    }
 
-    virtual void updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) = 0;
+    /// Re-evaluates one feature's vertices [start, end) with its state. Returns whether they changed.
+    virtual bool updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) = 0;
 
     virtual void setPatternParameters(const std::optional<ImagePosition>&,
                                       const std::optional<ImagePosition>&,
@@ -241,7 +252,9 @@ public:
                               const std::optional<PatternDependency>&,
                               const CanonicalTileID&,
                               const style::expression::Value&) override {}
-    void updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) override {}
+    bool updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) override {
+        return false;
+    }
 
     void setPatternParameters(const std::optional<ImagePosition>&,
                               const std::optional<ImagePosition>&,
@@ -280,7 +293,9 @@ public:
                               const std::optional<PatternDependency>&,
                               const CanonicalTileID&,
                               const style::expression::Value&) override {}
-    void updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) override {}
+    bool updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) override {
+        return false;
+    }
 
     void setPatternParameters(const std::optional<ImagePosition>& posA,
                               const std::optional<ImagePosition>& posB,
@@ -349,9 +364,10 @@ public:
         }
     }
 
-    void updateVertexVectors(const FeatureStates& states,
+    bool updateVertexVectors(const FeatureStates& states,
                              const GeometryTileLayer& layer,
                              const ImagePositions&) override {
+        bool changed = false;
         for (const auto& it : states) {
             const auto positions = featureMap.find(it.first);
             if (positions == featureMap.end()) {
@@ -361,13 +377,14 @@ public:
             for (const auto& pos : positions->second) {
                 std::unique_ptr<GeometryTileFeature> feature = layer.getFeature(pos.featureIndex);
                 if (feature) {
-                    updateVertexVector(pos.start, pos.end, *feature, it.second);
+                    changed = updateVertexVector(pos.start, pos.end, *feature, it.second) || changed;
                 }
             }
         }
+        return changed;
     }
 
-    void updateVertexVector(std::size_t start,
+    bool updateVertexVector(std::size_t start,
                             std::size_t end,
                             const GeometryTileFeature& feature,
                             const FeatureState& state) override {
@@ -377,9 +394,16 @@ public:
         this->statistics.add(evaluated);
 
         const auto value = BaseVertex{attributeValue(evaluated)};
+        // A feature's vertices all hold the same value: when the first holds it already, so do
+        // the rest, and nothing needs uploading.
+        if (start >= end ||
+            this->interleavedVertexBuffer->template holds<BaseVertex>(start, this->vertexOffset, value)) {
+            return false;
+        }
         for (std::size_t i = start; i < end; ++i) {
             this->interleavedVertexBuffer->set(i, this->vertexOffset, value);
         }
+        return true;
     }
 
     std::tuple<float> interpolationFactor(float) const override { return std::tuple<float>{0.0f}; }
@@ -459,9 +483,10 @@ public:
         }
     }
 
-    void updateVertexVectors(const FeatureStates& states,
+    bool updateVertexVectors(const FeatureStates& states,
                              const GeometryTileLayer& layer,
                              const ImagePositions&) override {
+        bool changed = false;
         for (const auto& it : states) {
             const auto positions = featureMap.find(it.first);
             if (positions == featureMap.end()) {
@@ -471,13 +496,14 @@ public:
             for (const auto& pos : positions->second) {
                 std::unique_ptr<GeometryTileFeature> feature = layer.getFeature(pos.featureIndex);
                 if (feature) {
-                    updateVertexVector(pos.start, pos.end, *feature, it.second);
+                    changed = updateVertexVector(pos.start, pos.end, *feature, it.second) || changed;
                 }
             }
         }
+        return changed;
     }
 
-    void updateVertexVector(std::size_t start,
+    bool updateVertexVector(std::size_t start,
                             std::size_t end,
                             const GeometryTileFeature& feature,
                             const FeatureState& state) override {
@@ -492,9 +518,14 @@ public:
         const Vertex value = Vertex{
             zoomInterpolatedAttributeValue(attributeValue(range.min), attributeValue(range.max))};
 
+        // See SourceFunctionPaintPropertyBinder::updateVertexVector.
+        if (start >= end || this->interleavedVertexBuffer->template holds<Vertex>(start, this->vertexOffset, value)) {
+            return false;
+        }
         for (std::size_t i = start; i < end; ++i) {
             this->interleavedVertexBuffer->set(i, this->vertexOffset, value);
         }
+        return true;
     }
 
     std::tuple<float> interpolationFactor(float currentZoom) const override {
@@ -595,7 +626,9 @@ public:
         }
     }
 
-    void updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) override {}
+    bool updateVertexVector(std::size_t, std::size_t, const GeometryTileFeature&, const FeatureState&) override {
+        return false;
+    }
 
     std::tuple<float, float> interpolationFactor(float) const override { return std::tuple<float, float>{0.0f, 0.0f}; }
 
@@ -765,11 +798,19 @@ public:
         interleavedVertexBuffer.sharedVertexVector->updateModified(true);
     }
 
-    void updateVertexVectors(const FeatureStates& states,
+    /// Re-evaluates the features in `states` with their state. Returns whether any vertex
+    /// changed; only then is the vertex vector marked for upload.
+    bool updateVertexVectors(const FeatureStates& states,
                              const GeometryTileLayer& layer,
                              const ImagePositions& imagePositions) {
-        util::ignore({(binders.template get<Ps>()->updateVertexVectors(states, layer, imagePositions), 0)...});
-        interleavedVertexBuffer.sharedVertexVector->updateModified(true);
+        bool changed = false;
+        util::ignore(
+            {(changed = binders.template get<Ps>()->updateVertexVectors(states, layer, imagePositions) || changed,
+              0)...});
+        if (changed) {
+            interleavedVertexBuffer.sharedVertexVector->updateModified(true);
+        }
+        return changed;
     }
 
     void setPatternParameters(const std::optional<ImagePosition>& posA,
