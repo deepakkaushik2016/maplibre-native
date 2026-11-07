@@ -320,6 +320,7 @@ list(APPEND INCLUDE_FILES
     ${PROJECT_SOURCE_DIR}/include/mln/storage/offline.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/storage/online_file_source.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/storage/resource_options.hpp
+    ${PROJECT_SOURCE_DIR}/include/mln/storage/cache_generation.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/storage/resource_transform.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/storage/resource.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/storage/response.hpp

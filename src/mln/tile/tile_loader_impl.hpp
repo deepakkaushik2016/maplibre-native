@@ -86,6 +86,13 @@ void TileLoader<T>::setNecessity(TileNecessity newNecessity) {
 }
 
 template <typename T>
+void TileLoader<T>::revalidateFromCache() {
+    if (!request && fileSource && fileSource->supportsCacheOnlyRequests()) {
+        loadFromCache();
+    }
+}
+
+template <typename T>
 void TileLoader<T>::setUpdateParameters(const TileUpdateParameters& params) {
     if (updateParameters != params) {
         updateParameters = params;

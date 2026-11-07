@@ -10,11 +10,16 @@
 #include <mln/renderer/renderer.hpp>
 #include <mln/storage/response.hpp>
 #include <mln/style/style.hpp>
+#include <mln/map/transform_state.hpp>
+#include <mln/storage/cache_generation.hpp>
 #include <mln/tile/raster_dem_tile.hpp>
 #include <mln/tile/tile_id.hpp>
 #include <mln/util/chrono.hpp>
 #include <mln/util/constants.hpp>
+#include <mln/util/http_header.hpp>
 #include <mln/util/image.hpp>
+#include <mln/util/mat4.hpp>
+#include <mln/util/projection.hpp>
 #include <mln/util/run_loop.hpp>
 
 #include <algorithm>
@@ -27,6 +32,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -198,10 +204,22 @@ std::string gridGeoJSON() {
     return R"({"type": "MultiLineString", "coordinates": [)" + lines + "]}";
 }
 
+// A marker on the cone's flank, in the view of every flank scene below: a red circle, drawn at the
+// height of the ground under it (SceneOptions::marker).
+const LatLng marker = tilePoint(apexX - 0.5, apexY + 1.45);
+
 // The production source's shape: one raster-dem source `terrain`, Terrarium, 512 px, maxzoom 14.
 // A colour relief and a hillshade of it, and the grid, all draped. `terrain` false leaves the
-// terrain out: the same layers, drawn flat.
-std::string sparseStyle(bool terrain = true, const std::string& tiles = "terrain") {
+// terrain out: the same layers, drawn flat. `withMarker` adds the marker.
+std::string sparseStyle(bool terrain = true, const std::string& tiles = "terrain", bool withMarker = false) {
+    const std::string markerSource =
+        withMarker ? R"(, "marker": {"type": "geojson", "data": {"type": "Point", "coordinates": [)" +
+                         std::to_string(marker.longitude()) + "," + std::to_string(marker.latitude()) + "]}}"
+                   : "";
+    const std::string markerLayer =
+        withMarker
+            ? R"(, {"id": "marker", "type": "circle", "source": "marker", "paint": {"circle-color": "#f00", "circle-radius": 8, "circle-pitch-alignment": "viewport"}})"
+            : "";
     return R"STYLE({
   "version": 8,
   "sources": {
@@ -215,7 +233,7 @@ std::string sparseStyle(bool terrain = true, const std::string& tiles = "terrain
       "tileSize": 512
     },
     "grid": {"type": "geojson", "data": )STYLE" +
-           gridGeoJSON() + R"STYLE(}
+           gridGeoJSON() + "}" + markerSource + R"STYLE(
   },)STYLE" +
            (terrain ? R"STYLE(
   "terrain": {"source": "terrain", "exaggeration": 1},)STYLE"
@@ -228,7 +246,8 @@ std::string sparseStyle(bool terrain = true, const std::string& tiles = "terrain
         0, "rgb(20, 60, 160)", 400, "rgb(20, 120, 40)", 2400, "rgb(150, 90, 30)"]}},
     {"id": "hillshade", "type": "hillshade", "source": "terrain", "paint": {"hillshade-exaggeration": 0.4}},
     {"id": "grid", "type": "line", "source": "grid", "paint": {"line-color": "black", "line-width": 2}}
-  ]
+  )STYLE" + markerLayer +
+           R"STYLE(]
 })STYLE";
 }
 
@@ -272,8 +291,10 @@ struct SceneOptions {
     Missing missing = Missing::NoContent;
     Ground ground = Ground::Cone;
     bool terrain = true;
-    /// How long an empty answer may be reused (its Cache-Control max-age); none when not set.
-    std::optional<Duration> emptyMaxAge;
+    /// The Cache-Control header of an empty answer, which sets its expiry as the HTTP file sources do.
+    std::optional<std::string> emptyCacheControl;
+    /// Whether the style has the marker.
+    bool marker = false;
 };
 
 // A map run continuously, so tiles arrive across frames as they do in an app. Nothing is drawn
@@ -288,6 +309,8 @@ struct SparseScene {
     SceneOptions options;
     /// Network requests per DEM tile.
     std::map<CanonicalTileID, int> networkRequests;
+    /// Cache-only requests per DEM tile.
+    std::map<CanonicalTileID, int> cacheRequests;
     /// Tiles the cache answers with data, and with which.
     std::map<CanonicalTileID, Ground> cached;
     /// Tiles the network answers with data though the tileset had none, and with which.
@@ -304,6 +327,7 @@ struct SparseScene {
             const CanonicalTileID id(
                 resource.tileData->z, static_cast<uint32_t>(resource.tileData->x), resource.tileData->y);
             if (resource.loadingMethod == Resource::LoadingMethod::CacheOnly) {
+                ++cacheRequests[id];
                 if (const auto it = cached.find(id); it != cached.end()) {
                     res.data = demTile(it->second, id);
                     return res;
@@ -327,15 +351,15 @@ struct SparseScene {
                 } else {
                     res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "no tile");
                 }
-                if (options.emptyMaxAge) {
-                    res.expires = std::chrono::time_point_cast<Seconds>(util::now() + *options.emptyMaxAge);
+                if (options.emptyCacheControl) {
+                    res.expires = http::CacheControl::parse(*options.emptyCacheControl).toTimePoint();
                 }
                 return res;
             }
             res.data = demTile(options.ground, id);
             return res;
         };
-        map.getStyle().loadJSON(sparseStyle(options.terrain));
+        map.getStyle().loadJSON(sparseStyle(options.terrain, "terrain", options.marker));
     }
 
     bool has(const CanonicalTileID& id) const {
@@ -638,25 +662,155 @@ TEST(TerrainSparseDEM, AnEmptyTileIsRequestedOnce) {
     expectTheCone(scene, "back at z13.5");
 }
 
-// An empty answer that may not be reused (Cache-Control: max-age=0 on the 204) is asked for again
-// when the view comes back.
-TEST(TerrainSparseDEM, AnExpiredEmptyTileIsRequestedAgain) {
+// How an empty answer's Cache-Control is honoured when the view comes back to its tiles, with the
+// same tile objects (from the tile cache) and with new ones (the tile cache dropped): an answer
+// that may not be reused is asked for again from the network each time, one that may is not.
+// Out to here and back. The tile cache keeps no tile without data (TileCache::add), so the view's
+// empty z13 tiles are made anew on the way back.
+constexpr double outZoom = 12.0;
+
+void expectEmptyAnswersReused(const std::string& cacheControl, bool reused) {
+    SCOPED_TRACE("Cache-Control: " + cacheControl);
     SceneOptions options;
-    options.emptyMaxAge = Duration::zero();
+    options.emptyCacheControl = cacheControl;
     SparseScene scene(options);
     scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
-    const auto first = scene.networkRequests;
+    const auto [x, y] = tileCoordinates(flank);
+    const CanonicalTileID under(planetMaxZoom + 1, static_cast<uint32_t>(x * 2), static_cast<uint32_t>(y * 2));
+    ASSERT_EQ(scene.networkRequests[under], 1) << "the view does not ask for the tile under its centre";
+    // Out to z12 and back: the empty tiles are made anew (the tile cache keeps none).
+    scene.jumpTo(scene.camera(flank, outZoom, pitch));
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    EXPECT_EQ(scene.networkRequests[under], reused ? 1 : 2) << "back";
     scene.jumpTo(scene.camera(flank, 11.0, pitch));
     scene.frontend.getRenderer()->reduceMemoryUse();
     scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
-    int again = 0;
-    for (const auto& [id, n] : first) {
-        if (id.z > planetMaxZoom && scene.networkRequests[id] > n) {
-            ++again;
+    EXPECT_EQ(scene.networkRequests[under], reused ? 1 : 3) << "back after the tile cache was dropped";
+    expectTheCone(scene, "back at z13.5");
+}
+
+TEST(TerrainSparseDEM, AnEmptyAnswerThatMayNotBeReusedIsAskedForAgain) {
+    expectEmptyAnswersReused("max-age=0", false);
+    expectEmptyAnswersReused("no-cache", false);
+    expectEmptyAnswersReused("public, no-store", false);
+}
+
+TEST(TerrainSparseDEM, AnEmptyAnswerThatMayBeReusedIsNotAskedForAgain) {
+    expectEmptyAnswersReused("max-age=3600", true);
+}
+
+// A tile known to be empty is still asked for from the cache when the view comes back to it, as
+// before: never from the network while the record holds, but data an offline pack brought since
+// (and the server has too) is drawn. The tile cache keeps no tile without data (TileCache::add),
+// so the tile is made anew on the way back, and a new tile asks the cache first; a tile required
+// again as the same object (held as an optional parent or child meanwhile) does too, see
+// RasterDEMTile.AKnownEmptyTileRequiredAgainAsksOnlyTheCache.
+TEST(TerrainSparseDEM, ARevisitAsksTheCacheAgain) {
+    SparseScene scene;
+    scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    const auto [x, y] = tileCoordinates(flank);
+    const CanonicalTileID under(planetMaxZoom + 1, static_cast<uint32_t>(x * 2), static_cast<uint32_t>(y * 2));
+    ASSERT_EQ(scene.networkRequests[under], 1);
+    const auto outAndBack = [&] {
+        scene.jumpTo(scene.camera(flank, outZoom, 0.0));
+        scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    };
+    const int cacheAsked = scene.cacheRequests[under];
+    outAndBack();
+    EXPECT_GT(scene.cacheRequests[under], cacheAsked) << "the revisit did not ask the cache";
+    EXPECT_LE(scene.cacheRequests[under], cacheAsked + 2) << "the cache is asked on every frame";
+    EXPECT_EQ(scene.networkRequests[under], 1) << "the revisit asked the network while the record holds";
+
+    scene.cached[under] = Ground::RaisedCone;
+    scene.gained[under] = Ground::RaisedCone;
+    outAndBack();
+    const auto meters = scene.elevation(flank);
+    ASSERT_TRUE(meters);
+    EXPECT_NEAR(*meters, coneMeters(flank) + raisedBy, 0.25) << "the offline pack's data is not drawn";
+}
+
+// What the map learnt from empty answers lapses when the cache or offline database changes as a
+// whole (invalidated, cleared, a region deleted...): the tile is asked for from the network again.
+TEST(TerrainSparseDEM, AChangedCacheForgetsTheEmptyTiles) {
+    SparseScene scene;
+    scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    const auto [x, y] = tileCoordinates(flank);
+    const CanonicalTileID under(planetMaxZoom + 1, static_cast<uint32_t>(x * 2), static_cast<uint32_t>(y * 2));
+    ASSERT_EQ(scene.networkRequests[under], 1);
+    scene.jumpTo(scene.camera(flank, outZoom, 0.0));
+    bumpAmbientCacheGeneration();
+    scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    EXPECT_EQ(scene.networkRequests[under], 2);
+}
+
+// Map::pixelForLatLng, but for a point `meters` above sea level instead of on it.
+ScreenCoordinate project(const TransformState& state, const LatLng& latLng, double meters) {
+    const Point<double> pt = Projection::project(latLng, state.getScale());
+    const vec4 c = {{pt.x, pt.y, meters, 1}};
+    vec4 p;
+    matrix::transformMat4(p, c, state.getProjectionMatrix());
+    const Size size = state.getSize();
+    return {(p[0] / p[3] + 1) * size.width / 2, size.height - (p[1] / p[3] + 1) * size.height / 2};
+}
+
+// The other consumers of the terrain's height, outside the sub-box, once the ancestor has loaded:
+// the camera clamp lifts the centre onto the cone, and a marker is drawn, and found, at the cone's
+// height. (On a cold jump the clamp reads 0 m until the ancestor chain has loaded, one load per
+// level: the scene waits for that.)
+void expectTheAncestorsHeightUsedByMarkersAndTheClamp(double zoom, bool zoomIn) {
+    SCOPED_TRACE(std::string(zoomIn ? "zoomed in to z" : "jumped to z") + std::to_string(zoom));
+    SceneOptions options;
+    options.marker = true;
+    SparseScene scene(options);
+    scene.map.setCenterClampedToGround(true);
+    const auto camera = [&](double z) {
+        return CameraOptions().withCenter(flank).withZoom(z).withPitch(pitch).withBearing(0.0);
+    };
+    if (zoomIn) {
+        scene.jumpTo(camera(planetMaxZoom));
+        scene.easeTo(camera(zoom));
+    } else {
+        scene.jumpTo(camera(zoom));
+    }
+    // The clamp follows the ground over a few frames.
+    for (int i = 0; i < 8; ++i) {
+        scene.map.triggerRepaint();
+        scene.settle();
+    }
+    const auto centre = scene.map.getCameraOptions({}).centerAltitude;
+    ASSERT_TRUE(centre);
+    EXPECT_NEAR(*centre, coneMeters(flank), 5.0) << "the clamp does not hold the centre on the cone";
+
+    const auto state = scene.frontend.getTransformState();
+    ASSERT_TRUE(state);
+    const ScreenCoordinate drawn = project(*state, marker, coneMeters(marker));
+    const ScreenCoordinate seaLevel = project(*state, marker, 0.0);
+    ASSERT_GT(drawn.x, 10);
+    ASSERT_GT(drawn.y, 10);
+    ASSERT_LT(drawn.x, viewWidth - 10);
+    ASSERT_LT(drawn.y, viewHeight - 10);
+    ASSERT_GT(std::hypot(drawn.x - seaLevel.x, drawn.y - seaLevel.y), 40.0) << "the test proves nothing";
+    const PremultipliedImage image = scene.image();
+    int red = 0;
+    for (int dy = -3; dy <= 3; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+            const uint8_t* px = image.data.get() + (static_cast<size_t>(drawn.y + dy) * image.size.width +
+                                                    static_cast<size_t>(drawn.x + dx)) *
+                                                       4;
+            red += px[0] > 150 && px[1] < 100 && px[2] < 100;
         }
     }
-    EXPECT_GT(again, 0) << "no expired empty tile was asked for again";
-    expectTheCone(scene, "back at z13.5");
+    EXPECT_EQ(red, 49) << "the marker is not drawn at the cone's height";
+    RenderedQueryOptions query;
+    query.layerIDs = std::vector<std::string>{"marker"};
+    EXPECT_EQ(scene.frontend.getRenderer()->queryRenderedFeatures(drawn, query).size(), 1u)
+        << "the marker is not found where it is drawn";
+}
+
+TEST(TerrainSparseDEM, MarkersAndTheCameraClampUseTheAncestorsHeight) {
+    expectTheAncestorsHeightUsedByMarkersAndTheClamp(arrivalZoom, false);
+    expectTheAncestorsHeightUsedByMarkersAndTheClamp(15.5, false);
+    expectTheAncestorsHeightUsedByMarkersAndTheClamp(15.5, true);
 }
 
 // The cut-out: a z11 tile that straddles the coast holds 0 m pixels on the cut's side, and every
@@ -752,10 +906,32 @@ TEST(TerrainSparseDEM, TheKnownEmptyRecord) {
     EXPECT_TRUE(record.contains(b));
     record.add(b, std::chrono::time_point_cast<Seconds>(util::now() - std::chrono::seconds(1)));
     EXPECT_FALSE(record.contains(b)) << "an expired answer still holds";
+    EXPECT_EQ(record.size(), 1u) << "an answer that may not be reused is recorded";
     record.remove(a);
     EXPECT_FALSE(record.contains(a));
     for (uint32_t i = 0; i < 3 * KnownEmptyDEMTiles::maxEntries; ++i) {
         record.add(CanonicalTileID(14, i, 0), std::nullopt);
         ASSERT_LE(record.size(), KnownEmptyDEMTiles::maxEntries);
     }
+    // A change of the cache as a whole drops everything.
+    record.add(a, std::nullopt);
+    ASSERT_TRUE(record.contains(a));
+    bumpAmbientCacheGeneration();
+    EXPECT_FALSE(record.contains(a));
+    EXPECT_EQ(record.size(), 0u);
+}
+
+// At the cap, the expired entries go first: the ones that still hold are kept.
+TEST(TerrainSparseDEM, TheKnownEmptyRecordDropsExpiredEntriesAtItsCap) {
+    KnownEmptyDEMTiles record;
+    const CanonicalTileID kept(13, 1, 1);
+    record.add(kept, std::nullopt);
+    const auto soon = std::chrono::time_point_cast<Seconds>(util::now() + std::chrono::seconds(1));
+    for (uint32_t i = 0; record.size() < KnownEmptyDEMTiles::maxEntries; ++i) {
+        record.add(CanonicalTileID(14, i, 0), soon);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+    record.add(CanonicalTileID(13, 2, 2), std::nullopt);
+    EXPECT_TRUE(record.contains(kept)) << "the record started over though expired entries made room";
+    EXPECT_EQ(record.size(), 2u);
 }

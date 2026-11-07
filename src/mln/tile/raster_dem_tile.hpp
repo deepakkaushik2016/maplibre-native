@@ -4,6 +4,7 @@
 #include <mln/tile/tile_loader.hpp>
 #include <mln/tile/raster_dem_tile_worker.hpp>
 #include <mln/actor/actor.hpp>
+#include <mln/storage/cache_generation.hpp>
 #include <mln/util/chrono.hpp>
 
 #include <cstddef>
@@ -68,35 +69,63 @@ class Layer;
 /// The tiles of one raster-dem source that answered empty this session: 204 No Content, or a 404,
 /// at a zoom the source has. A sparse tileset has no finer data there, and the map draws the DEM
 /// of the nearest ancestor with data instead (updateRenderables keeps it). A tile recorded here is
-/// not asked for again while the record holds: neither when the view comes back to it, nor when
-/// the tile is created anew after leaving the tile cache. The record holds until the answer's
-/// expiry (its Cache-Control or Expires), for the session when it had none. Data arriving for the
-/// tile drops it.
+/// not asked for from the network again while the record holds: neither when the view comes back
+/// to it, nor when the tile is created anew after leaving the tile cache. It is still asked for
+/// from the cache (the ambient cache or offline database) then, as before, so data an offline pack
+/// brought since is drawn.
+///
+/// The record holds until the answer's expiry (Cache-Control max-age or Expires), for the session
+/// when it had none; an answer that may not be reused (no-store, no-cache, max-age=0) is not
+/// recorded. Data arriving for the tile drops it, and the whole record lapses when the cache or
+/// offline database changes as a whole (ambientCacheGeneration).
 ///
 /// Looked up when a DEM tile is created and when one goes from optional to required, never per
-/// frame. Bounded: past maxEntries the record starts over, which costs at most one more request
-/// per tile; each entry is some 64 bytes with the hash node, so 256 KB at most per source.
+/// frame. Bounded: past maxEntries the expired entries go, and if that is not enough the record
+/// starts over, which costs at most one more request per tile; each entry is some 64 bytes with
+/// the hash node, so 256 KB at most per source.
 class KnownEmptyDEMTiles {
 public:
     static constexpr std::size_t maxEntries = 4096;
 
     void add(const CanonicalTileID& id, std::optional<Timestamp> expires) {
+        sync();
+        const auto now = util::now();
+        if (expires && *expires <= now) {
+            // May not be reused: asked for again next time.
+            entries.erase(id);
+            return;
+        }
         if (entries.size() >= maxEntries && !entries.contains(id)) {
-            entries.clear();
+            std::erase_if(entries, [&](const auto& entry) { return entry.second && *entry.second <= now; });
+            if (entries.size() >= maxEntries) {
+                entries.clear();
+            }
         }
         entries.insert_or_assign(id, expires);
     }
     void remove(const CanonicalTileID& id) { entries.erase(id); }
     void clear() { entries.clear(); }
-    /// Whether `id` answered empty and that answer has not expired.
-    bool contains(const CanonicalTileID& id) const {
+    /// Whether `id` answered empty, that answer has not expired, and the cache has not changed as
+    /// a whole since.
+    bool contains(const CanonicalTileID& id) {
+        sync();
         const auto it = entries.find(id);
         return it != entries.end() && (!it->second || *it->second > util::now());
     }
     std::size_t size() const { return entries.size(); }
 
 private:
+    /// Forgets everything when the cache changed as a whole since the last look.
+    void sync() {
+        const auto current = ambientCacheGeneration().load(std::memory_order_relaxed);
+        if (current != generation) {
+            entries.clear();
+            generation = current;
+        }
+    }
+
     std::unordered_map<CanonicalTileID, std::optional<Timestamp>> entries;
+    uint64_t generation = ambientCacheGeneration().load(std::memory_order_relaxed);
 };
 
 class RasterDEMTile final : public Tile {
@@ -162,6 +191,8 @@ private:
     DEMTileNeighbors absentNeighbors = DEMTileNeighbors::Empty;
 
     std::shared_ptr<KnownEmptyDEMTiles> knownEmpty;
+    /// The necessity last set, to tell a revisit (optional to required) from a repeat.
+    TileNecessity necessity = TileNecessity::Optional;
 };
 
 } // namespace mln

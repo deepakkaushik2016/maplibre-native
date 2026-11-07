@@ -731,6 +731,7 @@ MLN_CORE_HEADERS = [
     "include/mln/storage/online_file_source.hpp",
     "include/mln/storage/resource.hpp",
     "include/mln/storage/resource_options.hpp",
+    "include/mln/storage/cache_generation.hpp",
     "include/mln/storage/resource_transform.hpp",
     "include/mln/storage/response.hpp",
     "include/mln/style/color_ramp_property_value.hpp",

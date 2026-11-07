@@ -171,14 +171,22 @@ void RasterDEMTile::setMask(TileMask&& mask) {
     }
 }
 
-void RasterDEMTile::setNecessity(TileNecessity necessity) {
-    // A loaded tile that answered empty is not asked for again when it becomes required (back in
-    // view, or out of the tile cache) while that answer holds: the loader would otherwise request
-    // it from the network on each such change. (Data for the tile drops it from the record.)
-    if (necessity == TileNecessity::Required && loaded && knownEmpty && knownEmpty->contains(id.canonical)) {
+void RasterDEMTile::setNecessity(TileNecessity newNecessity) {
+    const bool revisit = newNecessity == TileNecessity::Required && necessity != TileNecessity::Required;
+    necessity = newNecessity;
+    // A loaded tile that answered empty is not asked for from the network again when it becomes
+    // required (back in view, or out of the tile cache) while that answer holds: the loader would
+    // otherwise request it on each such change. It is asked for from the cache, as such a request
+    // first did before (MainResourceLoader answers from the database before the network), so data
+    // an offline pack brought since is drawn: data drops the tile from the record, and the next
+    // required tile revalidates it from the network as any other tile does.
+    if (newNecessity == TileNecessity::Required && loaded && knownEmpty && knownEmpty->contains(id.canonical)) {
+        if (revisit) {
+            loader.revalidateFromCache();
+        }
         return;
     }
-    loader.setNecessity(necessity);
+    loader.setNecessity(newNecessity);
 }
 
 void RasterDEMTile::setUpdateParameters(const TileUpdateParameters& params) {

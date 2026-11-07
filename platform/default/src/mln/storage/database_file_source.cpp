@@ -1,4 +1,5 @@
 #include <mln/platform/settings.hpp>
+#include <mln/storage/cache_generation.hpp>
 #include <mln/storage/database_file_source.hpp>
 #include <mln/storage/file_source_manager.hpp>
 #include <mln/storage/file_source_request.hpp>
@@ -40,6 +41,7 @@ public:
 
     void setDatabasePath(const std::string& path, const std::function<void()>& callback) {
         db->changePath(path);
+        bumpAmbientCacheGeneration();
         if (callback) {
             callback();
         }
@@ -52,7 +54,11 @@ public:
         }
     }
 
-    void resetDatabase(const std::function<void(std::exception_ptr)>& callback) { callback(db->resetDatabase()); }
+    void resetDatabase(const std::function<void(std::exception_ptr)>& callback) {
+        auto result = db->resetDatabase();
+        bumpAmbientCacheGeneration();
+        callback(result);
+    }
 
     void packDatabase(const std::function<void(std::exception_ptr)>& callback) { callback(db->pack()); }
 
@@ -60,12 +66,18 @@ public:
 
     void put(const Resource& resource, const Response& response) { db->put(resource, response); }
 
+    // The operations below change what the cache answers as a whole, so they move
+    // ambientCacheGeneration once done: what the map learnt from it (KnownEmptyDEMTiles) lapses.
     void invalidateAmbientCache(const std::function<void(std::exception_ptr)>& callback) {
-        callback(db->invalidateAmbientCache());
+        auto result = db->invalidateAmbientCache();
+        bumpAmbientCacheGeneration();
+        callback(result);
     }
 
     void clearAmbientCache(const std::function<void(std::exception_ptr)>& callback) {
-        callback(db->clearAmbientCache());
+        auto result = db->clearAmbientCache();
+        bumpAmbientCacheGeneration();
+        callback(result);
     }
 
     void setMaximumAmbientCacheSize(uint64_t size, const std::function<void(std::exception_ptr)>& callback) {
@@ -89,7 +101,9 @@ public:
 
     void mergeOfflineRegions(const std::string& sideDatabasePath,
                              const std::function<void(expected<OfflineRegions, std::exception_ptr>)>& callback) {
-        callback(db->mergeDatabase(sideDatabasePath));
+        auto result = db->mergeDatabase(sideDatabasePath);
+        bumpAmbientCacheGeneration();
+        callback(result);
     }
 
     void updateMetadata(const int64_t regionID,
@@ -109,11 +123,15 @@ public:
 
     void deleteRegion(OfflineRegion region, const std::function<void(std::exception_ptr)>& callback) {
         downloads.erase(region.getID());
-        callback(db->deleteRegion(std::move(region)));
+        auto result = db->deleteRegion(std::move(region));
+        bumpAmbientCacheGeneration();
+        callback(result);
     }
 
     void invalidateRegion(int64_t regionID, const std::function<void(std::exception_ptr)>& callback) {
-        callback(db->invalidateRegion(regionID));
+        auto result = db->invalidateRegion(regionID);
+        bumpAmbientCacheGeneration();
+        callback(result);
     }
 
     void setRegionObserver(int64_t regionID, std::unique_ptr<OfflineRegionObserver> observer) {
@@ -125,6 +143,7 @@ public:
     void setRegionDownloadState(int64_t regionID, OfflineRegionDownloadState state) {
         if (auto download = getDownload(regionID)) {
             download.value()->setState(state);
+            bumpAmbientCacheGeneration();
         }
     }
 

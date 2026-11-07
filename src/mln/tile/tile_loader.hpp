@@ -24,6 +24,11 @@ public:
     ~TileLoader();
 
     void setNecessity(TileNecessity newNecessity);
+
+    /// Asks the cache (the ambient cache or offline database) again, and not the network, unless
+    /// a request is pending or the file source has no cache. Its answer reaches the tile as a
+    /// first load does.
+    void revalidateFromCache();
     void setUpdateParameters(const TileUpdateParameters&);
 
 private:
