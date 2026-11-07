@@ -56,15 +56,18 @@ void RenderRasterDEMSource::updateInternal(const Tileset& tileset,
                        tileset.zoomRange,
                        tileset.bounds,
                        [&](const OverscaledTileID& tileID, TileObserver* observer_) {
-                           return std::make_unique<RasterDEMTile>(tileID, baseImpl->id, parameters, tileset, observer_);
+                           return std::make_unique<RasterDEMTile>(
+                               tileID, baseImpl->id, parameters, tileset, observer_, knownEmptyTiles);
                        });
     algorithm::updateTileMasks(tilePyramid.getRenderedTiles());
 }
 
 void RenderRasterDEMSource::onTilesetChanged() {
-    // The tiles the ranges were decoded from are gone, so the ranges go too.
+    // The tiles the ranges were decoded from are gone, so the ranges go too, and what a tile of the
+    // old tileset answered says nothing of the new one.
     elevationRanges.clear();
     descendantElevationRanges.clear();
+    knownEmptyTiles->clear();
 }
 
 std::optional<Range<int32_t>> RenderRasterDEMSource::getElevationRange(const CanonicalTileID& id) const {

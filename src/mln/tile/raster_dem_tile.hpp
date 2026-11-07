@@ -4,6 +4,12 @@
 #include <mln/tile/tile_loader.hpp>
 #include <mln/tile/raster_dem_tile_worker.hpp>
 #include <mln/actor/actor.hpp>
+#include <mln/util/chrono.hpp>
+
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <unordered_map>
 
 namespace mln {
 
@@ -59,10 +65,50 @@ namespace style {
 class Layer;
 } // namespace style
 
+/// The tiles of one raster-dem source that answered empty this session: 204 No Content, or a 404,
+/// at a zoom the source has. A sparse tileset has no finer data there, and the map draws the DEM
+/// of the nearest ancestor with data instead (updateRenderables keeps it). A tile recorded here is
+/// not asked for again while the record holds: neither when the view comes back to it, nor when
+/// the tile is created anew after leaving the tile cache. The record holds until the answer's
+/// expiry (its Cache-Control or Expires), for the session when it had none. Data arriving for the
+/// tile drops it.
+///
+/// Looked up when a DEM tile is created and when one goes from optional to required, never per
+/// frame. Bounded: past maxEntries the record starts over, which costs at most one more request
+/// per tile; each entry is some 64 bytes with the hash node, so 256 KB at most per source.
+class KnownEmptyDEMTiles {
+public:
+    static constexpr std::size_t maxEntries = 4096;
+
+    void add(const CanonicalTileID& id, std::optional<Timestamp> expires) {
+        if (entries.size() >= maxEntries && !entries.contains(id)) {
+            entries.clear();
+        }
+        entries.insert_or_assign(id, expires);
+    }
+    void remove(const CanonicalTileID& id) { entries.erase(id); }
+    void clear() { entries.clear(); }
+    /// Whether `id` answered empty and that answer has not expired.
+    bool contains(const CanonicalTileID& id) const {
+        const auto it = entries.find(id);
+        return it != entries.end() && (!it->second || *it->second > util::now());
+    }
+    std::size_t size() const { return entries.size(); }
+
+private:
+    std::unordered_map<CanonicalTileID, std::optional<Timestamp>> entries;
+};
+
 class RasterDEMTile final : public Tile {
 public:
-    RasterDEMTile(
-        const OverscaledTileID&, std::string, const TileParameters&, const Tileset&, TileObserver* observer = nullptr);
+    /// `knownEmpty`: the source's record of its tiles that answered empty (none when null). A tile
+    /// in it starts out loaded with no data and asks for nothing until the record lapses.
+    RasterDEMTile(const OverscaledTileID&,
+                  std::string,
+                  const TileParameters&,
+                  const Tileset&,
+                  TileObserver* observer = nullptr,
+                  std::shared_ptr<KnownEmptyDEMTiles> knownEmpty = nullptr);
     ~RasterDEMTile() override;
 
     std::unique_ptr<TileRenderData> createRenderData() override;
@@ -114,6 +160,8 @@ private:
 
     bool obsolete = false;
     DEMTileNeighbors absentNeighbors = DEMTileNeighbors::Empty;
+
+    std::shared_ptr<KnownEmptyDEMTiles> knownEmpty;
 };
 
 } // namespace mln

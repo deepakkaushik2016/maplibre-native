@@ -18,12 +18,19 @@ RasterDEMTile::RasterDEMTile(const OverscaledTileID& id_,
                              std::string sourceID_,
                              const TileParameters& parameters,
                              const Tileset& tileset,
-                             TileObserver* observer_)
+                             TileObserver* observer_,
+                             std::shared_ptr<KnownEmptyDEMTiles> knownEmpty_)
     : Tile(Kind::RasterDEM, id_, std::move(sourceID_), observer_),
       loader(*this, id_, parameters, tileset),
       threadPool(parameters.threadPool),
       mailbox(std::make_shared<Mailbox>(*Scheduler::GetCurrent())),
-      worker(parameters.threadPool, ActorRef<RasterDEMTile>(*this, mailbox)) {
+      worker(parameters.threadPool, ActorRef<RasterDEMTile>(*this, mailbox)),
+      knownEmpty(std::move(knownEmpty_)) {
+    if (knownEmpty && knownEmpty->contains(id.canonical)) {
+        // Answered empty before: loaded, with nothing to draw, so the tile pyramid goes straight
+        // to the ancestor that has data, and setNecessity asks the network for nothing.
+        loaded = true;
+    }
     encoding = tileset.rasterEncoding.value_or(Tileset::RasterEncoding::Mapbox);
     // A tile in the top row has no upper neighbours and one in the bottom row no lower ones, so
     // those count as backfilled. The z0 tile has neither, and its left and right neighbours are
@@ -83,6 +90,14 @@ void RasterDEMTile::setData(const std::shared_ptr<const std::string>& data) {
 
 void RasterDEMTile::onParsed(std::unique_ptr<HillshadeBucket> result, const uint64_t resultCorrelationID) {
     if (!obsolete) {
+        if (knownEmpty) {
+            if (result) {
+                knownEmpty->remove(id.canonical);
+            } else {
+                // No data (204, or a 404): remembered until the answer expires (setMetadata).
+                knownEmpty->add(id.canonical, expires);
+            }
+        }
         bucket = std::move(result);
         // The new DEM's border is a copy of its own edge again: no neighbour has backfilled it.
         neighboringTiles = absentNeighbors;
@@ -157,6 +172,12 @@ void RasterDEMTile::setMask(TileMask&& mask) {
 }
 
 void RasterDEMTile::setNecessity(TileNecessity necessity) {
+    // A loaded tile that answered empty is not asked for again when it becomes required (back in
+    // view, or out of the tile cache) while that answer holds: the loader would otherwise request
+    // it from the network on each such change. (Data for the tile drops it from the record.)
+    if (necessity == TileNecessity::Required && loaded && knownEmpty && knownEmpty->contains(id.canonical)) {
+        return;
+    }
     loader.setNecessity(necessity);
 }
 

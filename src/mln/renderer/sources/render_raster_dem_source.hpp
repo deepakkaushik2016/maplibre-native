@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mln/renderer/sources/render_tile_source.hpp>
+#include <mln/tile/raster_dem_tile.hpp>
 #include <mln/style/sources/tile_source_impl.hpp>
 #include <mln/util/range.hpp>
 
@@ -70,6 +71,9 @@ private:
     /// ranges rebuilt from those it does. Far more than one view loads, ancestors included, so a
     /// still camera cannot cause a second drop.
     static constexpr std::size_t maxElevationRangeEntries = 8192;
+
+    /// The tiles that answered empty this session (see KnownEmptyDEMTiles), shared with them.
+    std::shared_ptr<KnownEmptyDEMTiles> knownEmptyTiles = std::make_shared<KnownEmptyDEMTiles>();
 };
 
 } // namespace mln

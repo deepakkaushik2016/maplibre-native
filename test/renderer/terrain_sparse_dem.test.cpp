@@ -10,6 +10,7 @@
 #include <mln/renderer/renderer.hpp>
 #include <mln/storage/response.hpp>
 #include <mln/style/style.hpp>
+#include <mln/tile/raster_dem_tile.hpp>
 #include <mln/tile/tile_id.hpp>
 #include <mln/util/chrono.hpp>
 #include <mln/util/constants.hpp>
@@ -121,13 +122,15 @@ const double coastX = apexX + 1.0;
 enum class Ground {
     Cone,
     ConeWithCut,
+    RaisedCone, // the cone 50 m higher: data a tile gains later (an offline pack, say)
 };
+constexpr double raisedBy = 50.0;
 
 double groundMeters(Ground ground, const LatLng& point, bool withBump) {
     if (ground == Ground::ConeWithCut && inCut(point)) {
         return 0.0;
     }
-    return coneMeters(point) + (withBump ? bumpAt(point) : 0.0);
+    return coneMeters(point) + (withBump ? bumpAt(point) : 0.0) + (ground == Ground::RaisedCone ? raisedBy : 0.0);
 }
 
 // The DEM tile z/x/y of the ground in Terrarium, each pixel holding the height at its centre.
@@ -198,13 +201,14 @@ std::string gridGeoJSON() {
 // The production source's shape: one raster-dem source `terrain`, Terrarium, 512 px, maxzoom 14.
 // A colour relief and a hillshade of it, and the grid, all draped. `terrain` false leaves the
 // terrain out: the same layers, drawn flat.
-std::string sparseStyle(bool terrain = true) {
+std::string sparseStyle(bool terrain = true, const std::string& tiles = "terrain") {
     return R"STYLE({
   "version": 8,
   "sources": {
     "terrain": {
       "type": "raster-dem",
-      "tiles": ["http://example.com/terrain/{z}/{x}/{y}.png"],
+      "tiles": ["http://example.com/)STYLE" +
+           tiles + R"STYLE(/{z}/{x}/{y}.png"],
       "encoding": "terrarium",
       "maxzoom": )STYLE" +
            std::to_string(demMaxZoom) + R"STYLE(,
@@ -268,6 +272,8 @@ struct SceneOptions {
     Missing missing = Missing::NoContent;
     Ground ground = Ground::Cone;
     bool terrain = true;
+    /// How long an empty answer may be reused (its Cache-Control max-age); none when not set.
+    std::optional<Duration> emptyMaxAge;
 };
 
 // A map run continuously, so tiles arrive across frames as they do in an app. Nothing is drawn
@@ -282,27 +288,47 @@ struct SparseScene {
     SceneOptions options;
     /// Network requests per DEM tile.
     std::map<CanonicalTileID, int> networkRequests;
+    /// Tiles the cache answers with data, and with which.
+    std::map<CanonicalTileID, Ground> cached;
+    /// Tiles the network answers with data though the tileset had none, and with which.
+    std::map<CanonicalTileID, Ground> gained;
 
     explicit SparseScene(SceneOptions options_ = {})
         : options(options_) {
         fileSource->tileResponse = [this](const Resource& resource) -> std::optional<Response> {
             Response res;
-            if (!resource.tileData || resource.url.find("/terrain/") == std::string::npos) {
+            if (!resource.tileData || resource.url.find("/terrain") == std::string::npos) {
                 res.noContent = true;
-                return res;
-            }
-            if (resource.loadingMethod == Resource::LoadingMethod::CacheOnly) {
-                res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "not cached");
                 return res;
             }
             const CanonicalTileID id(
                 resource.tileData->z, static_cast<uint32_t>(resource.tileData->x), resource.tileData->y);
+            if (resource.loadingMethod == Resource::LoadingMethod::CacheOnly) {
+                if (const auto it = cached.find(id); it != cached.end()) {
+                    res.data = demTile(it->second, id);
+                    return res;
+                }
+                res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "not cached");
+                return res;
+            }
             ++networkRequests[id];
+            if (resource.url.find("/terrain-v2/") != std::string::npos) {
+                // A new version of the tileset, with every tile, 50 m higher.
+                res.data = demTile(Ground::RaisedCone, id);
+                return res;
+            }
+            if (const auto it = gained.find(id); it != gained.end()) {
+                res.data = demTile(it->second, id);
+                return res;
+            }
             if (!has(id)) {
                 if (options.missing == Missing::NoContent) {
                     res.noContent = true;
                 } else {
                     res.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound, "no tile");
+                }
+                if (options.emptyMaxAge) {
+                    res.expires = std::chrono::time_point_cast<Seconds>(util::now() + *options.emptyMaxAge);
                 }
                 return res;
             }
@@ -448,12 +474,12 @@ std::vector<LatLng> flankPoints() {
 // surface is the same (the cone is linear in distance: bilinear interpolation of it misses by under
 // a millimetre at either size); the colour relief and hillshade sample textures of different
 // resolutions, within the 8 levels a channel may differ by, and the grid's anti-aliased edges may
-// fall a fraction of a pixel apart. Measured: 0 on Metal. A frame drawn flat moves the grid by tens
-// of pixels, 21 % of the frame: the scene checks first that the flat frame differs from the
-// reference by many times this. A drape baked at another zoom draws the grid's lines 2^0.3 too
-// wide: 8-11 % of the frame.
-constexpr double maxMismatch = 0.02;
-constexpr double minFlatMismatch = 0.10;
+// fall a fraction of a pixel apart. Measured: 0 on Metal, at z13.5 and z15.5. A frame drawn flat
+// moves the grid: 18 % of the frame at z13.5, 4.5 % at z15.5, where fewer grid lines are in view;
+// each scene checks first that the flat frame differs from the reference by at least 4 times the
+// bound. A drape baked at another zoom draws the grid's lines 2^0.3 too wide: 8-11 % at z13.5.
+constexpr double maxMismatch = 0.01;
+constexpr double minFlatMismatch = 0.04;
 // The cut drawn from the z11 tile against z12-14 tiles at 0 m: the frames differ only where the
 // coarser DEM draws the coast itself. On the cut's side the z11 surface runs down the cliff over a
 // z11 DEM pixel (26 m) instead of a z14 one; on the land's side the z12 tile's border, with no
@@ -488,13 +514,15 @@ PremultipliedImage reference(double zoom, const LatLng& center, SceneOptions opt
     return scene.image();
 }
 
-void expectDrawnAsTheCone(SparseScene& scene, const std::string& when) {
-    static const PremultipliedImage dense = reference(arrivalZoom, flank, {});
-    static const PremultipliedImage flat = [] {
-        SceneOptions options;
-        options.terrain = false;
-        return reference(arrivalZoom, flank, options);
-    }();
+void expectDrawnAsTheCone(SparseScene& scene, const std::string& when, double zoom = arrivalZoom) {
+    // The dense and the flat frame at each zoom, drawn once.
+    static std::map<double, std::pair<PremultipliedImage, PremultipliedImage>> references;
+    if (!references.contains(zoom)) {
+        SceneOptions flatOptions;
+        flatOptions.terrain = false;
+        references.emplace(zoom, std::pair{reference(zoom, flank, {}), reference(zoom, flank, flatOptions)});
+    }
+    const auto& [dense, flat] = references.at(zoom);
     ASSERT_GE(mismatch(flat, dense), minFlatMismatch) << "a flat frame looks like the cone: the test proves nothing";
     const double share = mismatch(scene.image(), dense);
     EXPECT_LE(share, maxMismatch) << when << ": " << share * 100.0 << " % of the frame differs from the cone ("
@@ -502,16 +530,17 @@ void expectDrawnAsTheCone(SparseScene& scene, const std::string& when) {
 }
 
 // (A) zoom in from z12, where the z12 tiles are loaded, to z13.5 outside the sub-box.
-void expectZoomInKeepsTheShape(Missing missing) {
+void expectZoomInKeepsTheShape(Missing missing, double zoom = arrivalZoom) {
     SceneOptions options;
     options.missing = missing;
     SparseScene scene(options);
     scene.jumpTo(scene.camera(flank, planetMaxZoom, pitch));
     expectTheCone(scene, "at z12");
-    scene.easeTo(scene.camera(flank, arrivalZoom, pitch));
+    scene.easeTo(scene.camera(flank, zoom, pitch));
     ASSERT_GT(scene.requestsAbove(planetMaxZoom), 0) << "the map never asked for a z13-14 tile";
-    expectTheCone(scene, "zoomed in to z13.5");
-    expectDrawnAsTheCone(scene, "zoomed in to z13.5");
+    const std::string when = "zoomed in to z" + std::to_string(zoom);
+    expectTheCone(scene, when);
+    expectDrawnAsTheCone(scene, when, zoom);
 }
 
 // (A) within a zoom level: from z13.2, where the mesh is on z13 tiles, to z13.5, where it is on z14
@@ -529,14 +558,15 @@ void expectZoomWithinALevelKeepsTheShape(Missing missing) {
 }
 
 // (B) a cold jump: a new map straight at z13.5, no frame drawn before.
-void expectColdJumpKeepsTheShape(Missing missing) {
+void expectColdJumpKeepsTheShape(Missing missing, double zoom = arrivalZoom) {
     SceneOptions options;
     options.missing = missing;
     SparseScene scene(options);
-    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    scene.jumpTo(scene.camera(flank, zoom, pitch));
     ASSERT_GT(scene.requestsAbove(planetMaxZoom), 0) << "the map never asked for a z13-14 tile";
-    expectTheCone(scene, "jumped to z13.5");
-    expectDrawnAsTheCone(scene, "jumped to z13.5");
+    const std::string when = "jumped to z" + std::to_string(zoom);
+    expectTheCone(scene, when);
+    expectDrawnAsTheCone(scene, when, zoom);
 }
 
 } // namespace
@@ -565,6 +595,16 @@ TEST(TerrainSparseDEM, AColdJumpPastTheDataKeepsTheShapeOn404) {
     expectColdJumpKeepsTheShape(Missing::NotFound);
 }
 
+// Two zooms past the data: at z15.5 the ideal tiles are z14 (overscaled), empty, and so are their
+// z13 parents; the nearest data is z12. (maplibre-gl-js 6.16 draws this from a z5 tile on a 204.)
+TEST(TerrainSparseDEM, ZoomingInTwoLevelsPastTheDataKeepsTheShapeOn204) {
+    expectZoomInKeepsTheShape(Missing::NoContent, 15.5);
+}
+
+TEST(TerrainSparseDEM, AColdJumpTwoLevelsPastTheDataKeepsTheShapeOn204) {
+    expectColdJumpKeepsTheShape(Missing::NoContent, 15.5);
+}
+
 // Where z13-14 tiles exist, they are drawn and queried, not their z12 parent: the bump only they
 // hold is there, at z13.5 and at z14.5 (overzoomed from z14).
 TEST(TerrainSparseDEM, TheSubBoxUsesItsOwnTiles) {
@@ -576,6 +616,47 @@ TEST(TerrainSparseDEM, TheSubBoxUsesItsOwnTiles) {
         ASSERT_TRUE(meters);
         EXPECT_NEAR(*meters, coneMeters(bump) + bumpMeters, 1.0);
     }
+}
+
+// A tile known to be empty is asked for once a session: not again when the view comes back to it,
+// nor after the tile cache was dropped. A tile the map sees for the first time is asked for once.
+TEST(TerrainSparseDEM, AnEmptyTileIsRequestedOnce) {
+    SparseScene scene;
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    ASSERT_GT(scene.requestsAbove(planetMaxZoom), 0);
+    // Out to z11 and back, then out again with the tile cache dropped (as on a memory warning) and back.
+    scene.jumpTo(scene.camera(flank, 11.0, pitch));
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    scene.jumpTo(scene.camera(flank, 11.0, pitch));
+    scene.frontend.getRenderer()->reduceMemoryUse();
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    for (const auto& [id, n] : scene.networkRequests) {
+        if (id.z > planetMaxZoom) {
+            EXPECT_EQ(n, 1) << "z" << int(id.z) << "/" << id.x << "/" << id.y << " was requested " << n << " times";
+        }
+    }
+    expectTheCone(scene, "back at z13.5");
+}
+
+// An empty answer that may not be reused (Cache-Control: max-age=0 on the 204) is asked for again
+// when the view comes back.
+TEST(TerrainSparseDEM, AnExpiredEmptyTileIsRequestedAgain) {
+    SceneOptions options;
+    options.emptyMaxAge = Duration::zero();
+    SparseScene scene(options);
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    const auto first = scene.networkRequests;
+    scene.jumpTo(scene.camera(flank, 11.0, pitch));
+    scene.frontend.getRenderer()->reduceMemoryUse();
+    scene.jumpTo(scene.camera(flank, arrivalZoom, pitch));
+    int again = 0;
+    for (const auto& [id, n] : first) {
+        if (id.z > planetMaxZoom && scene.networkRequests[id] > n) {
+            ++again;
+        }
+    }
+    EXPECT_GT(again, 0) << "no expired empty tile was asked for again";
+    expectTheCone(scene, "back at z13.5");
 }
 
 // The cut-out: a z11 tile that straddles the coast holds 0 m pixels on the cut's side, and every
@@ -608,5 +689,73 @@ TEST(TerrainSparseDEM, ACutOutRegionStaysAtSeaLevelAtEveryZoom) {
         dense.jumpTo(dense.camera(coast, zoom, 0.0));
         const double share = mismatch(scene.image(), dense.image(), coastBand(zoom));
         EXPECT_LE(share, maxCoastMismatch) << share * 100.0 << " % of the frame away from the coast differs";
+    }
+}
+
+// A tile known to be empty that gains data - from the cache (an offline pack downloaded since, say)
+// and from the server, which now has it - draws it, and is no longer known to be empty: created
+// anew, with the cache cleared, it is asked for again and its data drawn.
+TEST(TerrainSparseDEM, ATileThatGainsDataIsNoLongerKnownEmpty) {
+    SparseScene scene;
+    scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    const auto [x, y] = tileCoordinates(flank);
+    const CanonicalTileID under(planetMaxZoom + 1, static_cast<uint32_t>(x * 2), static_cast<uint32_t>(y * 2));
+    ASSERT_EQ(scene.networkRequests[under], 1) << "the view does not ask for the tile under its centre";
+    const auto leaveAndComeBack = [&] {
+        scene.jumpTo(scene.camera(flank, 11.0, 0.0));
+        scene.frontend.getRenderer()->reduceMemoryUse();
+        scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    };
+    const auto expectRaised = [&](const std::string& when) {
+        const auto meters = scene.elevation(flank);
+        ASSERT_TRUE(meters) << when;
+        EXPECT_NEAR(*meters, coneMeters(flank) + raisedBy, 0.25) << when << ": the tile's data is not drawn";
+    };
+
+    // The cache answers first, then the network revalidates what it answered.
+    scene.cached[under] = Ground::RaisedCone;
+    scene.gained[under] = Ground::RaisedCone;
+    leaveAndComeBack();
+    EXPECT_EQ(scene.networkRequests[under], 2);
+    expectRaised("with data in the cache");
+
+    scene.cached.clear();
+    leaveAndComeBack();
+    EXPECT_EQ(scene.networkRequests[under], 3) << "a tile that has data is still taken for empty";
+    expectRaised("with the cache cleared");
+}
+
+// What the tiles of one tileset answered says nothing of another's: a style that moves the source
+// to a new tileset asks for every tile of it.
+TEST(TerrainSparseDEM, ANewTilesetForgetsTheEmptyTiles) {
+    SparseScene scene;
+    scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    const int before = scene.requestsAbove(planetMaxZoom);
+    ASSERT_GT(before, 0);
+    scene.map.getStyle().loadJSON(sparseStyle(true, "terrain-v2"));
+    scene.jumpTo(scene.camera(flank, arrivalZoom, 0.0));
+    EXPECT_GT(scene.requestsAbove(planetMaxZoom), before) << "the new tileset's tiles were not asked for";
+    const auto meters = scene.elevation(flank);
+    ASSERT_TRUE(meters);
+    EXPECT_NEAR(*meters, coneMeters(flank) + raisedBy, 0.25) << "the new tileset's tile is not drawn";
+}
+
+// The record of empty tiles: an answer with no expiry holds for the session, one with an expiry
+// until then; data drops it; and it stays bounded.
+TEST(TerrainSparseDEM, TheKnownEmptyRecord) {
+    KnownEmptyDEMTiles record;
+    const CanonicalTileID a(13, 4328, 2895);
+    const CanonicalTileID b(13, 4328, 2896);
+    record.add(a, std::nullopt);
+    record.add(b, std::chrono::time_point_cast<Seconds>(util::now() + std::chrono::hours(1)));
+    EXPECT_TRUE(record.contains(a));
+    EXPECT_TRUE(record.contains(b));
+    record.add(b, std::chrono::time_point_cast<Seconds>(util::now() - std::chrono::seconds(1)));
+    EXPECT_FALSE(record.contains(b)) << "an expired answer still holds";
+    record.remove(a);
+    EXPECT_FALSE(record.contains(a));
+    for (uint32_t i = 0; i < 3 * KnownEmptyDEMTiles::maxEntries; ++i) {
+        record.add(CanonicalTileID(14, i, 0), std::nullopt);
+        ASSERT_LE(record.size(), KnownEmptyDEMTiles::maxEntries);
     }
 }
