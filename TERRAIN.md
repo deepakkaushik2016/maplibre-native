@@ -1345,9 +1345,8 @@ terrain during placement sees the previous frame's state - the same first-frame 
 - **(done: run on Metal, Linux OpenGL and Linux Vulkan; WebGPU compile-validated only)** Extend
   the draped-flag gamma handling to the line gradient/pattern/SDF variants: `LineLayerTweaker`
   sets the draped flag (`pad1`) for every line variant, and the gradient, pattern, SDF and
-  gradient-SDF vertex shaders use gamma 1.0 when it is set. The gradient-SDF variant
-  (line-gradient + line-dasharray) also lacked `apply_drape_transform` on every backend, so it was
-  drawn unplaced into the drape targets; it now has it. Validation, precisely:
+  gradient-SDF vertex shaders use gamma 1.0 when it is set. (The gradient-SDF variant's missing
+  `apply_drape_transform` is upstream's #4894.) Validation, precisely:
   - **Run:** `TerrainLineDrape.EveryLineVariantDrapesLikeTheSolidLine` (terrain at exaggeration 0
     vs terrain off, with a positive control that the drape path engaged: solid-line mean diff
     Metal 0.013, GL 0.059, Vulkan 0.012) passes on **macOS Metal**, and on **Linux OpenGL
