@@ -335,13 +335,13 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
 
     // Update changed images. One replaced at the same size (and SDF flag) is patched into the
     // tiles' atlases in place, with no relayout (GeometryTileRenderData::prepare / upload).
-    bool imagesPatchedInPlace = false;
+    std::vector<std::string> imagesPatchedInPlace;
     for (const auto& entry : imageDiff.changed) {
         if (imageManager->updateImage(entry.second.after)) {
             patternAtlas->removePattern(entry.first);
             hasImageDiff = true;
         } else {
-            imagesPatchedInPlace = true;
+            imagesPatchedInPlace.push_back(entry.first);
         }
     }
 
@@ -439,11 +439,17 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
                 constantsMaskChanged.insert(id);
             }
         }
-        // An image patched in place keeps every bucket and tile, so a drape holding a layer that
-        // draws image patterns must be told. Any pattern layer is marked, not only those naming a
-        // changed image: a pattern may be an expression, and image updates are rare.
-        if (imagesPatchedInPlace && layer.usesImagePattern()) {
-            layer.markPaintChanged();
+        // An image patched in place keeps every bucket and tile, so a drape holding a layer whose
+        // pattern can draw that image must be told. Only those layers are marked: an app may
+        // update an image on every frame (an animated marker), and marking every pattern layer
+        // re-rendered the drape on every frame. A pattern whose outputs are not all literals
+        // (["get", "pattern"]) may draw any image, and is marked for every update.
+        if (!imagesPatchedInPlace.empty() && layer.usesImagePattern()) {
+            const auto& patterns = layer.getPatternImages();
+            if (std::ranges::any_of(imagesPatchedInPlace,
+                                    [&](const std::string& id) { return patterns.mayDraw(id); })) {
+                layer.markPaintChanged();
+            }
         }
     }
 

@@ -57,6 +57,7 @@ RenderLineLayer::~RenderLineLayer() = default;
 void RenderLineLayer::transition(const TransitionParameters& parameters) {
     unevaluated = impl_cast(baseImpl).paint.transitioned(parameters, std::move(unevaluated));
     styleDependencies = unevaluated.getDependencies();
+    patternImages = patternImagesOf(impl_cast(baseImpl).paint.template get<LinePattern>().value);
     updateColorRamp();
 
 #if MLN_RENDER_BACKEND_METAL

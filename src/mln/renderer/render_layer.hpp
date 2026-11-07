@@ -6,6 +6,8 @@
 #include <mln/renderer/render_pass.hpp>
 #include <mln/renderer/render_source.hpp>
 #include <mln/style/layer_properties.hpp>
+#include <mln/style/expression/image.hpp>
+#include <mln/style/property_value.hpp>
 #include <mln/tile/geometry_tile_data.hpp>
 #include <mln/util/mat4.hpp>
 #include <mln/util/tiny_unordered_map.hpp>
@@ -15,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace mln {
 class Bucket;
@@ -205,6 +208,21 @@ public:
     /// whose pixels an image update can replace in place (RenderOrchestrator).
     virtual bool usesImagePattern() const { return false; }
 
+    /// The images a pattern property can draw: the literal outputs of its value, constant,
+    /// zoom-dependent or data-driven.
+    struct PatternImages {
+        std::vector<std::string> ids;
+        /// An output is not a literal (["get", "pattern"], say): the layer may draw any image.
+        bool anyImage = false;
+
+        bool mayDraw(const std::string& id) const;
+    };
+    static PatternImages patternImagesOf(const style::PropertyValue<style::expression::Image>&);
+
+    /// The images this layer's pattern can draw, worked out when its style changes (transition),
+    /// so RenderOrchestrator marks it only for an update of one of them. O(1).
+    const PatternImages& getPatternImages() const { return patternImages; }
+
     /// Records that the evaluated paint may have changed for a reason other than the camera, so a
     /// terrain drape holding this layer re-renders (LayerGroupBase::getPaintRevision). O(1).
     void markPaintChanged() {
@@ -217,6 +235,9 @@ public:
     Dependency getStyleDependencies() const { return styleDependencies; }
 
 protected:
+    // Set by the transition() of a layer that draws patterns.
+    PatternImages patternImages;
+
     // Checks whether the current hardware can render this layer. If it can't,
     // we'll show a warning in the console to inform the developer.
     void checkRenderability(const PaintParameters&, uint32_t activeBindingCount);

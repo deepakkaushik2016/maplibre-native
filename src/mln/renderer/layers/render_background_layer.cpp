@@ -48,6 +48,7 @@ RenderBackgroundLayer::~RenderBackgroundLayer() = default;
 void RenderBackgroundLayer::transition(const TransitionParameters& parameters) {
     unevaluated = impl_cast(baseImpl).paint.transitioned(parameters, std::move(unevaluated));
     styleDependencies = unevaluated.getDependencies();
+    patternImages = patternImagesOf(impl_cast(baseImpl).paint.template get<BackgroundPattern>().value);
 }
 
 void RenderBackgroundLayer::evaluate(const PropertyEvaluationParameters& parameters) {

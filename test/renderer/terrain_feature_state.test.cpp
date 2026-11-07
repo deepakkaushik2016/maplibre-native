@@ -10,6 +10,7 @@
 #include <mln/map/camera.hpp>
 #include <mln/map/map_observer.hpp>
 #include <mln/map/map_options.hpp>
+#include <mln/renderer/render_layer.hpp>
 #include <mln/renderer/buckets/debug_bucket.hpp>
 #include <mln/renderer/render_tile.hpp>
 #include <mln/renderer/renderer.hpp>
@@ -18,6 +19,9 @@
 #include <mln/storage/response.hpp>
 #include <mln/style/conversion/geojson.hpp>
 #include <mln/style/conversion/json.hpp>
+#include <mln/style/conversion/property_value.hpp>
+#include <mln/style/image.hpp>
+#include <mln/style/layer.hpp>
 #include <mln/style/layers/line_layer.hpp>
 #include <mln/style/sources/geojson_source.hpp>
 #include <mln/style/style.hpp>
@@ -678,4 +682,156 @@ TEST(TerrainFeatureStateRevision, MovesOnlyOnARealChange) {
     source.removeState(layer, std::nullopt, std::nullopt);
     EXPECT_GT(coalesce(), again) << "clearing a source layer";
     EXPECT_TRUE(tile.states.at("trails").at("6").empty());
+}
+
+// --- In-place image updates (R1(c), R3) ---
+
+namespace {
+
+// A 16×16 image whose stripes are the given colour. Every version has the same size, so an update
+// is patched into the atlases in place. The outermost pixels never change (see
+// terrain_paint_drape.test.cpp).
+std::unique_ptr<style::Image> stripedImage(const std::string& id, uint8_t r, uint8_t g, uint8_t b) {
+    PremultipliedImage image({16, 16});
+    for (uint32_t row = 0; row < 16; ++row) {
+        for (uint32_t col = 0; col < 16; ++col) {
+            uint8_t* px = image.data.get() + (static_cast<size_t>(row) * 16 + col) * 4;
+            const bool edge = row == 0 || row == 15 || col == 0 || col == 15;
+            const bool stripe = !edge && (row / 4) % 2 == 0;
+            px[0] = stripe ? r : 240;
+            px[1] = stripe ? g : 240;
+            px[2] = stripe ? b : 240;
+            px[3] = 255;
+        }
+    }
+    return std::make_unique<style::Image>(id, std::move(image), 1.0f);
+}
+
+// The trails in every tile, and an area in the centre tile drawn with `pattern`.
+std::string patternLayers(const std::string& pattern) {
+    return R"({"id": "trail", "type": "line", "source": "overlay",
+      "filter": ["==", ["geometry-type"], "LineString"],
+      "paint": {"line-color": "#e02020", "line-width": 8}},
+    {"id": "area", "type": "fill", "source": "overlay", "filter": ["==", ["geometry-type"], "Polygon"],
+      "paint": {"fill-pattern": )" +
+           pattern + "}}";
+}
+
+void addImages(style::Style& style) {
+    style.addImage(stripedImage("stripe", 200, 40, 30));
+    style.addImage(stripedImage("dots", 30, 160, 40));
+    style.addImage(stripedImage("marker", 20, 20, 20));
+}
+
+struct PatternScene : Scene {
+    explicit PatternScene(const std::string& pattern)
+        : Scene(patternLayers(pattern), addImages) {}
+
+    // The drape targets the trails cover: every target in view.
+    int allTargets() {
+        const auto cost = frameAfter(
+            [&] { static_cast<style::LineLayer*>(map.getStyle().getLayer("trail"))->setLineColor(Color::green()); });
+        settle();
+        return cost.bakes;
+    }
+
+    // Updates `id` in place and returns what that frame baked.
+    int bakesForUpdateOf(const std::string& id, uint8_t shade) {
+        return frameAfter([&] { map.getStyle().addImage(stripedImage(id, shade, shade, 255 - shade)); }).bakes;
+    }
+};
+
+} // namespace
+
+// R1(c): an image no draped layer draws, updated on every frame, bakes nothing; an update of the
+// image a draped pattern draws bakes that layer's targets, once per update.
+TEST(TerrainImageUpdate, OnlyTheUpdatedPatternsTargetsBake) {
+    PatternScene scene(R"("stripe")");
+    const int all = scene.allTargets();
+    ASSERT_GT(all, 1);
+
+    int unusedBakes = 0;
+    for (int frame = 0; frame < restFrameCount; ++frame) {
+        unusedBakes += scene.bakesForUpdateOf("marker", static_cast<uint8_t>(10 * frame));
+    }
+    RecordProperty("unusedImageBakes", std::to_string(unusedBakes));
+    EXPECT_EQ(unusedBakes, 0) << "an image no layer draws, updated on each of " << restFrameCount
+                              << " frames, baked the drape";
+
+    std::vector<int> patternBakes;
+    for (int update = 0; update < 3; ++update) {
+        patternBakes.push_back(scene.bakesForUpdateOf("stripe", static_cast<uint8_t>(60 * update)));
+        EXPECT_EQ(scene.restCost(2).bakes, 0) << "the drape re-bakes at rest after a pattern update";
+    }
+    RecordProperty("patternImageBakes", std::to_string(patternBakes[0]));
+    RecordProperty("allTargets", std::to_string(all));
+    EXPECT_GE(patternBakes[0], 1) << "updating the pattern's image did not re-bake its drape";
+    // The area lies in the centre tile, under a quarter of the targets.
+    EXPECT_LE(patternBakes[0] * 4, all) << "updating the pattern's image re-baked targets the pattern does not cover";
+    EXPECT_EQ(patternBakes[1], patternBakes[0]);
+    EXPECT_EQ(patternBakes[2], patternBakes[0]);
+}
+
+// A data-driven pattern can draw only the images its expression names.
+TEST(TerrainImageUpdate, ADataDrivenPatternBakesOnlyForItsImages) {
+    PatternScene scene(R"(["match", ["get", "kind"], "a", "stripe", "dots"])");
+    EXPECT_EQ(scene.bakesForUpdateOf("marker", 10), 0);
+    EXPECT_GT(scene.bakesForUpdateOf("dots", 20), 0) << "an image the match can draw";
+    EXPECT_GT(scene.bakesForUpdateOf("stripe", 30), 0) << "the image the match draws";
+}
+
+// A zoom-dependent pattern can draw any of its stops' images (crossfaded across zooms).
+TEST(TerrainImageUpdate, AZoomDependentPatternBakesOnlyForItsImages) {
+    PatternScene scene(R"(["step", ["zoom"], ["image", "dots"], 10, ["image", "stripe"]])");
+    EXPECT_EQ(scene.bakesForUpdateOf("marker", 10), 0);
+    EXPECT_GT(scene.bakesForUpdateOf("stripe", 30), 0);
+}
+
+// A pattern read from the data may draw any image: every in-place update bakes it.
+TEST(TerrainImageUpdate, APatternFromTheDataBakesForAnyImage) {
+    PatternScene scene(R"(["get", "pattern"])");
+    EXPECT_GT(scene.bakesForUpdateOf("marker", 10), 0);
+    EXPECT_GT(scene.bakesForUpdateOf("stripe", 30), 0);
+}
+
+// The images each pattern value can draw.
+TEST(TerrainImageUpdate, PatternImagesOfAValue) {
+    using style::PropertyValue;
+    using style::expression::Image;
+    const auto parse = [](const std::string& json) {
+        style::conversion::Error error;
+        auto value = style::conversion::convertJSON<PropertyValue<Image>>(json, error, true, false);
+        EXPECT_TRUE(value) << json << ": " << error.message;
+        return RenderLayer::patternImagesOf(value ? *value : PropertyValue<Image>());
+    };
+    const auto ids = [](const RenderLayer::PatternImages& images) {
+        return std::set<std::string>(images.ids.begin(), images.ids.end());
+    };
+
+    EXPECT_TRUE(RenderLayer::patternImagesOf(PropertyValue<Image>()).ids.empty());
+    EXPECT_FALSE(RenderLayer::patternImagesOf(PropertyValue<Image>()).mayDraw("stripe"));
+
+    const auto constant = parse(R"("stripe")");
+    EXPECT_EQ(ids(constant), std::set<std::string>({"stripe"}));
+    EXPECT_FALSE(constant.anyImage);
+    EXPECT_TRUE(constant.mayDraw("stripe"));
+    EXPECT_FALSE(constant.mayDraw("marker"));
+
+    const auto step = parse(R"(["step", ["zoom"], "a", 10, "b", 14, ["image", "c"]])");
+    EXPECT_EQ(ids(step), std::set<std::string>({"a", "b", "c"}));
+    EXPECT_FALSE(step.anyImage);
+
+    const auto match = parse(R"(["match", ["get", "kind"], "x", "a", ["y", "z"], "b", "c"])");
+    EXPECT_EQ(ids(match), std::set<std::string>({"a", "b", "c"}));
+    EXPECT_FALSE(match.anyImage);
+
+    const auto cased = parse(R"(["case", ["boolean", ["feature-state", "selected"], false], "a", "b"])");
+    EXPECT_EQ(ids(cased), std::set<std::string>({"a", "b"}));
+    EXPECT_FALSE(cased.anyImage);
+
+    EXPECT_TRUE(parse(R"(["get", "pattern"])").anyImage);
+    EXPECT_TRUE(parse(R"(["get", "pattern"])").mayDraw("anything"));
+    EXPECT_TRUE(parse(R"(["concat", "trail-", ["get", "kind"]])").anyImage);
+    EXPECT_TRUE(parse(R"(["coalesce", ["get", "pattern"], "a"])").anyImage);
+    EXPECT_TRUE(parse(R"(["image", ["get", "pattern"]])").anyImage);
 }

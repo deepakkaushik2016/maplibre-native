@@ -19,7 +19,8 @@ public:
 
     bool operator==(const Expression& e) const noexcept override;
 
-    std::vector<std::optional<Value>> possibleOutputs() const override { return {std::nullopt}; }
+    /// The image ids it can name: those its id argument can evaluate to.
+    std::vector<std::optional<Value>> possibleOutputs() const override { return imageID->possibleOutputs(); }
 
     mln::Value serialize() const override;
     std::string getOperator() const override { return "image"; }

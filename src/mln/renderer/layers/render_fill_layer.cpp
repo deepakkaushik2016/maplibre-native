@@ -64,6 +64,7 @@ RenderFillLayer::~RenderFillLayer() = default;
 void RenderFillLayer::transition(const TransitionParameters& parameters) {
     unevaluated = impl_cast(baseImpl).paint.transitioned(parameters, std::move(unevaluated));
     styleDependencies = unevaluated.getDependencies();
+    patternImages = patternImagesOf(impl_cast(baseImpl).paint.template get<FillPattern>().value);
 }
 
 void RenderFillLayer::evaluate(const PropertyEvaluationParameters& parameters) {

@@ -33,6 +33,34 @@ void RenderLayer::transition(const TransitionParameters& parameters, Immutable<s
     transition(parameters);
 }
 
+bool RenderLayer::PatternImages::mayDraw(const std::string& id) const {
+    return anyImage || std::ranges::find(ids, id) != ids.end();
+}
+
+RenderLayer::PatternImages RenderLayer::patternImagesOf(const style::PropertyValue<style::expression::Image>& value) {
+    PatternImages images;
+    value.match([](const style::Undefined&) {},
+                [&](const style::expression::Image& image) { images.ids.push_back(image.id()); },
+                [&](const style::PropertyExpression<style::expression::Image>& expression) {
+                    // The outputs reachable from the root (branches of case, match, step and
+                    // coalesce, the coercion of a string to an image, the id of ["image", ...]),
+                    // with an unknown one (std::nullopt) for any output that is not a literal.
+                    for (const auto& output : expression.getExpression().possibleOutputs()) {
+                        if (!output) {
+                            images.anyImage = true;
+                        } else if (output->is<std::string>()) {
+                            images.ids.push_back(output->get<std::string>());
+                        } else if (output->is<style::expression::Image>()) {
+                            images.ids.push_back(output->get<style::expression::Image>().id());
+                        } else if (!output->is<NullValue>()) {
+                            // A number made a string by ["image", ...]: not worth resolving.
+                            images.anyImage = true;
+                        }
+                    }
+                });
+    return images;
+}
+
 bool RenderLayer::needsPlacement() const {
     return baseImpl->getTypeInfo()->crossTileIndex == style::LayerTypeInfo::CrossTileIndex::Required &&
            !placementData.empty();
