@@ -487,11 +487,6 @@ TEST(TerrainPaintDrape, RasterOpacityShowsOnTheNextFrame) {
 // An image source's raster is a plain layer group (not a tile group), drawn to the screen with
 // terrain on, not into the drape.
 TEST(TerrainPaintDrape, ImageRasterOpacityShowsOnTheNextFrame) {
-#if MLN_RENDER_BACKEND_OPENGL
-    // The OpenGL backend draws no image-source raster with terrain on, before or after a paint
-    // change (a fresh scene shows only the background): a separate defect, not a stale drape.
-    GTEST_SKIP() << "an image-source raster is not drawn with terrain on OpenGL";
-#endif
     const std::string faded = R"JSON({"id": "image", "type": "raster", "source": "image",
         "paint": {"raster-opacity": 0.3}})JSON";
     expectNextFrameShows(

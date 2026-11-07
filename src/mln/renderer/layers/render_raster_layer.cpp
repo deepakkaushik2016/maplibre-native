@@ -253,6 +253,13 @@ void RenderRasterLayer::update(gfx::ShaderRegistry& shaders,
             // Create a drawable for each transformation
             // TODO: Share textures
             builder = createBuilder();
+            if (paintParameters.terrain) {
+                // Not draped: drawn to the screen after the terrain surface, whose 3D depth range
+                // [0, depthRangeSize] lies in front of every 2D layer's, so a depth test would hide
+                // the whole image behind the terrain on every backend (#4868 gave Metal, Vulkan
+                // and WebGPU OpenGL's layer depth range).
+                builder->setEnableDepth(false);
+            }
             for (const auto& matrix_ : imageData->matrices) {
                 buildVertexData(builder, /*drawable=*/nullptr, bucket);
                 setTextures(builder, bucket);
