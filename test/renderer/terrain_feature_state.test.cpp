@@ -20,6 +20,7 @@
 #include <mln/style/conversion/geojson.hpp>
 #include <mln/style/conversion/json.hpp>
 #include <mln/style/conversion/property_value.hpp>
+#include <mln/style/expression/error.hpp>
 #include <mln/style/image.hpp>
 #include <mln/style/layer.hpp>
 #include <mln/style/layers/line_layer.hpp>
@@ -857,4 +858,10 @@ TEST(TerrainImageUpdate, PatternImagesOfAValue) {
     EXPECT_TRUE(parse(R"(["concat", "trail-", ["get", "kind"]])").anyImage);
     EXPECT_TRUE(parse(R"(["coalesce", ["get", "pattern"], "a"])").anyImage);
     EXPECT_TRUE(parse(R"(["image", ["get", "pattern"]])").anyImage);
+
+    // An expression with no possible outputs (an error) is unknown too.
+    const auto error = RenderLayer::patternImagesOf(
+        style::PropertyExpression<Image>(std::make_unique<style::expression::Error>("no outputs")));
+    EXPECT_TRUE(error.anyImage);
+    EXPECT_TRUE(error.mayDraw("anything"));
 }

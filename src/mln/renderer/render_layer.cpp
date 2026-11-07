@@ -44,8 +44,11 @@ RenderLayer::PatternImages RenderLayer::patternImagesOf(const style::PropertyVal
                 [&](const style::PropertyExpression<style::expression::Image>& expression) {
                     // The outputs reachable from the root (branches of case, match, step and
                     // coalesce, the coercion of a string to an image, the id of ["image", ...]),
-                    // with an unknown one (std::nullopt) for any output that is not a literal.
-                    for (const auto& output : expression.getExpression().possibleOutputs()) {
+                    // with an unknown one (std::nullopt) for any output that is not a literal. No
+                    // outputs at all (an error expression) is unknown too.
+                    const auto outputs = expression.getExpression().possibleOutputs();
+                    images.anyImage = outputs.empty();
+                    for (const auto& output : outputs) {
                         if (!output) {
                             images.anyImage = true;
                         } else if (output->is<std::string>()) {
