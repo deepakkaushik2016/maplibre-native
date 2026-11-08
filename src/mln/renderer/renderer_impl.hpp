@@ -107,8 +107,9 @@ private:
     // cover cannot spin forever.
     int terrainCoverRetryFrames = 4;
     /// Last terrain height reported under the map centre, so an unchanged surface does not
-    /// post an observer message every frame.
-    double lastReportedCenterElevation = 0.0;
+    /// post an observer message every frame. NaN until the first report, so ground at exactly
+    /// 0 m is reported too.
+    double lastReportedCenterElevation = std::numeric_limits<double>::quiet_NaN();
     /// The centre whose ground was last reported (UpdateParameters::reportCenterElevationOnMove).
     std::optional<LatLng> lastReportedCenter;
     double lastReportedEyeElevation = std::numeric_limits<double>::quiet_NaN();

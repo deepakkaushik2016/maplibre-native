@@ -727,6 +727,73 @@ TEST(TerrainCamera, ClampDoesNotApplyAfterTerrainRemoval) {
     FAIL() << "no frame landed over the plateau mid-transition, even in a 24 s transition";
 }
 
+// Ground at sea level is ground too: a clamped centre held above it comes down onto it. The
+// renderer started from a reported height of 0 m, so it never reported ground at exactly 0 m,
+// and the clamp never learned of it.
+TEST(TerrainCamera, ClampFindsGroundAtSeaLevel) {
+    TerrainCameraTest test;
+    test.tile = makeDEMTile(0.0);
+    test.map.jumpTo(CameraOptions().withCenterAltitude(500.0));
+    test.map.setCenterClampedToGround(true);
+
+    EXPECT_NEAR(test.renderAndGetAltitude(8), 0.0, 0.5);
+}
+
+// Until a DEM tile covers the centre, its ground is unknown rather than at sea level: a clamped
+// centre the app put at a height keeps it while the DEM is missing.
+TEST(TerrainCamera, ClampKeepsTheCentreWhileItsGroundIsUnknown) {
+    TerrainCameraTest test;
+    test.fileSource->tileResponse = [](const Resource&) {
+        Response res;
+        res.noContent = true;
+        return res;
+    };
+    test.map.jumpTo(CameraOptions().withCenterAltitude(500.0));
+    test.map.setCenterClampedToGround(true);
+
+    EXPECT_NEAR(test.renderAndGetAltitude(8), 500.0, 0.001);
+}
+
+// The same holds after the first report: a clamped centre moved onto ground whose DEM tile has
+// not arrived keeps its height until the tile does, rather than dropping toward sea level, and
+// then settles on the ground there.
+TEST(TerrainCamera, ClampKeepsTheCentreWhileTheGroundItMovedOntoLoads) {
+    TerrainTransitionTest test;
+    // Every DEM tile that covers the target, its ancestors included, as a coarser one would
+    // answer for it.
+    bool holdWest = true;
+    const auto coversWest = [&](const Resource::TileData& tile) {
+        const auto point = Projection::project(test.westTarget, static_cast<int32_t>(tile.z));
+        return tile.x == static_cast<int32_t>(std::floor(point.x)) &&
+               tile.y == static_cast<int32_t>(std::floor(point.y));
+    };
+    test.fileSource->tileResponse = [&](const Resource& resource) -> std::optional<Response> {
+        if (holdWest && resource.tileData && coversWest(*resource.tileData)) {
+            return std::nullopt;
+        }
+        const bool west = resource.tileData && resource.tileData->z == 2 && resource.tileData->x == 1;
+        Response res;
+        res.data = std::make_shared<std::string>(west ? test.highTile : test.lowTile);
+        return res;
+    };
+    ASSERT_TRUE(test.settleOnPlateau());
+
+    test.map.jumpTo(CameraOptions().withCenter(test.westTarget));
+    double lowest = test.altitude();
+    for (int i = 0; i < 30; ++i) {
+        test.renderFrame();
+        lowest = std::min(lowest, test.altitude());
+    }
+    EXPECT_NEAR(lowest, plateauMeters, 5.0) << "the centre dropped while its ground loaded";
+
+    holdWest = false;
+    const auto deadline = Clock::now() + Seconds(10);
+    while (Clock::now() < deadline && std::abs(test.altitude() - westPlateauMeters) >= 5.0) {
+        test.renderFrame();
+    }
+    EXPECT_NEAR(test.altitude(), westPlateauMeters, 5.0);
+}
+
 // A drape target is drawn into only by the source tiles that overlap its own tile, so the
 // masks it draws follow those tiles and not every tile the source covers.
 TEST(TerrainDrape, MasksAreDrawnOnlyForTilesOverlappingTheTarget) {

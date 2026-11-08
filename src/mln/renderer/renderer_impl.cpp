@@ -775,13 +775,17 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     // a report when the height changes, and while the map slides its centre onto the ground,
     // one each time the centre moves.
     if (auto* terrain = orchestrator.getRenderTerrain()) {
+        // Only once a DEM tile covers the centre: getElevationForLatLng answers 0 m where none
+        // does, which is not sea level, and a clamped centre would drop toward it.
         const LatLng center = updateParameters->transformState.getLatLng();
-        const double centerElevation = terrain->getElevationForLatLng(center);
-        if (std::abs(centerElevation - lastReportedCenterElevation) > 0.25 ||
-            (updateParameters->reportCenterElevationOnMove && lastReportedCenter != center)) {
-            lastReportedCenterElevation = centerElevation;
-            lastReportedCenter = center;
-            observer->onTerrainCenterElevationChanged(centerElevation, center);
+        if (const auto centerElevation = terrain->findElevationForLatLng(center)) {
+            if (std::isnan(lastReportedCenterElevation) ||
+                std::abs(*centerElevation - lastReportedCenterElevation) > 0.25 ||
+                (updateParameters->reportCenterElevationOnMove && lastReportedCenter != center)) {
+                lastReportedCenterElevation = *centerElevation;
+                lastReportedCenter = center;
+                observer->onTerrainCenterElevationChanged(*centerElevation, center);
+            }
         }
         // And under the eye: a camera dragged towards a slope rising in front of it ends up under
         // the ground (the steeper the pitch, the less it sits above the center), and the map
