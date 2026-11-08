@@ -315,6 +315,18 @@ TEST(TerrainCamera, CentreElevationSettlesWithoutDrift) {
     EXPECT_NEAR(*atEnd.zoom, *afterSettling.zoom, 1e-6);
 }
 
+// The renderer reports the ground's height only when it changes. A clamp turned on once the map
+// has rendered over the ground lifts the centre onto it straight away, rather than when the camera
+// next moves.
+TEST(TerrainCamera, ClampTurnedOnOverReportedGroundLiftsTheCentre) {
+    TerrainCameraTest test;
+    ASSERT_NEAR(test.renderAndGetAltitude(8), 0.0, 0.001);
+
+    test.map.setCenterClampedToGround(true);
+    EXPECT_NEAR(*test.map.getCameraOptions({}).centerAltitude, plateauMeters, 5.0);
+    EXPECT_NEAR(test.renderAndGetAltitude(4), plateauMeters, 5.0);
+}
+
 // Turning it off leaves the camera where the caller put it.
 TEST(TerrainCamera, ClampingCanBeTurnedOff) {
     TerrainCameraTest test;

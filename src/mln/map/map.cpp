@@ -666,7 +666,13 @@ bool Map::setCenterAltitudeKeepingView(double altitudeMeters) {
 }
 
 void Map::setCenterClampedToGround(bool clamped) {
+    if (impl->centerClampedToGround == clamped) return;
     impl->centerClampedToGround = clamped;
+    // The renderer reports the ground's height only when it changes, so a clamp turned on over
+    // ground it has already reported would wait for the camera to move. Apply that height now.
+    if (clamped && impl->style->impl->getTerrain()) {
+        impl->applyCenterClamp();
+    }
 }
 
 bool Map::getCenterClampedToGround() const {
