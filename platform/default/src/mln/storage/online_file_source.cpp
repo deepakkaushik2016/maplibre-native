@@ -61,6 +61,12 @@ struct OnlineFileRequest {
     std::function<void()> cancelCallback = nullptr;
     std::shared_ptr<Mailbox> mailbox;
 
+    // While activate() schedules the first request of a Resource::reportOffline resource:
+    // schedule() then records whether it held the request for the offline network, from the
+    // same read of the network status that decided to hold it.
+    bool reportOffline = false;
+    bool heldOffline = false;
+
     // Counts the number of times a response was already expired when received.
     // We're using this to add a delay when making a new request so we don't
     // keep retrying immediately in case of a server serving expired tiles.
@@ -481,15 +487,23 @@ void OnlineFileRequest::activate() {
     if (resource.priorExpires) {
         timeout = getUpdateInterval(resource.priorExpires);
     }
-    if (resource.reportOffline && NetworkStatus::Get() == NetworkStatus::Status::Offline) {
-        // schedule() holds the request until the network is back. Tell a requester that can't wait
-        // for that now; the request is still made then.
-        Response response;
-        response.error = std::make_unique<Response::Error>(Response::Error::Reason::Connection,
-                                                           "Online connectivity is disabled.");
-        callback(response);
-    }
+    reportOffline = resource.reportOffline;
     schedule(timeout);
+    reportOffline = false;
+    if (heldOffline) {
+        // schedule() held the request until the network is back. Tell a requester that can't wait
+        // for that now; the request is still made then. The answer says so, so a requester that
+        // keeps the request can tell it from a Connection error the network gave.
+        heldOffline = false;
+        auto error = std::make_unique<Response::Error>(Response::Error::Reason::Connection,
+                                                       "Online connectivity is disabled.");
+        error->offline = true;
+        Response response;
+        response.error = std::move(error);
+        // As in completed(): calling the callback may delete `this`.
+        auto callback_ = callback;
+        callback_(response);
+    }
 }
 
 void OnlineFileRequest::schedule(Duration timeout) {
@@ -506,6 +520,7 @@ void OnlineFileRequest::schedule(Duration timeout) {
     // a really long timeout. The request will get re-triggered when
     // the NetworkStatus is set back to Online.
     if (NetworkStatus::Get() == NetworkStatus::Status::Offline) {
+        heldOffline = reportOffline;
         failedRequestReason = Response::Error::Reason::Connection;
         failedRequests = 1;
         timeout = Duration::max();

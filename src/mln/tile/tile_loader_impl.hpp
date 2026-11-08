@@ -218,11 +218,13 @@ void TileLoader<T>::loadFromNetwork() {
                 if (shared_->aborted) return;
 
                 if (stillImage && res.error && res.error->reason == Response::Error::Reason::Connection &&
-                    NetworkStatus::Get() == NetworkStatus::Status::Offline) {
+                    (res.error->offline || NetworkStatus::Get() == NetworkStatus::Status::Offline)) {
                     // The network is offline, and the online file source holds this request until
                     // it is back, when it makes it again: keep it. A still image doesn't wait for
                     // it: a tile with no answer yet counts as loaded with nothing to draw while the
                     // network stays offline, and its ancestor is drawn. A tile with data keeps it.
+                    // The online file source's offline answer is taken so even if the network is
+                    // back by now: the request it held is being made, and the tile waits for it.
                     if (!answered) {
                         tile.setAwaitingNetwork(true);
                     }

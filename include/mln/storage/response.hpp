@@ -61,6 +61,12 @@ public:
 
     std::optional<Timestamp> retryAfter;
 
+    // Set on the Connection error that answers a Resource::reportOffline request while the
+    // network is offline: the request is held, and made again when the network is back. A
+    // requester that keeps the request can wait for that answer, even if the network is back by
+    // the time this one arrives.
+    bool offline = false;
+
 public:
     Error(Reason, std::string = "", std::optional<Timestamp> = std::nullopt);
 };

@@ -106,8 +106,9 @@ public:
 
     // While NetworkStatus is Offline, the online file source holds a network request until the
     // network is back, without an answer. Set, it first answers such a request with a Connection
-    // error, and then holds it as before, so the request is made again when the network is back.
-    // A still image render asks for this: it waits for every resource it asks for.
+    // error marked Response::Error::offline, and then holds it as before: a requester that keeps
+    // the request gets the network's answer when the network is back. A still image render asks
+    // for this: it waits for every resource it asks for.
     bool reportOffline = false;
 };
 

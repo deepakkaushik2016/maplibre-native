@@ -9,6 +9,14 @@
 #include <mln/util/string.hpp>
 #include <mln/util/timer.hpp>
 
+#include <chrono>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 using namespace mln;
@@ -420,6 +428,7 @@ TEST(OnlineFileSource, OfflineAnswersARequestThatAsksToHearIt) {
         ASSERT_TRUE(res.error);
         EXPECT_EQ(Response::Error::Reason::Connection, res.error->reason);
         EXPECT_EQ("Online connectivity is disabled.", res.error->message);
+        EXPECT_TRUE(res.error->offline);
         EXPECT_FALSE(res.data);
         loop.stop();
     });
@@ -466,6 +475,7 @@ TEST(OnlineFileSource, OfflineAnsweredRequestIsMadeWhenTheNetworkIsBack) {
             EXPECT_EQ(NetworkStatus::Status::Online, NetworkStatus::Get());
             if (res.error) {
                 EXPECT_NE("Online connectivity is disabled.", res.error->message);
+                EXPECT_FALSE(res.error->offline) << "a Connection error the network gave is marked offline";
             }
             loop.stop();
         }
@@ -473,6 +483,89 @@ TEST(OnlineFileSource, OfflineAnsweredRequestIsMadeWhenTheNetworkIsBack) {
     loop.run();
     NetworkStatus::Set(NetworkStatus::Status::Online);
     EXPECT_EQ(2, answers);
+}
+
+namespace {
+
+// A resource transform that holds each URL until the test lets it through, so the network status can
+// change between a request and the moment the online file source decides whether to hold it.
+class HeldTransform {
+public:
+    ResourceTransform transform() {
+        return ResourceTransform{
+            [this](Resource::Kind, const std::string& url, ResourceTransform::FinishedCallback cb) {
+                std::scoped_lock lock(mutex);
+                held.emplace_back(url, std::move(cb));
+            }};
+    }
+    bool holding() {
+        std::scoped_lock lock(mutex);
+        return !held.empty();
+    }
+    void release() {
+        std::scoped_lock lock(mutex);
+        for (auto& [url, cb] : held) cb(url);
+        held.clear();
+    }
+
+private:
+    std::mutex mutex;
+    std::vector<std::pair<std::string, ResourceTransform::FinishedCallback>> held;
+};
+
+// Runs `loop` until `done`, for at most 10 s.
+bool runUntil(util::RunLoop& loop, const std::function<bool()>& done) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!done() && std::chrono::steady_clock::now() < deadline) {
+        loop.runOnce();
+    }
+    return done();
+}
+
+} // namespace
+
+// Online when asked for, offline when the online file source decides whether to hold it: the request
+// is held, and the offline answer comes, decided from the same reading of the status.
+TEST(OnlineFileSource, OfflineAnswerFollowsTheStatusWhenTheRequestIsHeld) {
+    util::RunLoop loop;
+    HeldTransform transform;
+    std::unique_ptr<FileSource> fs = std::make_unique<OnlineFileSource>(ResourceOptions::Default(), ClientOptions());
+    fs->setResourceTransform(transform.transform());
+    Resource resource{Resource::Unknown, "http://127.0.0.1:1/online-then-offline"};
+    resource.reportOffline = true;
+
+    std::optional<Response> answer;
+    std::unique_ptr<AsyncRequest> req = fs->request(resource, [&](Response res) { answer = std::move(res); });
+    ASSERT_TRUE(runUntil(loop, [&] { return transform.holding(); }));
+    OfflineNetwork offline;
+    transform.release();
+    ASSERT_TRUE(runUntil(loop, [&] { return answer.has_value(); })) << "a request held offline was not answered";
+    ASSERT_TRUE(answer->error);
+    EXPECT_TRUE(answer->error->offline);
+}
+
+// Offline when asked for, online when the online file source decides: the request goes to the
+// network, and the answer is the network's, not the offline answer.
+TEST(OnlineFileSource, OfflineAnswerIsNotGivenOnceTheNetworkIsBackBeforeTheRequestIsHeld) {
+    util::RunLoop loop;
+    HeldTransform transform;
+    auto offline = std::make_unique<OfflineNetwork>();
+    std::unique_ptr<FileSource> fs = std::make_unique<OnlineFileSource>(ResourceOptions::Default(), ClientOptions());
+    fs->setResourceTransform(transform.transform());
+    Resource resource{Resource::Unknown, "http://127.0.0.1:1/offline-then-online"};
+    resource.reportOffline = true;
+
+    std::optional<Response> answer;
+    std::unique_ptr<AsyncRequest> req = fs->request(resource, [&](Response res) { answer = std::move(res); });
+    const bool held = runUntil(loop, [&] { return transform.holding(); });
+    offline.reset();
+    ASSERT_TRUE(held);
+    transform.release();
+    ASSERT_TRUE(runUntil(loop, [&] { return answer.has_value(); })) << "the network did not answer";
+    // Port 1 refuses the connection: a Connection error, from the network.
+    if (answer->error) {
+        EXPECT_FALSE(answer->error->offline) << "answered offline while the network was online";
+    }
 }
 
 TEST(OnlineFileSource, TEST_REQUIRES_SERVER(RateLimitStandard)) {

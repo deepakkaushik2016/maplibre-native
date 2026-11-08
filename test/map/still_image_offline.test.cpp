@@ -203,20 +203,26 @@ struct OfflineNetwork {
     OfflineNetwork& operator=(const OfflineNetwork&) = delete;
 };
 
-// A static map over the engine's own loader on `database`, with the network offline.
+// Counts the map's load failures (the style, a source, the sprite).
+class LoadFailures final : public MapObserver {
+public:
+    void onDidFailLoadingMap(MapLoadError, const std::string&) override { ++count; }
+    int count = 0;
+};
+
+// A static or tile map over the engine's own loader on `database`, with the network offline.
 struct OfflineStill {
     OfflineNetwork offline;
     std::shared_ptr<FileSource> fileSource;
-    HeadlessFrontend frontend{{viewSize, viewSize}, 1};
+    LoadFailures failures;
+    HeadlessFrontend frontend;
     MapAdapter map;
 
-    explicit OfflineStill(const OfflineFile& database)
+    explicit OfflineStill(const OfflineFile& database, MapMode mode = MapMode::Static, uint32_t size = viewSize)
         : fileSource(
               std::make_shared<MainResourceLoader>(ResourceOptions().withCachePath(database.path), ClientOptions())),
-          map(frontend,
-              MapObserver::nullObserver(),
-              fileSource,
-              MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize())) {}
+          frontend({size, size}, 1),
+          map(frontend, failures, fileSource, MapOptions().withMapMode(mode).withSize(frontend.getSize())) {}
 
     Still render() { return renderStillWithin(frontend, map, stillLimit); }
 };
@@ -348,6 +354,45 @@ TEST(StillImageOffline, AMissingGeoJSONFailsTheStill) {
     expectTheStillFails(scene);
 }
 
+// The style's load error has settled before any still is asked for: the still fails at once,
+// as does a retry of it, instead of waiting for a style the offline network will not bring.
+TEST(StillImageOffline, AMissingStyleFailsAStillAskedForAfterItsErrorAndARetry) {
+    util::RunLoop loop;
+    OfflineFile database("test/fixtures/offline_database/still_image_offline_style_settled.db");
+    OfflineStill scene(database);
+    scene.map.getStyle().loadURL(styleURL);
+    const auto deadline = std::chrono::steady_clock::now() + stillLimit;
+    while (scene.failures.count == 0 && std::chrono::steady_clock::now() < deadline) {
+        util::RunLoop::Get()->runOnce();
+    }
+    ASSERT_GT(scene.failures.count, 0) << "the style's load error never arrived";
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        SCOPED_TRACE("still " + std::to_string(attempt + 1));
+        expectTheStillFails(scene);
+    }
+}
+
+// A tile-mode map's one tile is missing, and its z13 parent is in the database.
+TEST(StillImageOffline, ATileModeStillDrawsTheAncestorOfAMissingTile) {
+    util::RunLoop loop;
+    OfflineFile database("test/fixtures/offline_database/still_image_offline_tile_mode.db");
+    database.put(Resource::style(styleURL), dataResponse(vectorStyle));
+    database.put(Resource::tile(vectorURL, 1, parentTile.x, parentTile.y, parentTile.z, Tileset::Scheme::XYZ),
+                 dataResponse(areaTile()));
+
+    constexpr uint32_t tileSize = 512;
+    OfflineStill scene(database, MapMode::Tile, tileSize);
+    scene.map.getStyle().loadURL(styleURL);
+    const CanonicalTileID child{14, parentTile.x * 2, parentTile.y * 2};
+    scene.map.jumpTo(CameraOptions().withCenter(LatLngBounds(child).center()).withZoom(14));
+    const Still still = scene.render();
+    ASSERT_TRUE(still.finished) << "the tile-mode still waited for more than " << stillLimit.count()
+                                << " s on a tile the network can't load offline";
+    ASSERT_FALSE(still.error) << message(still.error);
+    EXPECT_EQ(countColour(still.image, 0x2a, 0x7a, 0xb0), static_cast<int>(tileSize * tileSize))
+        << "the z13 parent is not drawn in place of the missing tile";
+}
+
 // --- What the fix must not change, against a cache and a network that follow the online file
 // source's offline contract (OnlineFileSource.Offline* tests that contract itself). ---
 
@@ -372,12 +417,19 @@ public:
     Answer cache;
     Answer server;
     Duration latency = Duration::zero();
+    // How long the answer that the network is offline takes.
+    Duration offlineAnswerLatency = Duration::zero();
     bool failHeldRequests = false;
 
     // Every network request, in order.
     std::vector<Resource> networkRequests;
     int offlineAnswers = 0;
     size_t heldRequests() const { return held.size(); }
+    size_t heldRequests(const std::string& urlTemplate) const {
+        return std::ranges::count_if(held, [&](const Request* r) {
+            return r->resource.tileData && r->resource.tileData->urlTemplate == urlTemplate;
+        });
+    }
 
     std::unique_ptr<AsyncRequest> request(const Resource& resource, Callback callback) override {
         auto req = std::make_unique<Request>(*this, resource, std::move(callback));
@@ -391,10 +443,13 @@ public:
             held.push_back(req.get());
             if (resource.reportOffline || failHeldRequests) {
                 ++offlineAnswers;
+                auto error = std::make_unique<Response::Error>(Response::Error::Reason::Connection,
+                                                               "Online connectivity is disabled.");
+                // OnlineFileSource marks its own offline answer; a request that fails in flight isn't.
+                error->offline = resource.reportOffline;
                 Response offline;
-                offline.error = std::make_unique<Response::Error>(Response::Error::Reason::Connection,
-                                                                  "Online connectivity is disabled.");
-                answer(*req, offline, Duration::zero());
+                offline.error = std::move(error);
+                answer(*req, offline, offlineAnswerLatency);
             }
         } else {
             answer(*req, fromServer(resource), latency);
@@ -490,6 +545,8 @@ private:
 // Terrain over a DEM that the cache has to z12 (300 m) and the network at z13 (600 m), so the
 // height under the centre says which one is drawn.
 const std::string demURL = "http://tiles.invalid/dem/{z}/{x}/{y}.png";
+// The same DEM under another URL, for a second map on the same file source.
+const std::string otherDEMURL = "http://tiles.invalid/other-dem/{z}/{x}/{y}.png";
 constexpr double ancestorMeters = 300.0;
 constexpr double tileMeters = 600.0;
 const LatLng demCentre = LatLngBounds(CanonicalTileID(13, 4340, 2915)).center();
@@ -508,18 +565,24 @@ std::string demTile(double meters) {
     return encodePNG(image);
 }
 
-const std::string demStyle = R"STYLE({
+std::string demStyleFor(const std::string& url) {
+    return R"STYLE({
   "version": 8,
   "sources": {
     "dem": {"type": "raster-dem", "tiles": [")STYLE" +
-                             demURL + R"STYLE("], "maxzoom": 13, "tileSize": 256}
+           url + R"STYLE("], "maxzoom": 13, "tileSize": 256}
   },
   "terrain": {"source": "dem", "exaggeration": 1},
   "layers": [{"id": "background", "type": "background", "paint": {"background-color": "#f4f1ea"}}]
 })STYLE";
+}
+
+const std::string demStyle = demStyleFor(demURL);
 
 bool isDEMTile(const Resource& resource, int z) {
-    return resource.tileData && resource.tileData->urlTemplate == demURL && resource.tileData->z == z;
+    return resource.tileData &&
+           (resource.tileData->urlTemplate == demURL || resource.tileData->urlTemplate == otherDEMURL) &&
+           resource.tileData->z == z;
 }
 
 std::shared_ptr<CacheAndNetwork> demCacheAndNetwork() {
@@ -540,13 +603,13 @@ struct DEMScene {
     HeadlessFrontend frontend{{viewSize, viewSize}, 1};
     MapAdapter map;
 
-    DEMScene(std::shared_ptr<CacheAndNetwork> network_, MapMode mode)
+    DEMScene(std::shared_ptr<CacheAndNetwork> network_, MapMode mode, const std::string& style = demStyle)
         : network(std::move(network_)),
           map(frontend,
               MapObserver::nullObserver(),
               network,
               MapOptions().withMapMode(mode).withSize(frontend.getSize())) {
-        map.getStyle().loadJSON(demStyle);
+        map.getStyle().loadJSON(style);
         at(13);
     }
 
@@ -718,4 +781,108 @@ TEST(StillImageOffline, AContinuousMapStillReportsAConnectionErrorOffline) {
         },
         std::chrono::seconds(10)))
         << "a continuous map took a Connection error offline for a tile with no data";
+}
+
+// The network is back before the online file source's offline answer arrives. The tile takes it as
+// that answer, not as a Connection error the network gave: it keeps the request, which the network
+// now answers, and the still waits for that and draws the tile.
+TEST(StillImageOffline, AnOfflineAnswerArrivingOnceTheNetworkIsBackKeepsTheRequest) {
+    util::RunLoop loop;
+    auto network = demCacheAndNetwork();
+    network->offlineAnswerLatency = Milliseconds(100);
+    network->latency = Milliseconds(300);
+    DEMScene scene(network, MapMode::Static);
+
+    NetworkStatus::Set(NetworkStatus::Status::Offline);
+    bool done = false;
+    std::exception_ptr error;
+    {
+        gfx::BackendScope guard{*scene.frontend.getBackend()};
+        scene.map.renderStill([&](const std::exception_ptr& e) {
+            error = e;
+            done = true;
+        });
+        // Back online once a z13 request is held, before its offline answer (100 ms) arrives.
+        const bool held = scene.runUntil([&] { return network->heldRequests() > 0; }, std::chrono::seconds(10));
+        NetworkStatus::Set(NetworkStatus::Status::Online);
+        ASSERT_TRUE(held) << "no request was held offline";
+        ASSERT_TRUE(scene.runUntil([&] { return done; }, stillLimit)) << "the still did not finish";
+    }
+    ASSERT_FALSE(error) << "the offline answer was taken for a Connection error online: " << message(error);
+    ASSERT_GT(network->offlineAnswers, 0);
+    ASSERT_TRUE(scene.elevation());
+    EXPECT_NEAR(*scene.elevation(), tileMeters, 1.0) << "the still did not wait for the tile";
+}
+
+// A continuous map and a static map share one file source (a snapshot over a live map). Offline,
+// only the static map's requests ask to hear so: the continuous map's are held unanswered, as
+// before, and the static map's still finishes over the ancestor.
+TEST(StillImageOffline, AContinuousAndAStaticMapOnOneFileSourceKeepTheirOwnBehaviour) {
+    util::RunLoop loop;
+    FixtureLog log;
+    auto network = demCacheAndNetwork();
+    DEMScene live(network, MapMode::Continuous, demStyleFor(otherDEMURL));
+    DEMScene still(network, MapMode::Static);
+    OfflineNetwork offline;
+    ASSERT_TRUE(live.runUntil([&] { return network->heldRequests(otherDEMURL) > 0; }, std::chrono::seconds(10)))
+        << "the continuous map's request was not held";
+
+    const Still image = still.render();
+    ASSERT_TRUE(image.finished);
+    ASSERT_FALSE(image.error) << message(image.error);
+    ASSERT_TRUE(still.elevation());
+    EXPECT_NEAR(*still.elevation(), ancestorMeters, 1.0);
+
+    int liveRequests = 0;
+    int stillRequests = 0;
+    for (const auto& r : network->networkRequests) {
+        if (!r.tileData) continue;
+        if (r.tileData->urlTemplate == otherDEMURL) {
+            ++liveRequests;
+            EXPECT_FALSE(r.reportOffline) << "a continuous map's request asked to hear that the network is offline";
+        } else {
+            ++stillRequests;
+            EXPECT_TRUE(r.reportOffline) << "a static map's request did not ask to hear that the network is offline";
+        }
+    }
+    EXPECT_GT(liveRequests, 0);
+    EXPECT_GT(stillRequests, 0);
+    EXPECT_GT(network->heldRequests(otherDEMURL), 0u) << "the continuous map's request was answered";
+    EXPECT_EQ(offlineTileErrors(log), "");
+}
+
+// The style is missing offline, so a still fails. The style keeps its request, which the network
+// answers once it is back: the style loads, and the next still no longer fails on the old error.
+TEST(StillImageOffline, AStyleThatArrivesWhenTheNetworkIsBackClearsItsError) {
+    util::RunLoop loop;
+    auto network = std::make_shared<CacheAndNetwork>();
+    network->server = [](const Resource& resource) -> std::optional<Response> {
+        if (resource.kind == Resource::Kind::Style) {
+            return dataResponse(
+                R"({"version": 8, "sources": {}, "layers": [{"id": "background", "type": "background",
+                    "paint": {"background-color": "#f4f1ea"}}]})");
+        }
+        return std::nullopt;
+    };
+    HeadlessFrontend frontend{{viewSize, viewSize}, 1};
+    MapAdapter map(frontend,
+                   MapObserver::nullObserver(),
+                   network,
+                   MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize()));
+    {
+        OfflineNetwork offline;
+        map.getStyle().loadURL(styleURL);
+        const Still still = renderStillWithin(frontend, map, stillLimit);
+        ASSERT_TRUE(still.finished);
+        ASSERT_TRUE(still.error) << "the still finished without its style";
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (map.getStyle().getJSON().empty() && std::chrono::steady_clock::now() < deadline) {
+        util::RunLoop::Get()->runOnce();
+    }
+    ASSERT_FALSE(map.getStyle().getJSON().empty()) << "the style did not arrive when the network was back";
+    const Still still = renderStillWithin(frontend, map, stillLimit);
+    ASSERT_TRUE(still.finished);
+    EXPECT_FALSE(still.error) << "the style's offline error outlived the style: " << message(still.error);
+    EXPECT_EQ(countColour(still.image, 0xf4, 0xf1, 0xea), static_cast<int>(viewSize * viewSize));
 }
