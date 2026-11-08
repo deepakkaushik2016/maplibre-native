@@ -7,6 +7,7 @@
 #include <mln/tile/tile_id.hpp>
 #include <mln/tile/tile_operation.hpp>
 #include <mln/util/font_stack.hpp>
+#include <mln/util/geo.hpp>
 #include <mln/util/symbol_error_observer.hpp>
 
 #include <cstdint>
@@ -72,8 +73,9 @@ public:
 
     /// The rendered terrain height under the map centre changed. Only the render side knows
     /// it - the DEM lives there - so a map that wants its centre to ride the terrain
-    /// (Map::setCenterClampedToGround) learns of it here, one frame behind.
-    virtual void onTerrainCenterElevationChanged(double /*elevationMeters*/) {}
+    /// (Map::setCenterClampedToGround) learns of it here, one frame behind. `center` is the
+    /// centre the frame drew, whose ground this is: the camera may have moved on since.
+    virtual void onTerrainCenterElevationChanged(double /*elevationMeters*/, const LatLng& /*center*/) {}
 
     /// The rendered terrain height under the camera's eye changed (one frame behind, like the
     /// center's). A map that keeps its eye above the ground (Map::setCenterClampedToGround)

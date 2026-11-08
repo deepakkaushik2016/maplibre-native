@@ -65,7 +65,7 @@ public:
     void onDidFinishRenderingFrame(RenderMode, bool, bool, std::shared_ptr<gfx::RenderingStats>) final;
     void onWillStartRenderingMap() final;
     void onDidFinishRenderingMap() final;
-    void onTerrainCenterElevationChanged(double elevationMeters) final;
+    void onTerrainCenterElevationChanged(double elevationMeters, const LatLng& center) final;
     void onTerrainEyeElevationChanged(double elevationMeters) final;
     void onTerrainTransitionTargetElevationChanged(double elevationMeters) final;
     void onTerrainGrabbedGroundElevation(uint64_t grabId, double elevationMeters) final;
@@ -131,6 +131,11 @@ public:
     bool centerClampedToGround = false;
     /// Terrain height under the centre, as the renderer last reported it (NaN until then).
     double terrainCenterElevation = std::numeric_limits<double>::quiet_NaN();
+    /// The centre whose ground terrainCenterElevation is: the frame that measured it may have
+    /// drawn a camera that has moved since (a wheel notch, a pass of the anchor).
+    std::optional<LatLng> terrainCenterElevationAt;
+    /// Whether terrainCenterElevation is the ground under the centre as it is now.
+    bool terrainCenterElevationIsCurrent() const;
     /// Terrain height under the camera's eye, as the renderer last reported it (NaN until then).
     double terrainEyeElevation = std::numeric_limits<double>::quiet_NaN();
     /// How far above the ground under it the eye is kept, in meters.

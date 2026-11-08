@@ -771,12 +771,17 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
 
     // Report the rendered terrain height under the map centre. Only the render side has the
     // DEM, so this is the channel; whether the camera acts on it is the map's call
-    // (Map::setCenterClampedToGround). Gated so a still map does not post a message a frame.
+    // (Map::setCenterClampedToGround). Gated so a still map does not post a message a frame:
+    // a report when the height changes, and while the map slides its centre onto the ground,
+    // one each time the centre moves.
     if (auto* terrain = orchestrator.getRenderTerrain()) {
-        const double centerElevation = terrain->getElevationForLatLng(updateParameters->transformState.getLatLng());
-        if (std::abs(centerElevation - lastReportedCenterElevation) > 0.25) {
+        const LatLng center = updateParameters->transformState.getLatLng();
+        const double centerElevation = terrain->getElevationForLatLng(center);
+        if (std::abs(centerElevation - lastReportedCenterElevation) > 0.25 ||
+            (updateParameters->reportCenterElevationOnMove && lastReportedCenter != center)) {
             lastReportedCenterElevation = centerElevation;
-            observer->onTerrainCenterElevationChanged(centerElevation);
+            lastReportedCenter = center;
+            observer->onTerrainCenterElevationChanged(centerElevation, center);
         }
         // And under the eye: a camera dragged towards a slope rising in front of it ends up under
         // the ground (the steeper the pitch, the less it sits above the center), and the map

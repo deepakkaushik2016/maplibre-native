@@ -204,6 +204,7 @@ void Map::Impl::onUpdate() {
                                .transitionTargetCenter = centerClampedToGround && !transitionKeepsView
                                                              ? transform.getTransitionTargetCenter()
                                                              : std::nullopt,
+                               .reportCenterElevationOnMove = centerClampedToGround && anchorPassesLeft > 0,
                                .terrainGrab = terrainGrab};
 
     rendererFrontend.update(std::make_shared<UpdateParameters>(std::move(params)));
@@ -383,13 +384,15 @@ void Map::Impl::onDidFinishRenderingMap() {
 void Map::Impl::anchorAfterHold() {
     centerAwaitingTerrainAnchor = false;
     centerAnchorKeepsView = false;
-    anchorCenterOnTerrain();
+    // Ahead of the anchor, so the update it sends asks the renderer for the ground under the
+    // centre it moves to.
     anchorPassesLeft = 16;
     anchorBracketLow = -std::numeric_limits<double>::infinity();
     anchorBracketHigh = std::numeric_limits<double>::infinity();
     anchorBracketLowGap = 0.0;
     anchorBracketHighGap = 0.0;
     anchorBracketLastEnd = 0;
+    anchorCenterOnTerrain();
 }
 
 void Map::Impl::noteCameraSet(bool keepsView, bool keepsGrab) {
@@ -563,6 +566,16 @@ void Map::Impl::applyCenterClamp() {
         if (centerAwaitingTerrainAnchor && centerAnchorKeepsView) {
             anchorAfterHold();
         }
+        // A pass learns from the ground under the centre where it is now. The last report may be
+        // of the ground under a centre the camera has moved on from since: the one before an
+        // immediate zoom about a point (a wheel notch), or before the last pass, from a frame that
+        // drew the camera before the move. Taken as this centre's, it set an end of the bracket
+        // where the line of sight does not meet the ground, the bracket closed on it, and the
+        // passes stopped there as if beside a cliff, tens of meters off the ground. The renderer
+        // reports the ground under this centre in the next frame (reportCenterElevationOnMove).
+        if (anchorPassesLeft > 0 && !terrainCenterElevationIsCurrent()) {
+            return;
+        }
         target = clampedCenterAltitude();
         if (centerSettledBesideACliff && target == terrainCenterElevation) {
             return;
@@ -634,8 +647,13 @@ void Map::Impl::applyCenterClamp() {
     }
 }
 
-void Map::Impl::onTerrainCenterElevationChanged(double elevationMeters) {
+bool Map::Impl::terrainCenterElevationIsCurrent() const {
+    return terrainCenterElevationAt && *terrainCenterElevationAt == transform.getState().getLatLng();
+}
+
+void Map::Impl::onTerrainCenterElevationChanged(double elevationMeters, const LatLng& center) {
     terrainCenterElevation = elevationMeters;
+    terrainCenterElevationAt = center;
     if (!centerClampedToGround) {
         return;
     }

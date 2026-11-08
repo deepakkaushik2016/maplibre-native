@@ -75,6 +75,10 @@ public:
     // The center a running camera animation is headed for (Transform::getTransitionTargetCenter):
     // the renderer reports the ground there so the map can ease the center's height to it.
     std::optional<LatLng> transitionTargetCenter;
+    /// The map is sliding its centre onto the ground in passes that each need the ground under
+    /// the centre as it is now: the renderer reports the centre's height whenever the centre has
+    /// moved, not only when the height changed.
+    bool reportCenterElevationOnMove = false;
     /// The line of sight through the ground a gesture grabbed (Map::moveBy with an anchor), while
     /// its height is unknown: the renderer reports where it meets the terrain, once per grab.
     struct TerrainGrab {

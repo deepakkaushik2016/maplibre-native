@@ -1785,6 +1785,95 @@ TEST(TerrainGesture, APinchEndingRightAfterAStepLeavesTheCentreOnTheGround) {
 
 namespace {
 
+// Mouse-wheel notches about `pointer`, each an immediate zoom by `notch` levels as the Flutter
+// gesture layer sends it (Map::easeTo with an anchor and no duration, outside a gesture), with a
+// frame before every `framesEvery`th notch (none with 0), then frames until the clamp settles.
+// Returns how far from the middle of the screen the ground at the centre is drawn, and how far
+// from the pointer the ground that was under it is.
+struct WheelResult {
+    double centerShown = std::numeric_limits<double>::infinity();
+    double pointerDrift = std::numeric_limits<double>::infinity();
+    double offGroundMeters = std::numeric_limits<double>::quiet_NaN();
+};
+WheelResult wheel(AlpsGestureTest& test, const ScreenCoordinate& pointer, double notch, int notches, int framesEvery) {
+    WheelResult result;
+    const auto grabbed = test.groundUnder(pointer);
+    if (!grabbed) {
+        ADD_FAILURE() << "no ground under the pointer";
+        return result;
+    }
+    for (int i = 0; i < notches; ++i) {
+        if (framesEvery > 0 && i > 0 && i % framesEvery == 0) {
+            test.frame();
+        }
+        const double zoom = *test.map.getCameraOptions().zoom + notch;
+        test.map.easeTo(CameraOptions().withZoom(zoom).withAnchor(pointer), AnimationOptions());
+    }
+    if (!test.renderUntil([&] { return test.centerOffGround().has_value(); })) {
+        ADD_FAILURE() << "no ground under the centre";
+        return result;
+    }
+    // The passes stop within half a meter of the ground.
+    test.renderUntil([&] { return std::abs(*test.centerOffGround()) < 0.5; }, 30);
+    const auto camera = test.map.getCameraOptions();
+    const auto ground = test.elevation(*camera.center);
+    if (!ground) {
+        ADD_FAILURE() << "no ground under the centre";
+        return result;
+    }
+    const Size size = test.map.getTransformState().getSize();
+    result.centerShown = test.distance(test.project(GroundPoint{.location = *camera.center, .altitude = *ground}),
+                                       {size.width / 2.0, size.height / 2.0});
+    result.pointerDrift = test.distance(test.project(*grabbed), pointer);
+    result.offGroundMeters = *test.centerOffGround();
+    return result;
+}
+
+} // namespace
+
+// Five wheel notches over the ridge's flank leave the centre on the ground under it once the frames
+// have caught up, wherever the frames fall between the notches: none (no ground report between
+// them), one after each, or one after every other; and the pointer's ground stays put. A notch
+// after a frame anchored the centre, and its first pass took the last report, the ground under the
+// centre before the zoom, as the ground under the centre after it: that set an end of the bracket
+// where the line of sight does not meet the ground, the next report closed the bracket on it, and
+// the passes stopped as if beside a cliff, 18 m off the ground (4.8 px on the screen).
+TEST(TerrainGesture, WheelZoomsAboutAPointLeaveTheCentreOnTheGround) {
+    for (const double exaggeration : {1.0, 1.5}) {
+        for (const ScreenCoordinate pointer :
+             {ScreenCoordinate{195, 572}, ScreenCoordinate{80, 300}, ScreenCoordinate{300, 700}}) {
+            for (const double notch : {0.2, -0.2}) {
+                for (const int framesEvery : {0, 1, 2}) {
+                    AlpsGestureTest test(exaggeration);
+                    ASSERT_TRUE(test.settle());
+                    const auto label = ::testing::Message()
+                                       << "exaggeration " << exaggeration << ", pointer " << pointer.x << ","
+                                       << pointer.y << ", notch " << notch << ", a frame every " << framesEvery;
+                    const auto result = wheel(test, pointer, notch, 5, framesEvery);
+                    EXPECT_LT(result.centerShown, 0.5) << label << ": " << result.offGroundMeters << " m off";
+                    EXPECT_LT(result.pointerDrift, 2.0) << label;
+                }
+            }
+        }
+    }
+}
+
+// However many notches: twenty, a frame after each, in and back out.
+TEST(TerrainGesture, ManyWheelZoomsLeaveTheCentreOnTheGround) {
+    for (const double exaggeration : {1.0, 1.5}) {
+        for (const double notch : {0.1, -0.1}) {
+            AlpsGestureTest test(exaggeration);
+            ASSERT_TRUE(test.settle());
+            const auto label = ::testing::Message() << "exaggeration " << exaggeration << ", notch " << notch;
+            const auto result = wheel(test, {195, 572}, notch, 20, 1);
+            EXPECT_LT(result.centerShown, 0.5) << label << ": " << result.offGroundMeters << " m off";
+            EXPECT_LT(result.pointerDrift, 2.0) << label;
+        }
+    }
+}
+
+namespace {
+
 // Starts an anchored drag off the centre and moves it a few steps, a frame after each, so the
 // renderer has reported the grabbed ground's height. Returns where the finger is.
 ScreenCoordinate startAnchoredDrag(AlpsGestureTest& test) {

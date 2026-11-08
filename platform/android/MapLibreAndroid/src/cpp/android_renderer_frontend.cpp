@@ -62,8 +62,8 @@ public:
 
     void onDidFinishRenderingMap() override { delegate.invoke(&RendererObserver::onDidFinishRenderingMap); }
 
-    void onTerrainCenterElevationChanged(double elevationMeters) override {
-        delegate.invoke(&RendererObserver::onTerrainCenterElevationChanged, elevationMeters);
+    void onTerrainCenterElevationChanged(double elevationMeters, const LatLng& center) override {
+        delegate.invoke(&RendererObserver::onTerrainCenterElevationChanged, elevationMeters, center);
     }
 
     void onTerrainEyeElevationChanged(double elevationMeters) override {
