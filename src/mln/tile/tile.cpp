@@ -28,6 +28,16 @@ void Tile::setTriedCache() {
     observer->onTileChanged(*this);
 }
 
+void Tile::setAwaitingNetwork(bool awaiting) {
+    if (awaiting == awaitingNetwork) {
+        return;
+    }
+    awaitingNetwork = awaiting;
+    if (awaiting) {
+        observer->onTileChanged(*this);
+    }
+}
+
 void Tile::dumpDebugLogs() const {
     std::string kindString;
     switch (kind) {

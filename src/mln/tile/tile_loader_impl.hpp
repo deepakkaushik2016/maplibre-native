@@ -2,6 +2,7 @@
 
 #include <mln/renderer/tile_parameters.hpp>
 #include <mln/storage/file_source.hpp>
+#include <mln/storage/network_status.hpp>
 #include <mln/tile/tile_loader.hpp>
 #include <mln/util/async_request.hpp>
 #include <mln/util/tileset.hpp>
@@ -28,7 +29,8 @@ TileLoader<T>::TileLoader(T& tile_,
                               id.canonical.z,
                               tileset.scheme,
                               Resource::LoadingMethod::CacheOnly)),
-      fileSource(parameters.fileSource) {
+      fileSource(parameters.fileSource),
+      stillImage(parameters.mode != MapMode::Continuous) {
     assert(!request);
 
     shared = std::make_shared<Shared>();
@@ -136,6 +138,7 @@ void TileLoader<T>::loadFromCache() {
                     resource.priorEtag = res.etag;
                     resource.priorData = res.data;
                 } else {
+                    answered = true;
                     loadedData(res, Resource::LoadingMethod::CacheOnly);
                 }
 
@@ -214,7 +217,21 @@ void TileLoader<T>::loadFromNetwork() {
                 std::shared_lock<std::shared_mutex> lock(shared_->requestLock, std::adopt_lock);
                 if (shared_->aborted) return;
 
+                if (stillImage && res.error && res.error->reason == Response::Error::Reason::Connection &&
+                    NetworkStatus::Get() == NetworkStatus::Status::Offline) {
+                    // The network is offline, and the online file source holds this request until
+                    // it is back, when it makes it again: keep it. A still image doesn't wait for
+                    // it: a tile with no answer yet counts as loaded with nothing to draw while the
+                    // network stays offline, and its ancestor is drawn. A tile with data keeps it.
+                    if (!answered) {
+                        tile.setAwaitingNetwork(true);
+                    }
+                    break;
+                }
+
                 request.reset();
+                answered = true;
+                tile.setAwaitingNetwork(false);
                 loadedData(res, Resource::LoadingMethod::NetworkOnly);
                 break;
             }

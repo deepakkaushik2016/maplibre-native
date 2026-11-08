@@ -2,6 +2,7 @@
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
 
+#include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/headless_frontend.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
@@ -20,7 +21,9 @@
 #include <mln/util/tile_server_options.hpp>
 
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <functional>
 #include <list>
 #include <memory>
 #include <optional>
@@ -60,7 +63,7 @@ const std::string demURL = "http://tiles.invalid/dem/{z}/{x}/{y}.png";
 const std::string baseURL = "http://tiles.invalid/base/{z}/{x}/{y}.png";
 const std::string styleURL = "http://tiles.invalid/style.json";
 
-std::string sceneStyle(bool withTerrain, const std::string& encoding = "mapbox") {
+std::string sceneStyle(bool withTerrain, const std::string& encoding = "mapbox", int demZoomMax = 11) {
     return R"STYLE({
   "version": 8,
   "sources": {
@@ -70,7 +73,8 @@ std::string sceneStyle(bool withTerrain, const std::string& encoding = "mapbox")
            demURL + R"STYLE("],
       "encoding": ")STYLE" +
            encoding + R"STYLE(",
-      "maxzoom": 11,
+      "maxzoom": )STYLE" +
+           std::to_string(demZoomMax) + R"STYLE(,
       "tileSize": 256
     },
     "base": {
@@ -462,4 +466,230 @@ TEST(TerrainOffline, DEMFromOfflineDatabase) {
     EXPECT_LE(fraction, 0.01) << "the offline render differs from the online one: " << differing << " px";
 
     deleteDatabase();
+}
+
+// A still frame offline over a partly downloaded region (backlog B9). A still frame waits for every
+// tile it covers. Offline, a DEM tile that is neither in the offline database nor reachable used to
+// wait forever on the network request that the offline network status holds until the network is
+// back, so the still never finished. It must finish and draw what the database has: the tile's
+// ancestor, overzoomed, or flat ground at 0 m where no ancestor exists either.
+//
+// Every still here is waited for at most stillLimit, so a hang fails the test instead of stalling
+// the run. A still of this scene from the database takes well under a second on Metal and a few
+// seconds on llvmpipe; a still that waits on the network never finishes at all.
+
+namespace {
+
+constexpr auto stillLimit = std::chrono::seconds(20);
+// The DEM goes to z13, but the database has it only to z12: at zoom 13 every DEM tile in view is
+// missing, and the z12 tiles above them are in the database.
+constexpr int sparseDEMMaxZoom = 13;
+constexpr double stillZoom = 13.0;
+
+struct Still {
+    bool finished = false;
+    std::exception_ptr error;
+    PremultipliedImage image;
+};
+
+// One still frame, waited for at most `limit`.
+Still renderStillWithin(HeadlessFrontend& frontend, Map& map, std::chrono::milliseconds limit) {
+    Still still;
+    gfx::BackendScope guard{*frontend.getBackend()};
+    bool done = false;
+    map.renderStill([&](const std::exception_ptr& error) {
+        still.error = error;
+        if (!error) {
+            still.image = frontend.readStillImage();
+        }
+        done = true;
+    });
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    while (!done && std::chrono::steady_clock::now() < deadline) {
+        util::RunLoop::Get()->runOnce();
+    }
+    still.finished = done;
+    return still;
+}
+
+// The share of pixels that differ by more than 8 in a channel.
+double differingFraction(const PremultipliedImage& a, const PremultipliedImage& b) {
+    int differing = 0;
+    for (uint32_t y = 0; y < viewSize; ++y) {
+        for (uint32_t x = 0; x < viewSize; ++x) {
+            const uint8_t* pa = pixel(a, x, y);
+            const uint8_t* pb = pixel(b, x, y);
+            bool differs = false;
+            for (int c = 0; c < 4; ++c) {
+                differs = differs || std::abs(int(pa[c]) - int(pb[c])) > 8;
+            }
+            differing += differs ? 1 : 0;
+        }
+    }
+    return static_cast<double>(differing) / (viewSize * viewSize);
+}
+
+struct StillScene {
+    std::shared_ptr<FileSource> fileSource;
+    HeadlessFrontend frontend{{viewSize, viewSize}, 1};
+    MapAdapter map;
+
+    explicit StillScene(std::shared_ptr<FileSource> fs)
+        : fileSource(std::move(fs)),
+          map(frontend,
+              MapObserver::nullObserver(),
+              fileSource,
+              MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize())) {
+        map.getStyle().loadURL(styleURL);
+        map.jumpTo(
+            CameraOptions().withCenter(center).withZoom(stillZoom).withPitch(pitch).withCenterAltitude(plateauMeters));
+    }
+
+    Still render() { return renderStillWithin(frontend, map, stillLimit); }
+
+    std::optional<double> elevation(const LatLng& at) { return frontend.getRenderer()->queryTerrainElevation(at); }
+};
+
+// An online scene from a stub server, which answers a DEM tile with data where `demHasData` says so
+// and with 204 (no data) elsewhere. Returns its frame, and records every answer that carried data:
+// what an offline region holds for this view.
+PremultipliedImage renderOnline(const std::function<bool(const CanonicalTileID&)>& demHasData,
+                                std::list<std::tuple<Resource, Response>>& withData,
+                                int& demRequestedWithoutData) {
+    const std::string dem = plateauTile();
+    const std::string base = baseTile();
+    const std::string styleJSON = sceneStyle(true, "mapbox", sparseDEMMaxZoom);
+    auto stub = std::make_shared<StubFileSource>(ResourceOptions::Default(), ClientOptions());
+    stub->styleResponse = [&](const Resource& resource) -> std::optional<Response> {
+        auto res = dataResponse(styleJSON);
+        withData.emplace_back(resource, res);
+        return res;
+    };
+    stub->tileResponse = [&](const Resource& resource) -> std::optional<Response> {
+        const auto& t = *resource.tileData;
+        if (t.urlTemplate == demURL && !demHasData(CanonicalTileID(t.z, t.x, t.y))) {
+            ++demRequestedWithoutData;
+            Response empty;
+            empty.noContent = true;
+            return empty;
+        }
+        auto res = dataResponse(t.urlTemplate == demURL ? dem : base);
+        withData.emplace_back(resource, res);
+        return res;
+    };
+    StillScene scene(stub);
+    Still still = scene.render();
+    EXPECT_TRUE(still.finished) << "the online still did not finish";
+    EXPECT_FALSE(still.error);
+    return std::move(still.image);
+}
+
+// Puts the resources in a new offline database at `path`, the way an offline region holds them.
+void writeDatabase(const std::string& path, const std::list<std::tuple<Resource, Response>>& resources) {
+    util::deleteFile(path);
+    util::deleteFile(path + "-wal");
+    util::deleteFile(path + "-journal");
+    OfflineDatabase db(path, TileServerOptions::DefaultConfiguration());
+    for (const auto& [resource, response] : resources) {
+        db.put(resource, response);
+    }
+}
+
+void deleteDatabase(const std::string& path) {
+    util::deleteFile(path);
+    util::deleteFile(path + "-wal");
+    util::deleteFile(path + "-journal");
+}
+
+struct OfflineNetwork {
+    OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Offline); }
+    ~OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Online); }
+    OfflineNetwork(const OfflineNetwork&) = delete;
+    OfflineNetwork& operator=(const OfflineNetwork&) = delete;
+};
+
+} // namespace
+
+TEST(TerrainOffline, AStillFrameOfflineDrawsTheAncestorOfAMissingDEMTile) {
+    util::RunLoop loop;
+    const auto upToZ12 = [](const CanonicalTileID& id) {
+        return id.z <= 12;
+    };
+
+    // The reference: online, where the z13 DEM tiles answer 204, so the frame draws their z12
+    // ancestors (the sparse-DEM fallback). The offline frame must match it.
+    std::list<std::tuple<Resource, Response>> region;
+    int demWithoutData = 0;
+    const PremultipliedImage sparse = renderOnline(upToZ12, region, demWithoutData);
+    ASSERT_GT(demWithoutData, 0) << "the view asked for no z13 DEM tile";
+
+    // Not vacuous: the same view over flat ground (every DEM tile empty) looks different.
+    std::list<std::tuple<Resource, Response>> unused;
+    int allEmpty = 0;
+    const PremultipliedImage flat = renderOnline([](const CanonicalTileID&) { return false; }, unused, allEmpty);
+    ASSERT_GE(differingFraction(sparse, flat), 0.04) << "the plateau frame looks like flat ground";
+
+    int z12 = 0;
+    for (const auto& [resource, response] : region) {
+        if (resource.tileData && resource.tileData->urlTemplate == demURL) {
+            ASSERT_LE(resource.tileData->z, 12);
+            z12 += resource.tileData->z == 12 ? 1 : 0;
+        }
+    }
+    ASSERT_GT(z12, 0) << "the database holds no z12 DEM tile";
+
+    const std::string path = "test/fixtures/offline_database/terrain_offline_still_ancestor.db";
+    writeDatabase(path, region);
+    {
+        OfflineNetwork offline;
+        auto loader = std::make_shared<MainResourceLoader>(ResourceOptions().withCachePath(path), ClientOptions());
+        StillScene scene(loader);
+        const auto start = std::chrono::steady_clock::now();
+        const Still still = scene.render();
+        const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                                start);
+        ASSERT_TRUE(still.finished) << "an offline still frame waited on a missing DEM tile for more than "
+                                    << stillLimit.count() << " s";
+        ASSERT_FALSE(still.error);
+        RecordProperty("offlineStillMs", static_cast<int>(took.count()));
+
+        const auto elevation = scene.elevation(center);
+        ASSERT_TRUE(elevation) << "no DEM under the centre: the ancestor was not drawn";
+        EXPECT_NEAR(*elevation, plateauMeters, 1.0);
+        const double offSparse = differingFraction(still.image, sparse);
+        const double offFlat = differingFraction(still.image, flat);
+        RecordProperty("differsFromAncestorPermille", static_cast<int>(offSparse * 1000));
+        RecordProperty("differsFromFlatPermille", static_cast<int>(offFlat * 1000));
+        EXPECT_LE(offSparse, 0.01) << "the offline frame does not match the frame drawn from the ancestor";
+        EXPECT_GE(offFlat, 0.04) << "the offline frame is flat";
+    }
+    deleteDatabase(path);
+}
+
+TEST(TerrainOffline, AStillFrameOfflineWithNoDEMAtAllIsFlat) {
+    util::RunLoop loop;
+    std::list<std::tuple<Resource, Response>> region;
+    int demWithoutData = 0;
+    const PremultipliedImage flat = renderOnline([](const CanonicalTileID&) { return false; }, region, demWithoutData);
+    ASSERT_GT(demWithoutData, 0);
+    for (const auto& [resource, response] : region) {
+        ASSERT_FALSE(resource.tileData && resource.tileData->urlTemplate == demURL);
+    }
+
+    const std::string path = "test/fixtures/offline_database/terrain_offline_still_flat.db";
+    writeDatabase(path, region);
+    {
+        OfflineNetwork offline;
+        auto loader = std::make_shared<MainResourceLoader>(ResourceOptions().withCachePath(path), ClientOptions());
+        StillScene scene(loader);
+        const Still still = scene.render();
+        ASSERT_TRUE(still.finished) << "an offline still frame waited on a missing DEM tile for more than "
+                                    << stillLimit.count() << " s";
+        ASSERT_FALSE(still.error);
+        EXPECT_FALSE(scene.elevation(center)) << "a DEM came from somewhere";
+        const double off = differingFraction(still.image, flat);
+        RecordProperty("differsFromFlatPermille", static_cast<int>(off * 1000));
+        EXPECT_LE(off, 0.01) << "the offline frame is not the flat frame at 0 m";
+    }
+    deleteDatabase(path);
 }

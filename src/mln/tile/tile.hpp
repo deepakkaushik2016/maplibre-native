@@ -10,6 +10,7 @@
 #include <mln/renderer/tile_mask.hpp>
 #include <mln/renderer/bucket.hpp>
 #include <mln/tile/geometry_tile_data.hpp>
+#include <mln/storage/network_status.hpp>
 #include <mln/storage/resource.hpp>
 #include <mln/style/layer_properties.hpp>
 
@@ -114,7 +115,7 @@ public:
     // and have attempted to parse the tile (if applicable). Tile
     // implementations should set this to true when a load error occurred, or
     // after the tile was parsed successfully.
-    bool isLoaded() const { return loaded; }
+    bool isLoaded() const { return loaded || awaitingOfflineNetwork(); }
 
     // "Completion" of a tile means that we have attempted to load it, and
     // parsed it completely, i.e. no parsing or placement operations are pending
@@ -122,7 +123,15 @@ public:
     // but merely that we have exhausted all options to get this tile to a
     // renderable state. Some tiles may not be renderable, but complete, e.g.
     // when a raster tile couldn't be loaded, or parsing failed.
-    bool isComplete() const { return loaded && !pending; }
+    bool isComplete() const { return (loaded && !pending) || awaitingOfflineNetwork(); }
+
+    // A still image render's tile that has had no answer yet, neither from the cache nor from the
+    // network, while the network is offline: the online file source holds its request until the
+    // network is back. While the network stays offline, the tile counts as loaded and complete,
+    // with nothing to draw, so a still image finishes and draws its ancestor in its place, as for
+    // a tile with no data. It is not one: nothing records it as empty, and it counts as loading
+    // again as soon as the network is back, when its request is made again.
+    void setAwaitingNetwork(bool);
 
     // "holdForFade" is used to keep tiles in the render tree after they're no
     // longer ideal tiles in order to allow symbols to fade out
@@ -163,6 +172,13 @@ protected:
     bool loaded = false;
 
     TileObserver* observer = nullptr;
+
+private:
+    bool awaitingOfflineNetwork() const {
+        return awaitingNetwork && NetworkStatus::Get() == NetworkStatus::Status::Offline;
+    }
+
+    bool awaitingNetwork = false;
 };
 
 } // namespace mln

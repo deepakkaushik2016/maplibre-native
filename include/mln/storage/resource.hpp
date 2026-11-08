@@ -103,6 +103,12 @@ public:
     std::shared_ptr<const std::string> priorData;
     Duration minimumUpdateInterval{Duration::zero()};
     StoragePolicy storagePolicy{StoragePolicy::Permanent};
+
+    // While NetworkStatus is Offline, the online file source holds a network request until the
+    // network is back, without an answer. Set, it first answers such a request with a Connection
+    // error, and then holds it as before, so the request is made again when the network is back.
+    // A still image render asks for this: it waits for every resource it asks for.
+    bool reportOffline = false;
 };
 
 inline bool Resource::hasLoadingMethod(Resource::LoadingMethod method) const {

@@ -857,3 +857,68 @@ TEST(MainResourceLoader, ResourceOptions) {
     EXPECT_EQ(updatedOptions.baseURL(), "updatedBaseURL");
     EXPECT_EQ(updatedOptions.uriSchemeAlias(), "updatedAlias");
 }
+
+namespace {
+
+struct OfflineNetwork {
+    OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Offline); }
+    ~OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Online); }
+    OfflineNetwork(const OfflineNetwork&) = delete;
+    OfflineNetwork& operator=(const OfflineNetwork&) = delete;
+};
+
+} // namespace
+
+// A still image's request (Resource::reportOffline) that the cache misses hears that the network is
+// offline.
+TEST(MainResourceLoader, OfflineCacheMissIsReported) {
+    util::RunLoop loop;
+    OfflineNetwork offline;
+    MainResourceLoader fs(ResourceOptions{}, ClientOptions{});
+    Resource resource{Resource::Unknown, "http://127.0.0.1:3000/offline-cache-miss"};
+    resource.reportOffline = true;
+
+    util::Timer timeout;
+    timeout.start(Seconds(10), Duration::zero(), [&] {
+        ADD_FAILURE() << "no answer offline";
+        loop.stop();
+    });
+    std::unique_ptr<AsyncRequest> req = fs.request(resource, [&](Response res) {
+        ASSERT_TRUE(res.error);
+        EXPECT_EQ(Response::Error::Reason::Connection, res.error->reason);
+        loop.stop();
+    });
+    loop.run();
+}
+
+// The cache answers a still image's request with a usable (expired) response. The revalidation
+// that follows is held offline without a second answer: the requester has its answer.
+TEST(MainResourceLoader, OfflineRevalidationDoesNotFailAUsableCachedResponse) {
+    util::RunLoop loop;
+    OfflineNetwork offline;
+    MainResourceLoader fs(ResourceOptions{}, ClientOptions{});
+    Resource resource{Resource::Unknown, "http://127.0.0.1:3000/offline-cached-expired"};
+    resource.reportOffline = true;
+
+    using namespace std::chrono_literals;
+    Response cached;
+    cached.data = std::make_shared<std::string>("Cached value");
+    cached.expires = util::now() - 1h;
+
+    int answers = 0;
+    util::Timer wait;
+    std::unique_ptr<AsyncRequest> req;
+    std::shared_ptr<FileSource> dbfs = FileSourceManager::get()->getFileSource(
+        FileSourceType::Database, ResourceOptions{}, ClientOptions{});
+    dbfs->forward(resource, cached, [&] {
+        req = fs.request(resource, [&](Response res) {
+            ++answers;
+            EXPECT_EQ(nullptr, res.error) << res.error->message;
+            ASSERT_TRUE(res.data);
+            EXPECT_EQ("Cached value", *res.data);
+            wait.start(Milliseconds(300), Duration::zero(), [&] { loop.stop(); });
+        });
+    });
+    loop.run();
+    EXPECT_EQ(1, answers);
+}

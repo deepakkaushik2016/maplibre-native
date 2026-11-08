@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mln/map/mode.hpp>
 #include <mln/storage/resource.hpp>
 #include <mln/tile/tile.hpp>
 
@@ -70,6 +71,11 @@ private:
     // Allocated as a `shared_ptr` so either the loader or
     // request can outlive the other and still see this.
     std::shared_ptr<Shared> shared;
+
+    // A still image render (static or tile mode), which waits for every tile it covers.
+    const bool stillImage;
+    // Whether the tile has had an answer: data, no data or an error.
+    bool answered = false;
 };
 
 } // namespace mln

@@ -481,6 +481,14 @@ void OnlineFileRequest::activate() {
     if (resource.priorExpires) {
         timeout = getUpdateInterval(resource.priorExpires);
     }
+    if (resource.reportOffline && NetworkStatus::Get() == NetworkStatus::Status::Offline) {
+        // schedule() holds the request until the network is back. Tell a requester that can't wait
+        // for that now; the request is still made then.
+        Response response;
+        response.error = std::make_unique<Response::Error>(Response::Error::Reason::Connection,
+                                                           "Online connectivity is disabled.");
+        callback(response);
+    }
     schedule(timeout);
 }
 

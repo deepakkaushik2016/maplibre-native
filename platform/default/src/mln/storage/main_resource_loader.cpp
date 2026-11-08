@@ -93,6 +93,9 @@ public:
                             callback(response);
                             // Set the priority of existing resource to low if it's expired but usable.
                             res.setPriority(Resource::Priority::Low);
+                            // The requester has its answer: the revalidation has nothing to tell
+                            // it while the network is offline.
+                            res.reportOffline = false;
                         } else {
                             // Set prior data only if it was not returned to
                             // the requester. Once we get 304 response from

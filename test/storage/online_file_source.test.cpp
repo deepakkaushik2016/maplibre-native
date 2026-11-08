@@ -391,6 +391,90 @@ TEST(OnlineFileSource, TEST_REQUIRES_SERVER(NetworkStatusOnlineOffline)) {
     loop.run();
 }
 
+namespace {
+
+struct OfflineNetwork {
+    OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Offline); }
+    ~OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Online); }
+    OfflineNetwork(const OfflineNetwork&) = delete;
+    OfflineNetwork& operator=(const OfflineNetwork&) = delete;
+};
+
+} // namespace
+
+// While the network is offline, a request whose resource asks for it (a still image's) hears so at
+// once, where any other one waits for the network without an answer.
+TEST(OnlineFileSource, OfflineAnswersARequestThatAsksToHearIt) {
+    util::RunLoop loop;
+    OfflineNetwork offline;
+    std::unique_ptr<FileSource> fs = std::make_unique<OnlineFileSource>(ResourceOptions::Default(), ClientOptions());
+    Resource resource{Resource::Unknown, "http://127.0.0.1:3000/test"};
+    resource.reportOffline = true;
+
+    util::Timer timeout;
+    timeout.start(Seconds(10), Duration::zero(), [&] {
+        ADD_FAILURE() << "no answer offline";
+        loop.stop();
+    });
+    std::unique_ptr<AsyncRequest> req = fs->request(resource, [&](Response res) {
+        ASSERT_TRUE(res.error);
+        EXPECT_EQ(Response::Error::Reason::Connection, res.error->reason);
+        EXPECT_EQ("Online connectivity is disabled.", res.error->message);
+        EXPECT_FALSE(res.data);
+        loop.stop();
+    });
+    loop.run();
+}
+
+TEST(OnlineFileSource, OfflineHoldsAnyOtherRequestWithoutAnAnswer) {
+    util::RunLoop loop;
+    OfflineNetwork offline;
+    std::unique_ptr<FileSource> fs = std::make_unique<OnlineFileSource>(ResourceOptions::Default(), ClientOptions());
+    const Resource resource{Resource::Unknown, "http://127.0.0.1:3000/test"};
+
+    util::Timer wait;
+    wait.start(Milliseconds(300), Duration::zero(), [&] { loop.stop(); });
+    std::unique_ptr<AsyncRequest> req = fs->request(resource, [&](Response) {
+        ADD_FAILURE() << "a request that did not ask to hear that the network is offline was answered";
+    });
+    loop.run();
+}
+
+// The request that heard of the offline network is still made once the network is back. (Port 1
+// refuses the connection, which is an answer too; no server is needed.)
+TEST(OnlineFileSource, OfflineAnsweredRequestIsMadeWhenTheNetworkIsBack) {
+    util::RunLoop loop;
+    NetworkStatus::Set(NetworkStatus::Status::Offline);
+    std::unique_ptr<FileSource> fs = std::make_unique<OnlineFileSource>(ResourceOptions::Default(), ClientOptions());
+    Resource resource{Resource::Unknown, "http://127.0.0.1:1/offline-then-online"};
+    resource.reportOffline = true;
+
+    util::Timer timeout;
+    timeout.start(Seconds(10), Duration::zero(), [&] {
+        ADD_FAILURE() << "the request was not made when the network was back";
+        loop.stop();
+    });
+    int answers = 0;
+    std::unique_ptr<AsyncRequest> req = fs->request(resource, [&](Response res) {
+        ++answers;
+        if (answers == 1) {
+            ASSERT_TRUE(res.error);
+            EXPECT_EQ("Online connectivity is disabled.", res.error->message);
+            NetworkStatus::Set(NetworkStatus::Status::Online);
+        } else {
+            // Whatever the network answered: it is not the offline answer.
+            EXPECT_EQ(NetworkStatus::Status::Online, NetworkStatus::Get());
+            if (res.error) {
+                EXPECT_NE("Online connectivity is disabled.", res.error->message);
+            }
+            loop.stop();
+        }
+    });
+    loop.run();
+    NetworkStatus::Set(NetworkStatus::Status::Online);
+    EXPECT_EQ(2, answers);
+}
+
 TEST(OnlineFileSource, TEST_REQUIRES_SERVER(RateLimitStandard)) {
     util::RunLoop loop;
     std::unique_ptr<FileSource> fs = std::make_unique<OnlineFileSource>(ResourceOptions::Default(), ClientOptions());

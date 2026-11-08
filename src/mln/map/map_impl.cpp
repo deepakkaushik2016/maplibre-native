@@ -3,6 +3,8 @@
 #include <mln/math/wrap.hpp>
 #include <mln/renderer/update_parameters.hpp>
 #include <mln/storage/file_source.hpp>
+#include <mln/storage/resource.hpp>
+#include <mln/util/async_request.hpp>
 #include <mln/style/style_impl.hpp>
 #include <mln/util/exception.hpp>
 #include <mln/util/logging.hpp>
@@ -13,6 +15,10 @@
 #include <mln/gfx/rendering_stats.hpp>
 
 #include <cmath>
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
 
 namespace mln {
 
@@ -48,6 +54,59 @@ void logStyleDependencies(EventSeverity severity, Event event, const style::Styl
 } // namespace
 #endif
 
+namespace {
+
+// A still image waits for every resource it asks for. While the network is offline, the online file
+// source holds a request the cache can't answer until the network is back, so a still image that
+// asked for one would never finish. Its requests ask to hear that the network is offline instead
+// (Resource::reportOffline): a tile then counts as having no data for now (TileLoader), and any
+// other resource fails the still image, as it does when it can't be loaded online.
+class StillImageFileSource final : public FileSource {
+public:
+    explicit StillImageFileSource(std::shared_ptr<FileSource> source_)
+        : source(std::move(source_)) {}
+
+    std::unique_ptr<AsyncRequest> request(const Resource& resource, Callback callback) override {
+        Resource still = resource;
+        still.reportOffline = true;
+        return source->request(still, std::move(callback));
+    }
+
+    void forward(const Resource& resource, const Response& response, std::function<void()> callback) override {
+        source->forward(resource, response, std::move(callback));
+    }
+
+    bool supportsCacheOnlyRequests() const override { return source->supportsCacheOnlyRequests(); }
+    bool canRequest(const Resource& resource) const override { return source->canRequest(resource); }
+    void pause() override { source->pause(); }
+    void resume() override { source->resume(); }
+
+    void setProperty(const std::string& key, const mapbox::base::Value& value) override {
+        source->setProperty(key, value);
+    }
+    mapbox::base::Value getProperty(const std::string& key) const override { return source->getProperty(key); }
+
+    void setResourceTransform(ResourceTransform transform) override {
+        source->setResourceTransform(std::move(transform));
+    }
+    void setResourceOptions(ResourceOptions options) override { source->setResourceOptions(std::move(options)); }
+    ResourceOptions getResourceOptions() override { return source->getResourceOptions(); }
+    void setClientOptions(ClientOptions options) override { source->setClientOptions(std::move(options)); }
+    ClientOptions getClientOptions() override { return source->getClientOptions(); }
+
+private:
+    const std::shared_ptr<FileSource> source;
+};
+
+std::shared_ptr<FileSource> mapFileSource(MapMode mode, std::shared_ptr<FileSource> fileSource) {
+    if (mode == MapMode::Continuous || !fileSource) {
+        return fileSource;
+    }
+    return std::make_shared<StillImageFileSource>(std::move(fileSource));
+}
+
+} // namespace
+
 Map::Impl::Impl(RendererFrontend& frontend_,
                 MapObserver& observer_,
                 std::shared_ptr<FileSource> fileSource_,
@@ -60,7 +119,7 @@ Map::Impl::Impl(RendererFrontend& frontend_,
       crossSourceCollisions(mapOptions.crossSourceCollisions()),
       fastPFOREnabled(mapOptions.fastPFOREnabled()),
       captureRenderedFeatures(mapOptions.renderedFeatureInfo()),
-      fileSource(std::move(fileSource_)),
+      fileSource(mapFileSource(mode, std::move(fileSource_))),
       style(std::make_unique<style::Style>(fileSource, pixelRatio, frontend_.getThreadPool())),
       annotationManager(*style) {
     transform.setNorthOrientation(mapOptions.northOrientation());
