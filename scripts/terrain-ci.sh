@@ -24,7 +24,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # GeoJSONTile.* holds the tile-level test of the feature-state revision (Task 33).
-GTEST_FILTER='*Terrain*:*DEM*:*TileLod*:*TileCover*:GeoJSONTile.*'
+# StillImageOffline.* and the Offline* storage tests cover still images offline (Task 35); they need
+# no test server.
+GTEST_FILTER='*Terrain*:*DEM*:*TileLod*:*TileCover*:GeoJSONTile.*:StillImageOffline.*:OnlineFileSource.Offline*:MainResourceLoader.Offline*'
 RENDER_FILTER='terrain/'
 KNOWN="metrics/ignores/terrain-known.json"
 
