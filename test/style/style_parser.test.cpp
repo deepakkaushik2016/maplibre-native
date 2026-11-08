@@ -314,3 +314,21 @@ TEST(StyleParser, ZoomCurve) {
     ASSERT_TRUE(expr2);
     ASSERT_TRUE(findZoomCurveChecked(*expr2).is<std::nullptr_t>());
 }
+
+// A style document's terrain goes through the same range check as one set on
+// its own: out of range, the style loads without terrain and logs why.
+TEST(StyleParser, TerrainExaggerationOutOfRange) {
+    for (const auto* exaggeration : {"-1", "1e39"}) {
+        SCOPED_TRACE(exaggeration);
+        FixtureLog log;
+        style::Parser parser;
+        ASSERT_FALSE(parser.parse(std::string(R"({"version":8,"sources":{},"layers":[],)") +
+                                  R"("terrain":{"source":"dem","exaggeration":)" + exaggeration + "}}"));
+        EXPECT_FALSE(parser.terrain);
+        EXPECT_EQ(1u,
+                  log.count({EventSeverity::Warning,
+                             Event::ParseStyle,
+                             -1,
+                             "terrain exaggeration must be a finite number of at least 0"}));
+    }
+}
