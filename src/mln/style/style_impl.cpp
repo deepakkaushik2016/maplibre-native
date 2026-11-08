@@ -77,11 +77,16 @@ void Style::Impl::loadURL(const std::string& url_) {
         if (res.error) {
             const std::string message = "loading style failed: " + res.error->message;
             Log::Error(Event::Setup, message.c_str());
+            // As for a source or sprite error: a still image asked for after this one has settled
+            // fails at once instead of waiting for a style that isn't coming.
+            lastError = std::make_exception_ptr(std::runtime_error(res.error->message));
             observer->onStyleError(std::make_exception_ptr(util::StyleLoadException(message)));
-            observer->onResourceError(std::make_exception_ptr(std::runtime_error(res.error->message)));
+            observer->onResourceError(lastError);
         } else if (res.notModified || res.noContent) {
             return;
         } else {
+            // The style came after all (the request is made again when the network is back).
+            lastError = nullptr;
             parse(*res.data);
         }
     });
