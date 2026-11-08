@@ -632,7 +632,9 @@ TileLodMode Map::getTileLodMode() const {
 }
 
 void Map::setTerrainLoadMode(TerrainLoadMode mode) {
+    if (impl->terrainLoadMode == mode) return;
     impl->terrainLoadMode = mode;
+    impl->onUpdate();
 }
 
 TerrainLoadMode Map::getTerrainLoadMode() const {

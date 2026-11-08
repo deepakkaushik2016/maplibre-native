@@ -2460,4 +2460,5 @@ TEST(Map, TileSelectionOptionsPublishUpdates) {
     check(&Map::setTileLodPitchThreshold, &UpdateParameters::tileLodPitchThreshold, 0.5);
     check(&Map::setTileLodZoomShift, &UpdateParameters::tileLodZoomShift, 1.0);
     check(&Map::setTileLodMode, &UpdateParameters::tileLodMode, TileLodMode::Distance);
+    check(&Map::setTerrainLoadMode, &UpdateParameters::terrainLoadMode, TerrainLoadMode::Performance);
 }
