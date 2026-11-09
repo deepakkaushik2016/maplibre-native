@@ -376,6 +376,51 @@ TEST(VulkanOffscreenTexture, ATargetDroppedWhileItsFrameIsInFlightOutlivesThatFr
     EXPECT_EQ(test.state.renderPassesDestroyed, std::vector<VkRenderPass>{renderPass});
     EXPECT_GE(test.state.imageViewsDestroyed.size(), viewsBefore + 2) << "the colour and depth views";
 }
+// A render target's colour image holds megabytes (a terrain drape target is 1024 x 1024 RGBA), so it
+// gets its own device memory, like its depth image. Suballocated from the allocator's blocks, it
+// would keep a block of 256 MB alive after the target went, because the allocator frees a block
+// only once the last allocation in it is gone: on a phone, 750 MB stayed behind when the terrain
+// turned off, with 40 MB of it still used. These targets come and go with the view.
+TEST(VulkanOffscreenTexture, ATargetsColourImageHasItsOwnDeviceMemory) {
+    DescriptorTest<> test;
+    auto& context = test.context;
+    const auto blocks = [&] {
+        VmaTotalStatistics stats;
+        vmaCalculateStatistics(context.getBackend().getAllocator(), &stats);
+        return stats.total.statistics.blockCount;
+    };
+    const auto makeTarget = [&] {
+        auto target = context.createOffscreenTexture(
+            {1024, 1024}, gfx::TextureChannelDataType::UnsignedByte, /*depth=*/true, /*stencil=*/true);
+        context.beginFrame();
+        {
+            auto encoder = context.createCommandEncoder();
+            auto pass = encoder->createRenderPass(
+                "target", {.renderable = *target, .clearColor = Color::white(), .clearDepth = 1.0f, .clearStencil = 0});
+        }
+        context.submitFrame();
+        return target;
+    };
+
+    // The first target: any block the allocator was going to make exists now.
+    auto first = makeTarget();
+    const auto blocksWithOneTarget = blocks();
+
+    auto second = makeTarget();
+    EXPECT_EQ(blocks(), blocksWithOneTarget + 2)
+        << "the second target's colour and depth images each take their own memory";
+
+    second.reset();
+    first.reset();
+    // The deletion queue of a frame slot runs once the slot comes round again.
+    for (int frame = 0; frame < 4; ++frame) {
+        context.beginFrame();
+        context.submitFrame();
+    }
+    test.backend.getDevice()->waitIdle(test.backend.getDispatcher());
+    EXPECT_EQ(blocks(), blocksWithOneTarget - 2) << "the first target's memory went with it";
+}
+
 // The dummy fallback hides a texture bound before its image exists, so it says so at debug level,
 // at most once per interval, with the count of fallbacks since the last line.
 TEST(VulkanDescriptorSet, TheDummyTextureFallbackIsLoggedAtMostOncePerInterval) {

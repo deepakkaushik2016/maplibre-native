@@ -339,6 +339,13 @@ void Texture2D::createTexture() {
     if (textureUsage != Texture2DUsage::Read) {
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        if (textureUsage == Texture2DUsage::Attachment) {
+            // A render target comes and goes with the view and holds megabytes (a terrain drape
+            // target is 4 MB): its own device memory, like its depth image, goes back to the OS
+            // with it. Suballocated, it would pin one of the allocator's 256 MB blocks until
+            // every other allocation in the block was gone too. One vkAllocateMemory per target.
+            allocCreateInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        }
     } else {
         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
