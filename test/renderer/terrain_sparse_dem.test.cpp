@@ -8,6 +8,11 @@
 #include <mln/map/map_observer.hpp>
 #include <mln/map/map_options.hpp>
 #include <mln/renderer/renderer.hpp>
+#include <mln/storage/main_resource_loader.hpp>
+#include <mln/storage/network_status.hpp>
+#include <mln/storage/offline_database.hpp>
+#include <mln/storage/resource.hpp>
+#include <mln/storage/resource_options.hpp>
 #include <mln/storage/response.hpp>
 #include <mln/style/style.hpp>
 #include <mln/map/transform_state.hpp>
@@ -18,14 +23,17 @@
 #include <mln/util/constants.hpp>
 #include <mln/util/http_header.hpp>
 #include <mln/util/image.hpp>
+#include <mln/util/io.hpp>
 #include <mln/util/mat4.hpp>
 #include <mln/util/projection.hpp>
 #include <mln/util/run_loop.hpp>
+#include <mln/util/tile_server_options.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
@@ -129,14 +137,17 @@ enum class Ground {
     Cone,
     ConeWithCut,
     RaisedCone, // the cone 50 m higher: data a tile gains later (an offline pack, say)
+    HighCone,   // the cone 4500 m higher: ground above the eye of a camera whose centre is at 0 m
 };
 constexpr double raisedBy = 50.0;
+constexpr double highConeBy = 4500.0;
 
 double groundMeters(Ground ground, const LatLng& point, bool withBump) {
     if (ground == Ground::ConeWithCut && inCut(point)) {
         return 0.0;
     }
-    return coneMeters(point) + (withBump ? bumpAt(point) : 0.0) + (ground == Ground::RaisedCone ? raisedBy : 0.0);
+    return coneMeters(point) + (withBump ? bumpAt(point) : 0.0) + (ground == Ground::RaisedCone ? raisedBy : 0.0) +
+           (ground == Ground::HighCone ? highConeBy : 0.0);
 }
 
 // The DEM tile z/x/y of the ground in Terrarium, each pixel holding the height at its centre.
@@ -210,8 +221,12 @@ const LatLng marker = tilePoint(apexX - 0.5, apexY + 1.45);
 
 // The production source's shape: one raster-dem source `terrain`, Terrarium, 512 px, maxzoom 14.
 // A colour relief and a hillshade of it, and the grid, all draped. `terrain` false leaves the
-// terrain out: the same layers, drawn flat. `withMarker` adds the marker.
-std::string sparseStyle(bool terrain = true, const std::string& tiles = "terrain", bool withMarker = false) {
+// terrain out: the same layers, drawn flat. `withMarker` adds the marker. `hillshadeOnly` draws
+// the hillshade alone over the background, as the device's stills did.
+std::string sparseStyle(bool terrain = true,
+                        const std::string& tiles = "terrain",
+                        bool withMarker = false,
+                        bool hillshadeOnly = false) {
     const std::string markerSource =
         withMarker ? R"(, "marker": {"type": "geojson", "data": {"type": "Point", "coordinates": [)" +
                          std::to_string(marker.longitude()) + "," + std::to_string(marker.latitude()) + "]}}"
@@ -241,11 +256,16 @@ std::string sparseStyle(bool terrain = true, const std::string& tiles = "terrain
            R"STYLE(
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "#dddddd"}},
-    {"id": "relief", "type": "color-relief", "source": "terrain",
+    )STYLE" +
+           (hillshadeOnly ? std::string()
+                          : std::string(R"STYLE({"id": "relief", "type": "color-relief", "source": "terrain",
      "paint": {"color-relief-color": ["interpolate", ["linear"], ["elevation"],
-        0, "rgb(20, 60, 160)", 400, "rgb(20, 120, 40)", 2400, "rgb(150, 90, 30)"]}},
-    {"id": "hillshade", "type": "hillshade", "source": "terrain", "paint": {"hillshade-exaggeration": 0.4}},
-    {"id": "grid", "type": "line", "source": "grid", "paint": {"line-color": "black", "line-width": 2}}
+        0, "rgb(20, 60, 160)", 400, "rgb(20, 120, 40)", 2400, "rgb(150, 90, 30)", 4900, "rgb(20, 60, 160)", 6900, "rgb(150, 90, 30)"]}},
+    )STYLE")) +
+           R"STYLE({"id": "hillshade", "type": "hillshade", "source": "terrain", "paint": {"hillshade-exaggeration": 0.4}})STYLE" +
+           (hillshadeOnly ? std::string() : std::string(R"STYLE(,
+    {"id": "grid", "type": "line", "source": "grid", "paint": {"line-color": "black", "line-width": 2}})STYLE")) +
+           R"STYLE(
   )STYLE" + markerLayer +
            R"STYLE(]
 })STYLE";
@@ -295,18 +315,23 @@ struct SceneOptions {
     std::optional<std::string> emptyCacheControl;
     /// Whether the style has the marker.
     bool marker = false;
+    /// The map's mode: a static map draws only when asked to, and its tiles load for the still.
+    MapMode mode = MapMode::Continuous;
+    /// The hillshade alone over the background (sparseStyle).
+    bool hillshadeOnly = false;
+    uint32_t width = viewWidth;
+    uint32_t height = viewHeight;
 };
 
 // A map run continuously, so tiles arrive across frames as they do in an app. Nothing is drawn
 // until the first camera is set: a new scene is a cold start.
 struct SparseScene {
     util::RunLoop loop;
-    std::shared_ptr<CachingFileSource> fileSource = std::make_shared<CachingFileSource>();
-    HeadlessFrontend frontend{{viewWidth, viewHeight}, 1};
-    FrameObserver observer;
-    MapAdapter map{
-        frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
     SceneOptions options;
+    std::shared_ptr<CachingFileSource> fileSource = std::make_shared<CachingFileSource>();
+    HeadlessFrontend frontend{{options.width, options.height}, 1};
+    FrameObserver observer;
+    MapAdapter map{frontend, observer, fileSource, MapOptions().withMapMode(options.mode).withSize(frontend.getSize())};
     /// Network requests per DEM tile.
     std::map<CanonicalTileID, int> networkRequests;
     /// Cache-only requests per DEM tile.
@@ -359,7 +384,7 @@ struct SparseScene {
             res.data = demTile(options.ground, id);
             return res;
         };
-        map.getStyle().loadJSON(sparseStyle(options.terrain, "terrain", options.marker));
+        map.getStyle().loadJSON(sparseStyle(options.terrain, "terrain", options.marker, options.hillshadeOnly));
     }
 
     bool has(const CanonicalTileID& id) const {
@@ -553,6 +578,90 @@ void expectDrawnAsTheCone(SparseScene& scene, const std::string& when, double zo
                                   << mismatch(scene.image(), flat) * 100.0 << " % from the flat frame)";
 }
 
+// A still image of the flank (the tests are below), at the size and camera of
+// the device's stills, waited for at most stillLimit so that one that never finishes fails.
+constexpr auto stillLimit = std::chrono::seconds(20);
+constexpr uint32_t stillSize = 256;
+
+struct Still {
+    bool finished = false;
+    std::exception_ptr error;
+    PremultipliedImage image;
+};
+
+Still renderStillWithin(HeadlessFrontend& frontend, Map& map) {
+    Still still;
+    gfx::BackendScope guard{*frontend.getBackend()};
+    bool done = false;
+    map.renderStill([&](const std::exception_ptr& error) {
+        still.error = error;
+        if (!error) {
+            still.image = frontend.readStillImage();
+        }
+        done = true;
+    });
+    const auto deadline = std::chrono::steady_clock::now() + stillLimit;
+    while (!done && std::chrono::steady_clock::now() < deadline) {
+        util::RunLoop::Get()->runOnce();
+    }
+    still.finished = done;
+    return still;
+}
+
+SceneOptions stillOptions(Ground ground, Missing missing, TilesetKind tileset, bool hillshadeOnly) {
+    SceneOptions options;
+    options.ground = ground;
+    options.missing = missing;
+    options.tileset = tileset;
+    options.hillshadeOnly = hillshadeOnly;
+    options.mode = MapMode::Static;
+    options.width = stillSize;
+    options.height = stillSize;
+    return options;
+}
+
+// The share of the frame that is the background (#ddd).
+double backgroundShare(const PremultipliedImage& image) {
+    size_t count = 0;
+    for (size_t i = 0; i < image.bytes(); i += 4) {
+        const uint8_t* px = image.data.get() + i;
+        count += std::abs(px[0] - 0xdd) <= 4 && std::abs(px[1] - 0xdd) <= 4 && std::abs(px[2] - 0xdd) <= 4 ? 1 : 0;
+    }
+    return static_cast<double>(count) / (static_cast<double>(image.bytes()) / 4.0);
+}
+
+// A static map whose camera says nothing of the height of its centre, as a share image's says, is
+// drawn with the centre on the ground under it when the clamp is on: the same frame as a dense
+// tileset's with the height of the centre given.
+void expectStillOnTheGround(Ground ground, Missing missing, bool hillshadeOnly) {
+    PremultipliedImage reference;
+    {
+        SparseScene dense(stillOptions(ground, missing, TilesetKind::Dense, hillshadeOnly));
+        dense.map.jumpTo(CameraOptions()
+                             .withCenter(flank)
+                             .withZoom(arrivalZoom)
+                             .withPitch(pitch)
+                             .withBearing(0.0)
+                             .withCenterAltitude(groundMeters(ground, flank, false)));
+        Still still = renderStillWithin(dense.frontend, dense.map);
+        ASSERT_TRUE(still.finished);
+        ASSERT_FALSE(still.error);
+        ASSERT_LT(backgroundShare(still.image), 0.5) << "the reference shows no ground: the test proves nothing";
+        reference = std::move(still.image);
+    }
+    SparseScene scene(stillOptions(ground, missing, TilesetKind::Sparse, hillshadeOnly));
+    scene.map.setCenterClampedToGround(true);
+    scene.map.jumpTo(CameraOptions().withCenter(flank).withZoom(arrivalZoom).withPitch(pitch).withBearing(0.0));
+    const Still still = renderStillWithin(scene.frontend, scene.map);
+    ASSERT_TRUE(still.finished) << "the still image never finished";
+    ASSERT_FALSE(still.error);
+    ASSERT_GT(scene.requestsAbove(planetMaxZoom), 0) << "the map never asked for a z13-14 tile";
+    EXPECT_NEAR(*scene.map.getCameraOptions().centerAltitude, groundMeters(ground, flank, false), 1.0);
+    EXPECT_LT(backgroundShare(still.image), 0.5) << "only the background was drawn";
+    const double share = mismatch(still.image, reference);
+    EXPECT_LE(share, maxMismatch) << share * 100.0 << " % of the frame differs from the dense reference";
+}
+
 // (A) zoom in from z12, where the z12 tiles are loaded, to z13.5 outside the sub-box.
 void expectZoomInKeepsTheShape(Missing missing, double zoom = arrivalZoom) {
     SceneOptions options;
@@ -594,6 +703,151 @@ void expectColdJumpKeepsTheShape(Missing missing, double zoom = arrivalZoom) {
 }
 
 } // namespace
+
+// A still image (Task 38, device defect D2). The device's stills over the Himalaya drew only the
+// background: nothing of the sparse DEM was missing, the camera was under the ground. The DEM
+// heights came in with the first frame, too late for the clamp, which moved the centre only when
+// that frame was already the still; and a static map has no clamp unless it is asked for.
+TEST(TerrainSparseDEM, AStillDrawsHighGroundWithTheCenterOnIt) {
+    expectStillOnTheGround(Ground::HighCone, Missing::NotFound, /*hillshadeOnly=*/true);
+}
+
+TEST(TerrainSparseDEM, AStillDrawsHighGroundWithTheCenterOnItOn204) {
+    expectStillOnTheGround(Ground::HighCone, Missing::NoContent, /*hillshadeOnly=*/false);
+}
+
+TEST(TerrainSparseDEM, AStillDrawsLowGroundWithTheCenterOnIt) {
+    expectStillOnTheGround(Ground::Cone, Missing::NotFound, /*hillshadeOnly=*/false);
+}
+
+// The clamp is the map's option, off unless asked for (Map::setCenterClampedToGround): a still
+// without it keeps the camera as it was set, and over high ground that is under the ground, as it
+// is on a continuous map. A share image has to ask for the clamp, or give the centre's height.
+TEST(TerrainSparseDEM, AStillWithoutTheClampKeepsTheCentreWhereItWasSet) {
+    SparseScene scene(stillOptions(Ground::HighCone, Missing::NotFound, TilesetKind::Sparse, /*hillshadeOnly=*/true));
+    scene.map.jumpTo(CameraOptions().withCenter(flank).withZoom(arrivalZoom).withPitch(pitch).withBearing(0.0));
+    const Still still = renderStillWithin(scene.frontend, scene.map);
+    ASSERT_TRUE(still.finished);
+    ASSERT_FALSE(still.error);
+    EXPECT_EQ(*scene.map.getCameraOptions().centerAltitude, 0.0);
+}
+
+namespace {
+
+// An offline database at `path` holding the DEM tiles of the view, z0-12 only, over high ground.
+class OfflineDEM {
+public:
+    explicit OfflineDEM(std::string path_)
+        : path(std::move(path_)) {
+        remove();
+    }
+    ~OfflineDEM() { remove(); }
+    OfflineDEM(const OfflineDEM&) = delete;
+    OfflineDEM& operator=(const OfflineDEM&) = delete;
+
+    void putView() {
+        OfflineDatabase db(path, TileServerOptions::DefaultConfiguration());
+        std::set<CanonicalTileID> ancestors;
+        for (int64_t x = int64_t{apexX} - 3; x <= int64_t{apexX} + 3; ++x) {
+            for (int64_t y = int64_t{apexY} - 2; y <= int64_t{apexY} + 3; ++y) {
+                for (uint8_t z = planetMaxZoom; z > 0; --z) {
+                    const int dz = planetMaxZoom - z;
+                    const CanonicalTileID id(z, static_cast<uint32_t>(x) >> dz, static_cast<uint32_t>(y) >> dz);
+                    if (ancestors.insert(id).second) {
+                        Response response;
+                        response.data = demTile(Ground::HighCone, id);
+                        db.put(Resource::tile("http://example.com/terrain/{z}/{x}/{y}.png",
+                                              1,
+                                              id.x,
+                                              id.y,
+                                              id.z,
+                                              Tileset::Scheme::XYZ),
+                               response);
+                    }
+                }
+            }
+        }
+    }
+
+    const std::string path;
+
+private:
+    void remove() {
+        util::deleteFile(path);
+        util::deleteFile(path + "-wal");
+        util::deleteFile(path + "-journal");
+        util::deleteFile(path + "-shm");
+    }
+};
+
+struct OfflineNetwork {
+    OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Offline); }
+    ~OfflineNetwork() { NetworkStatus::Set(NetworkStatus::Status::Online); }
+    OfflineNetwork(const OfflineNetwork&) = delete;
+    OfflineNetwork& operator=(const OfflineNetwork&) = delete;
+};
+
+} // namespace
+
+// Offline, the z12 ancestors in the database are drawn for the z13-14 tiles it does not have, with
+// the centre on them, as online.
+TEST(TerrainSparseDEM, AnOfflineStillDrawsTheAncestorInTheDatabase) {
+    PremultipliedImage reference;
+    {
+        SparseScene dense(
+            stillOptions(Ground::HighCone, Missing::NotFound, TilesetKind::Dense, /*hillshadeOnly=*/true));
+        dense.map.jumpTo(CameraOptions()
+                             .withCenter(flank)
+                             .withZoom(arrivalZoom)
+                             .withPitch(pitch)
+                             .withBearing(0.0)
+                             .withCenterAltitude(groundMeters(Ground::HighCone, flank, false)));
+        Still still = renderStillWithin(dense.frontend, dense.map);
+        ASSERT_TRUE(still.finished);
+        ASSERT_FALSE(still.error);
+        reference = std::move(still.image);
+    }
+    util::RunLoop loop;
+    OfflineDEM database("test/fixtures/offline_database/terrain_sparse_still.db");
+    database.putView();
+    OfflineNetwork offline;
+    auto fileSource = std::make_shared<MainResourceLoader>(ResourceOptions().withCachePath(database.path),
+                                                           ClientOptions());
+    FrameObserver observer;
+    HeadlessFrontend frontend{{stillSize, stillSize}, 1};
+    MapAdapter map{
+        frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize())};
+    map.getStyle().loadJSON(sparseStyle(true, "terrain", false, /*hillshadeOnly=*/true));
+    map.setCenterClampedToGround(true);
+    map.jumpTo(CameraOptions().withCenter(flank).withZoom(arrivalZoom).withPitch(pitch).withBearing(0.0));
+    const Still still = renderStillWithin(frontend, map);
+    ASSERT_TRUE(still.finished) << "the still image waited on tiles the network can't load offline";
+    ASSERT_FALSE(still.error);
+    EXPECT_LT(backgroundShare(still.image), 0.5);
+    const double share = mismatch(still.image, reference);
+    EXPECT_LE(share, maxMismatch) << share * 100.0 << " % of the frame differs from the dense reference";
+}
+
+// Offline with no DEM tile at all: nothing to clamp to, so flat ground, as Task 35 has it.
+TEST(TerrainSparseDEM, AnOfflineStillWithNoDEMIsFlat) {
+    util::RunLoop loop;
+    OfflineDEM database("test/fixtures/offline_database/terrain_sparse_still_none.db");
+    OfflineNetwork offline;
+    auto fileSource = std::make_shared<MainResourceLoader>(ResourceOptions().withCachePath(database.path),
+                                                           ClientOptions());
+    FrameObserver observer;
+    HeadlessFrontend frontend{{stillSize, stillSize}, 1};
+    MapAdapter map{
+        frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize())};
+    map.getStyle().loadJSON(sparseStyle(true, "terrain", false, /*hillshadeOnly=*/true));
+    map.setCenterClampedToGround(true);
+    map.jumpTo(CameraOptions().withCenter(flank).withZoom(arrivalZoom).withPitch(pitch).withBearing(0.0));
+    const Still still = renderStillWithin(frontend, map);
+    ASSERT_TRUE(still.finished);
+    ASSERT_FALSE(still.error);
+    EXPECT_EQ(*map.getCameraOptions().centerAltitude, 0.0);
+    EXPECT_GT(backgroundShare(still.image), 0.99);
+}
 
 TEST(TerrainSparseDEM, ZoomingInPastTheDataKeepsTheShapeOn204) {
     expectZoomInKeepsTheShape(Missing::NoContent);

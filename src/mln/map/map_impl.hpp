@@ -117,6 +117,13 @@ public:
     bool loading = false;
     bool rendererFullyLoaded;
     std::unique_ptr<StillImageRequest> stillImageRequest;
+    /// The clamp moved the centre during the frame a still image is waiting on: that frame drew
+    /// the camera before the move.
+    bool stillFrameBeforeClamp = false;
+    /// Frames drawn again for the clamp, for the still image in progress.
+    int stillClampRedraws = 0;
+    /// The most frames a still image draws again for the clamp.
+    static constexpr int maxStillClampRedraws = 8;
 
     double tileLodMinRadius = 3;
     double tileLodScale = 1;

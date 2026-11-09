@@ -404,8 +404,21 @@ void Map::Impl::onDidFinishRenderingFrame(RenderMode renderMode,
             }
         }
     } else if (stillImageRequest && rendererFullyLoaded) {
-        const auto request = std::move(stillImageRequest);
-        request->callback(nullptr);
+        // The frame that reported the ground moved the clamped centre onto it, but was drawn from
+        // where the centre was: from under a mountain, that is the background alone. Draw the
+        // frame the camera asks for and finish with that. The clamp settles in a frame or two (a
+        // jump, the centre's height then stays) and never waits on data: the cap only guards the
+        // still against a report that would keep moving the camera.
+        if (stillFrameBeforeClamp && stillClampRedraws < maxStillClampRedraws) {
+            stillFrameBeforeClamp = false;
+            ++stillClampRedraws;
+            onUpdate();
+        } else {
+            stillFrameBeforeClamp = false;
+            stillClampRedraws = 0;
+            const auto request = std::move(stillImageRequest);
+            request->callback(nullptr);
+        }
     }
 
     lastFrameStats = std::move(stats);
@@ -702,6 +715,10 @@ void Map::Impl::applyCenterClamp() {
         }
     }
     if (clampCenterToTerrain(target)) {
+        // A still image waits for the frame drawn with this camera (onDidFinishRenderingFrame).
+        if (mode != MapMode::Continuous && stillImageRequest) {
+            stillFrameBeforeClamp = true;
+        }
         onUpdate();
     }
 }
