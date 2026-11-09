@@ -11,6 +11,7 @@
 #include <mln/vulkan/context.hpp>
 #include <mln/vulkan/descriptor_set.hpp>
 #include <mln/vulkan/headless_backend.hpp>
+#include <mln/vulkan/pipeline.hpp>
 #include <mln/vulkan/render_pass.hpp>
 #include <mln/vulkan/renderable_resource.hpp>
 #include <mln/vulkan/texture2d.hpp>
@@ -376,6 +377,41 @@ TEST(VulkanOffscreenTexture, ATargetDroppedWhileItsFrameIsInFlightOutlivesThatFr
     EXPECT_EQ(test.state.renderPassesDestroyed, std::vector<VkRenderPass>{renderPass});
     EXPECT_GE(test.state.imageViewsDestroyed.size(), viewsBefore + 2) << "the colour and depth views";
 }
+// Pipelines are cached under a hash that used to include the render pass handle, and each drape
+// target makes its own render pass. As the view moved, every new target's first frame built a new
+// set of pipelines that stayed cached for the life of the map: on a phone the driver's native
+// memory grew by 2 to 3 MB a minute. A pipeline can draw in any render pass compatible with the
+// one it was built for, so compatible targets share them.
+TEST(VulkanOffscreenTexture, CompatibleTargetsShareTheirPipelines) {
+    DescriptorTest<> test;
+    auto& context = test.context;
+    const auto makeTarget = [&](bool stencil) {
+        auto target = context.createOffscreenTexture(
+            {64, 64}, gfx::TextureChannelDataType::UnsignedByte, /*depth=*/true, stencil);
+        context.beginFrame();
+        {
+            auto encoder = context.createCommandEncoder();
+            auto pass = encoder->createRenderPass(
+                "target", {.renderable = *target, .clearColor = Color::white(), .clearDepth = 1.0f, .clearStencil = 0});
+        }
+        context.submitFrame();
+        return target;
+    };
+    const auto hashOf = [](const gfx::OffscreenTexture& target) {
+        vulkan::PipelineInfo info;
+        info.setRenderable(target);
+        return info.hash();
+    };
+
+    const auto first = makeTarget(/*stencil=*/true);
+    const auto second = makeTarget(/*stencil=*/true);
+    const auto noStencil = makeTarget(/*stencil=*/false);
+
+    EXPECT_EQ(hashOf(*first), hashOf(*second)) << "two targets with the same formats share a pipeline";
+    EXPECT_NE(hashOf(*first), hashOf(*noStencil)) << "a target without a stencil has its own pipeline";
+    test.backend.getDevice()->waitIdle(test.backend.getDispatcher());
+}
+
 // A render target's colour image holds megabytes (a terrain drape target is 1024 x 1024 RGBA), so it
 // gets its own device memory, like its depth image. Suballocated from the allocator's blocks, it
 // would keep a block of 256 MB alive after the target went, because the allocator frees a block

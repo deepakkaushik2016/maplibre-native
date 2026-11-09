@@ -351,6 +351,7 @@ void PipelineInfo::setRenderable(const gfx::Renderable& value) {
     const auto& renderableResource = value.getResource<RenderableResource>();
 
     renderPass = renderableResource.getRenderPass().get();
+    renderPassKey = renderableResource.getRenderPassKey();
     renderPassHasStencil = renderableResource.hasStencilAttachment();
 
     const auto extent = renderableResource.getExtent();
@@ -420,7 +421,7 @@ std::size_t PipelineInfo::hash() const {
                       stencilFail,
                       stencilDepthFail,
                       wideLines,
-                      VkRenderPass(renderPass),
+                      renderPassKey,
                       vertexInputHash);
 }
 

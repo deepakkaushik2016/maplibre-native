@@ -44,6 +44,8 @@ public:
 
     // external values (used in hash)
     vk::RenderPass renderPass{};
+    // Stands in for the render pass in the hash: see RenderableResource::getRenderPassKey
+    std::size_t renderPassKey = 0;
     // False when rendering into an offscreen target with no stencil attachment (e.g. the
     // terrain drape RTT, which has depth but no stencil); stencil test/write must be off.
     bool renderPassHasStencil = true;

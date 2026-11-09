@@ -3,10 +3,12 @@
 #include <mln/vulkan/renderable_resource.hpp>
 #include <mln/vulkan/renderer_backend.hpp>
 #include <mln/vulkan/texture2d.hpp>
+#include <mln/util/hash.hpp>
 #include <mln/util/logging.hpp>
 
 #include <algorithm>
 #include <array>
+#include <string_view>
 #include <vector>
 
 namespace mln {
@@ -76,6 +78,10 @@ public:
     // (createDepthImage() logs an error and hasStencilAttachment() falls back to depth-only so
     // the target still renders, just without tile-clipping).
     bool hasStencilAttachment() const override { return stencilSupported; }
+
+    // Offscreen render passes are built the same way, so ones with the same attachment formats are
+    // compatible and can share pipelines. Salted so it can't equal a surface's render pass handle.
+    std::size_t getRenderPassKey() const override { return renderPassKey; }
 
     PremultipliedImage readStillImage() {
         if (!colorTexture) {
@@ -218,6 +224,8 @@ public:
 
         renderPass = backend.getDevice()->createRenderPassUnique(
             renderPassCreateInfo, nullptr, backend.getDispatcher());
+        renderPassKey = util::hash(
+            std::string_view("offscreen"), VkFormat(texture.getVulkanFormat()), VkFormat(depthFormat));
 
         const std::array<vk::ImageView, 2> framebufferAttachments = {texture.getVulkanImageView().get(),
                                                                      depthAllocation->imageView.get()};
@@ -242,6 +250,7 @@ private:
     gfx::Texture2DPtr colorTexture;
     UniqueImageAllocation depthAllocation;
     vk::Format depthFormat{vk::Format::eD32Sfloat};
+    std::size_t renderPassKey = 0;
     vk::UniqueFramebuffer framebuffer;
 };
 

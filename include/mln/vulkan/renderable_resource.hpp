@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <limits>
 #include <stdexcept>
 
@@ -34,6 +35,13 @@ public:
     /// maplibre-gl-js's drape framebuffer, so pipelines rendered into them must not
     /// enable stencil test/write.
     virtual bool hasStencilAttachment() const { return true; }
+
+    /// What identifies this renderable's render pass for caching the pipelines drawn in it. Pipelines
+    /// can be used with any render pass compatible with the one they were built for, so the
+    /// pipeline hash uses this rather than the render pass handle. By default each render pass
+    /// stands alone; offscreen targets, which come and go with the view, share one for each set of
+    /// attachment formats.
+    virtual std::size_t getRenderPassKey() const { return std::hash<VkRenderPass>{}(VkRenderPass(renderPass.get())); }
 
     /// Whether this renderable is the window surface (offscreen render targets
     /// return false; they have no swapchain or surface transform)
