@@ -138,6 +138,7 @@ enum class Ground {
     ConeWithCut,
     RaisedCone, // the cone 50 m higher: data a tile gains later (an offline pack, say)
     HighCone,   // the cone 4500 m higher: ground above the eye of a camera whose centre is at 0 m
+    HighSlope,  // HighCone rising eastwards, so that places apart have different heights
 };
 constexpr double raisedBy = 50.0;
 constexpr double highConeBy = 4500.0;
@@ -147,7 +148,8 @@ double groundMeters(Ground ground, const LatLng& point, bool withBump) {
         return 0.0;
     }
     return coneMeters(point) + (withBump ? bumpAt(point) : 0.0) + (ground == Ground::RaisedCone ? raisedBy : 0.0) +
-           (ground == Ground::HighCone ? highConeBy : 0.0);
+           (ground == Ground::HighCone || ground == Ground::HighSlope ? highConeBy : 0.0) +
+           (ground == Ground::HighSlope ? (point.longitude() - apex.longitude()) * 2000.0 : 0.0);
 }
 
 // The DEM tile z/x/y of the ground in Terrarium, each pixel holding the height at its centre.
@@ -730,6 +732,98 @@ TEST(TerrainSparseDEM, AStillWithoutTheClampKeepsTheCentreWhereItWasSet) {
     ASSERT_TRUE(still.finished);
     ASSERT_FALSE(still.error);
     EXPECT_EQ(*scene.map.getCameraOptions().centerAltitude, 0.0);
+    // The accepted blank: a default that lifts such a camera has to change this test on purpose.
+    EXPECT_GT(backgroundShare(still.image), 0.99);
+}
+
+// An anchored zoom owes a still on a reused map an anchor that slides the centre along the line of
+// sight, in passes (Map::renderStill(camera) does not settle it): each pass moves the camera, so
+// the still has to wait for its frame. It finishes with the centre on the ground under it; a still
+// that finished on the frame before a pass would leave it the pass's residual off the ground.
+TEST(TerrainSparseDEM, AStillOfAReusedMapWaitsForTheAnchorsPasses) {
+    SparseScene scene(stillOptions(Ground::HighCone, Missing::NotFound, TilesetKind::Sparse, /*hillshadeOnly=*/true));
+    scene.map.setCenterClampedToGround(true);
+    scene.map.jumpTo(CameraOptions().withCenter(flank).withZoom(arrivalZoom).withPitch(pitch).withBearing(0.0));
+    ASSERT_TRUE(renderStillWithin(scene.frontend, scene.map).finished);
+
+    scene.map.jumpTo(CameraOptions().withZoom(arrivalZoom + 0.5).withAnchor(ScreenCoordinate{128.0, 60.0}));
+    Still still;
+    bool done = false;
+    {
+        gfx::BackendScope guard{*scene.frontend.getBackend()};
+        scene.map.renderStill(scene.map.getCameraOptions(), MapDebugOptions::NoDebug, [&](const std::exception_ptr& e) {
+            still.error = e;
+            if (!e) {
+                still.image = scene.frontend.readStillImage();
+            }
+            done = true;
+        });
+        const auto deadline = std::chrono::steady_clock::now() + stillLimit;
+        while (!done && std::chrono::steady_clock::now() < deadline) {
+            util::RunLoop::Get()->runOnce();
+        }
+    }
+    ASSERT_TRUE(done) << "the still image never finished";
+    ASSERT_FALSE(still.error);
+    const CameraOptions camera = scene.map.getCameraOptions();
+    EXPECT_NEAR(*camera.centerAltitude, groundMeters(Ground::HighCone, *camera.center, false), 1.0)
+        << "the still finished before the anchor's passes put the centre on the ground";
+    EXPECT_LT(backgroundShare(still.image), 0.5);
+}
+
+// A still that fails after drawing again for the clamp leaves nothing to the next one: eight of
+// them in a row (the cap) would use up the redraws of a still that kept them, which would then draw
+// from under the ground.
+TEST(TerrainSparseDEM, AStillThatFailedLeavesTheNextItsRedraws) {
+    // The colour relief: a hillshade of ground this gentle is close to the background.
+    SparseScene scene(stillOptions(Ground::HighSlope, Missing::NotFound, TilesetKind::Sparse, /*hillshadeOnly=*/false));
+    scene.map.setCenterClampedToGround(true);
+    // Fails each tile first asked for after the clamp has moved the camera: the frame drawn again
+    // for the clamp needs tiles the frame before it did not.
+    std::set<CanonicalTileID> asked;
+    bool failNewTiles = true;
+    const auto tiles = scene.fileSource->tileResponse;
+    scene.fileSource->tileResponse = [&](const Resource& resource) -> std::optional<Response> {
+        if (resource.tileData && resource.loadingMethod != Resource::LoadingMethod::CacheOnly) {
+            const CanonicalTileID id(
+                resource.tileData->z, static_cast<uint32_t>(resource.tileData->x), resource.tileData->y);
+            const bool isNew = asked.insert(id).second;
+            if (failNewTiles && isNew && scene.map.getCameraOptions().centerAltitude.value_or(0.0) > 1.0) {
+                Response res;
+                res.error = std::make_unique<Response::Error>(Response::Error::Reason::Server,
+                                                              "no tile for this still");
+                return res;
+            }
+        }
+        return tiles(resource);
+    };
+    const auto cameraAt = [&](int place) {
+        // Far enough apart that no tile of one place serves another.
+        return CameraOptions()
+            .withCenter(LatLng(flank.latitude(), flank.longitude() + 0.4 * place))
+            .withZoom(arrivalZoom)
+            .withPitch(pitch)
+            .withBearing(0.0)
+            .withCenterAltitude(0.0);
+    };
+    // A still that finds no new tile finishes, and a finished still resets the count: eight in a
+    // row, as the cap needs.
+    int inARow = 0;
+    int place = 0;
+    for (; place < 40 && inARow < 8; ++place) {
+        scene.map.jumpTo(cameraAt(place));
+        const Still still = renderStillWithin(scene.frontend, scene.map);
+        ASSERT_TRUE(still.finished);
+        inARow = still.error ? inARow + 1 : 0;
+    }
+    ASSERT_EQ(inARow, 8) << "the stills did not fail after drawing again: the test proves nothing";
+
+    failNewTiles = false;
+    scene.map.jumpTo(cameraAt(place));
+    const Still still = renderStillWithin(scene.frontend, scene.map);
+    ASSERT_TRUE(still.finished);
+    ASSERT_FALSE(still.error);
+    EXPECT_LT(backgroundShare(still.image), 0.5) << "the still drew from under the ground";
 }
 
 namespace {

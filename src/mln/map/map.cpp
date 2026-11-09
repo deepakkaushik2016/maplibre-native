@@ -78,6 +78,9 @@ void Map::renderStill(StillImageCallback callback) {
         return;
     }
 
+    // A still that ended in an error can leave these behind: they are this still's own.
+    impl->stillFrameBeforeClamp = false;
+    impl->stillClampRedraws = 0;
     impl->stillImageRequest = std::make_unique<StillImageRequest>(std::move(callback));
 
     impl->onUpdate();

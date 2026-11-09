@@ -406,9 +406,12 @@ void Map::Impl::onDidFinishRenderingFrame(RenderMode renderMode,
     } else if (stillImageRequest && rendererFullyLoaded) {
         // The frame that reported the ground moved the clamped centre onto it, but was drawn from
         // where the centre was: from under a mountain, that is the background alone. Draw the
-        // frame the camera asks for and finish with that. The clamp settles in a frame or two (a
-        // jump, the centre's height then stays) and never waits on data: the cap only guards the
-        // still against a report that would keep moving the camera.
+        // frame the camera asks for and finish with that. Every move the clamp makes holds the
+        // still (noteClampMovedCamera). A plain jump settles in a frame or two and never waits on
+        // data. The cap (maxStillClampRedraws) pairs with the bracket's 16 passes (anchorAfterHold):
+        // it is half of them, so a bracket round a cliff in the data, which can take them all, ends
+        // the still at the cap with the last pass drawn and the centre within that pass of the
+        // ground. The cap always ends the still, whatever keeps moving the camera.
         if (stillFrameBeforeClamp && stillClampRedraws < maxStillClampRedraws) {
             stillFrameBeforeClamp = false;
             ++stillClampRedraws;
@@ -545,7 +548,15 @@ bool Map::Impl::setCenterAltitudeKeepingView(double altitudeMeters, double minim
         return false;
     }
     transform.jumpTo(keepingView);
+    noteClampMovedCamera();
     return true;
+}
+
+void Map::Impl::noteClampMovedCamera() {
+    // A still image waits for the frame drawn with this camera (onDidFinishRenderingFrame).
+    if (mode != MapMode::Continuous && stillImageRequest) {
+        stillFrameBeforeClamp = true;
+    }
 }
 
 void Map::Impl::returnCenterToSeaLevel() {
@@ -606,8 +617,8 @@ void Map::Impl::applyCenterClamp() {
         // above the terrain during an animation, lift it; the jump ends the fling at the slope.
         if (transitionKeepsView) {
             centerAnchorKeepsView = true;
-            if (eyeClearCenterAltitude() > transform.getState().getCenterAltitude() + 0.5) {
-                transform.jumpTo(CameraOptions().withCenterAltitude(eyeClearCenterAltitude()));
+            if (eyeClearCenterAltitude() > transform.getState().getCenterAltitude() + 0.5 &&
+                clampCenterToTerrain(eyeClearCenterAltitude())) {
                 onUpdate();
             }
         }
@@ -715,10 +726,6 @@ void Map::Impl::applyCenterClamp() {
         }
     }
     if (clampCenterToTerrain(target)) {
-        // A still image waits for the frame drawn with this camera (onDidFinishRenderingFrame).
-        if (mode != MapMode::Continuous && stillImageRequest) {
-            stillFrameBeforeClamp = true;
-        }
         onUpdate();
     }
 }
@@ -851,6 +858,7 @@ bool Map::Impl::clampCenterToTerrain(double elevationMeters) {
     // Raising the centre onto the terrain moves the orbit plane, not the centre's lng/lat,
     // so this settles rather than feeding back into the next frame's sample.
     transform.jumpTo(CameraOptions().withCenterAltitude(elevationMeters));
+    noteClampMovedCamera();
     return true;
 }
 

@@ -122,7 +122,8 @@ public:
     bool stillFrameBeforeClamp = false;
     /// Frames drawn again for the clamp, for the still image in progress.
     int stillClampRedraws = 0;
-    /// The most frames a still image draws again for the clamp.
+    /// The most frames a still image draws again for the clamp: half the 16 passes the bracket of
+    /// an anchor may take (anchorAfterHold), and the bound that ends the still whatever happens.
     static constexpr int maxStillClampRedraws = 8;
 
     double tileLodMinRadius = 3;
@@ -255,6 +256,8 @@ public:
     /// Moves the centre altitude to `elevationMeters` keeping lng/lat; false when the change
     /// is under the sub-metre threshold.
     bool clampCenterToTerrain(double elevationMeters);
+    /// Holds a pending still image for the frame after a move of the clamp's.
+    void noteClampMovedCamera();
     bool debugAboveGroundLog = false;
 };
 
