@@ -644,7 +644,9 @@ TEST(TerrainPaintDrape, LayerReorderShowsOnTheNextFrame) {
 // drape; the frame after the swap must show the new tiles' drape, exactly as the same swap does
 // with every target made anew.
 TEST(TerrainPaintDrape, ALentDrapeTextureShowsItsNewTile) {
-    const std::string layers = join({backgroundLayer, rasterLayer, fillLayer, lineLayer});
+    // No raster layer: which raster zoom fills the view's far edge after a jump depends on what
+    // has loaded by then, so two identical swaps can differ there. The overlay's tiles do not.
+    const std::string layers = join({backgroundLayer, fillLayer, lineLayer});
     const CameraOptions near =
         CameraOptions().withCenter(waypoint(0, viewNorthKm)).withZoom(13.0).withPitch(45.0).withBearing(0.0);
     // A zoom level out and to the east: every drape tile of the cover changes.
