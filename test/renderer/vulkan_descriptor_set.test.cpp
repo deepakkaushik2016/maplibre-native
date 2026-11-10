@@ -429,6 +429,16 @@ TEST(VulkanOffscreenTexture, CompatibleTargetsShareTheirPipelines) {
     test.backend.getDevice()->waitIdle(test.backend.getDispatcher());
 }
 
+// Whether the render pass has a stencil decides the pipeline's stencil state and its dynamic states,
+// so pipelines with and without one are never the same pipeline.
+TEST(VulkanPipelineInfo, TheHashSeesWhetherTheRenderPassHasAStencil) {
+    vulkan::PipelineInfo info;
+    info.renderPassHasStencil = true;
+    const auto withStencil = info.hash();
+    info.renderPassHasStencil = false;
+    EXPECT_NE(info.hash(), withStencil);
+}
+
 namespace {
 
 // Draws a full-target green triangle with one shader, through the shader's pipeline cache.

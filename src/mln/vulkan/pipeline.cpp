@@ -422,6 +422,7 @@ std::size_t PipelineInfo::hash() const {
                       stencilDepthFail,
                       wideLines,
                       renderPassKey,
+                      renderPassHasStencil,
                       vertexInputHash);
 }
 
