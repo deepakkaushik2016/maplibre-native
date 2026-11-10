@@ -283,6 +283,64 @@ TEST(TerrainMeshCover, TilesPastTheDEMMapOntoTheirSubSquareOfTheAncestor) {
     }
 }
 
+TEST(TerrainMeshCover, ATileWithNoDEMTakesTheNeighbourSharingAnEdge) {
+    // The z13 tile under the camera, its DEM still loading, with no ancestor's loaded; its north
+    // neighbour's DEM is, and one at its corner, and one two rows south.
+    const UnwrappedTileID tile(13, 1375, 3169);
+    const UnwrappedTileID north(13, 1375, 3168);
+    const auto edge = RenderTerrain::edgeDEM(tile,
+                                             {UnwrappedTileID(13, 1376, 3168), UnwrappedTileID(13, 1375, 3171), north});
+    ASSERT_TRUE(edge);
+    EXPECT_EQ(north, edge->demTile);
+    // The tile lies one DEM tile south: x as the neighbour's, y past its southern edge, where
+    // get_elevation() clamps to the edge texels.
+    EXPECT_EQ((std::array<float, 2>{{0.0f, 1.0f}}), inDEM(edge->mapping, 0, 0));
+    EXPECT_EQ((std::array<float, 2>{{1.0f, 2.0f}}), inDEM(edge->mapping, util::EXTENT, util::EXTENT));
+}
+
+TEST(TerrainMeshCover, ATileWithNoDEMMapsOntoNeighboursOfAnyZoom) {
+    const UnwrappedTileID tile(13, 1375, 3169);
+    {
+        // Apart: the z12 tile (686, 1584) spans z13 x 1372-1373, one column away from x 1375. It
+        // is the nearest, and lends the heights along its east edge.
+        const auto edge = RenderTerrain::edgeDEM(tile,
+                                                 {UnwrappedTileID(12, 683, 1584), UnwrappedTileID(12, 686, 1584)});
+        ASSERT_TRUE(edge);
+        EXPECT_EQ(UnwrappedTileID(12, 686, 1584), edge->demTile);
+        EXPECT_EQ((std::array<float, 2>{{1.5f, 0.5f}}), inDEM(edge->mapping, 0, 0));
+        // Past maxEdgeDEMGap (4 tile widths), none: z13 x 1366-1367 is seven columns away.
+        EXPECT_FALSE(RenderTerrain::edgeDEM(tile, {UnwrappedTileID(12, 683, 1584)}));
+    }
+    {
+        // A coarser one sharing the south edge: z12 (687, 1585) spans z13 x 1374-1375, y 3170-3171.
+        const auto edge = RenderTerrain::edgeDEM(tile, {UnwrappedTileID(12, 687, 1585)});
+        ASSERT_TRUE(edge);
+        EXPECT_EQ((std::array<float, 2>{{0.5f, -0.5f}}), inDEM(edge->mapping, 0, 0));
+        EXPECT_EQ((std::array<float, 2>{{1.0f, 0.0f}}), inDEM(edge->mapping, util::EXTENT, util::EXTENT));
+    }
+    {
+        // A finer one inside the tile: the z14 child shares half of two edges, as much as the
+        // north neighbour's whole edge; the tie goes to the deeper DEM, a corner gets less.
+        const UnwrappedTileID child(14, 2751, 6339);
+        const auto edge = RenderTerrain::edgeDEM(
+            tile, {UnwrappedTileID(13, 1374, 3168), UnwrappedTileID(13, 1375, 3168), child});
+        ASSERT_TRUE(edge);
+        EXPECT_EQ(child, edge->demTile);
+        const auto inside = RenderTerrain::edgeDEM(tile, {child});
+        ASSERT_TRUE(inside);
+        EXPECT_EQ((std::array<float, 2>{{-1.0f, -1.0f}}), inDEM(inside->mapping, 0, 0));
+        EXPECT_EQ((std::array<float, 2>{{1.0f, 1.0f}}), inDEM(inside->mapping, util::EXTENT, util::EXTENT));
+    }
+    {
+        // Across the antimeridian: the last tile of wrap 0 touches the first of wrap 1.
+        const UnwrappedTileID last(13, 8191, 3169);
+        const auto edge = RenderTerrain::edgeDEM(last, {UnwrappedTileID(13, 8192, 3169)});
+        ASSERT_TRUE(edge);
+        EXPECT_EQ((std::array<float, 2>{{-1.0f, 0.0f}}), inDEM(edge->mapping, 0, 0));
+    }
+    EXPECT_FALSE(RenderTerrain::edgeDEM(tile, {}));
+}
+
 namespace {
 
 // Elevation a flat plateau `meters` up, for a cover that is tested against terrain.

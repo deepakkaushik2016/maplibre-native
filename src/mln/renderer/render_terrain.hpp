@@ -105,6 +105,23 @@ public:
     /// layers hand to get_elevation().
     static std::array<float, 3> demTileMapping(const CanonicalTileID& tile, const CanonicalTileID& demTile);
 
+    /// Of `demTiles`, the one nearest `tile` (whatever its zoom; at most maxEdgeDEMGap of
+    /// `tile`'s widths away), then sharing the most of its edges, then the deepest, then by tile
+    /// ID; std::nullopt if none is that near. With it, the mapping of `tile` into that DEM's
+    /// normalized coordinates, as demTileMapping gives for an ancestor: the coordinates fall
+    /// outside 0..1 on `tile`'s side of the DEM, where get_elevation() clamps to the DEM's edge
+    /// texels, so the heights along that edge carry across the tile. This stands in for a tile
+    /// with neither its own DEM nor an ancestor's: flat at sea level instead, it would sink below
+    /// loaded neighbours on high ground and show their skirts.
+    struct EdgeDEM {
+        UnwrappedTileID demTile;
+        std::array<float, 3> mapping;
+    };
+    static std::optional<EdgeDEM> edgeDEM(const UnwrappedTileID& tile, const std::vector<UnwrappedTileID>& demTiles);
+    /// How many of a tile's widths a DEM may lie from it and still lend it heights (edgeDEM): the
+    /// tiles that come into view on a pan, a row or two beyond the loaded ground.
+    static constexpr double maxEdgeDEMGap = 4.0;
+
     /// The point the mesh-tile cap measures distance from, in normalized web-mercator [0, 1]:
     /// the ground under the camera (the map centre when the map is not tilted).
     static std::array<double, 2> meshTileCapOrigin(const TransformState& state);

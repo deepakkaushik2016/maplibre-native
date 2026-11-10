@@ -28,6 +28,16 @@ TEST(TerrainCachePolicy, KeepsTheSameOrADeeperAncestor) {
     EXPECT_FALSE(shouldRebind({0, -1}, {0, -1}));
 }
 
+TEST(TerrainCachePolicy, RebindsFromThePlaceholderToANeighbourDEM) {
+    // Tier 0 with a zoom: a tile with no DEM of its own or of an ancestor, on a neighbour's.
+    EXPECT_TRUE(shouldRebind({0, -1}, {0, 12}));  // placeholder -> neighbour
+    EXPECT_TRUE(shouldRebind({0, 11}, {0, 12}));  // a deeper neighbour
+    EXPECT_FALSE(shouldRebind({0, 12}, {0, 12})); // another neighbour at the same zoom: keep it
+    EXPECT_FALSE(shouldRebind({0, 12}, {0, -1})); // the neighbour went away: keep what is bound
+    EXPECT_TRUE(shouldRebind({0, 12}, {1, 9}));   // any ancestor
+    EXPECT_FALSE(shouldRebind({1, 9}, {0, 12}));
+}
+
 namespace {
 std::vector<DrapeGroupFallback> groups(std::initializer_list<int16_t> deficits) {
     std::vector<DrapeGroupFallback> out;

@@ -43,6 +43,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_elevation.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_line_drape.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_dem_seam.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/renderer/terrain_missing_dem.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_motion_drape.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_feature_state.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_paint_drape.test.cpp

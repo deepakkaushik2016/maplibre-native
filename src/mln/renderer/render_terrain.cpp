@@ -1,4 +1,5 @@
 #include <mln/renderer/render_terrain.hpp>
+#include <mln/renderer/sources/render_raster_dem_source.hpp>
 #include <mln/renderer/update_parameters.hpp>
 #include <mln/renderer/render_source.hpp>
 #include <mln/renderer/render_tile.hpp>
@@ -346,6 +347,53 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(
 std::array<float, 3> RenderTerrain::demTileMapping(const CanonicalTileID& tile, const CanonicalTileID& demTile) {
     const auto off = demSubTileOffset(tile, demTile);
     return {{1.0f / (util::EXTENT * off.scale), off.dx / off.scale, off.dy / off.scale}};
+}
+
+std::optional<RenderTerrain::EdgeDEM> RenderTerrain::edgeDEM(const UnwrappedTileID& tile,
+                                                             const std::vector<UnwrappedTileID>& demTiles) {
+    // Bounds in units of `tile`'s zoom, wraps unrolled so tiles across the antimeridian compare.
+    const auto x0 = static_cast<double>(tile.canonical.x) +
+                    static_cast<double>(tile.wrap) * static_cast<double>(1u << tile.canonical.z);
+    const auto y0 = static_cast<double>(tile.canonical.y);
+    struct Rank {
+        double gap;    // tiles between them, the larger of the two axes; 0 when they touch
+        double shared; // the length of edge they share (the overlap along both axes)
+        int zoom;
+    };
+    const auto better = [](const Rank& a, const Rank& b) {
+        if (a.gap != b.gap) return a.gap < b.gap;
+        if (a.shared != b.shared) return a.shared > b.shared;
+        return a.zoom > b.zoom;
+    };
+    std::optional<EdgeDEM> best;
+    Rank bestRank{};
+    for (const auto& dem : demTiles) {
+        const double size = std::exp2(static_cast<double>(tile.canonical.z) - dem.canonical.z);
+        const double dx0 = (static_cast<double>(dem.canonical.x) +
+                            static_cast<double>(dem.wrap) * static_cast<double>(1u << dem.canonical.z)) *
+                           size;
+        const double dy0 = static_cast<double>(dem.canonical.y) * size;
+        // How far the two overlap along each axis: negative when apart, 0 when they only touch.
+        const double overlapX = std::min(dx0 + size, x0 + 1.0) - std::max(dx0, x0);
+        const double overlapY = std::min(dy0 + size, y0 + 1.0) - std::max(dy0, y0);
+        const Rank rank{.gap = std::max({0.0, -overlapX, -overlapY}),
+                        .shared = std::max(0.0, overlapX) + std::max(0.0, overlapY),
+                        .zoom = dem.canonical.z};
+        if (rank.gap > maxEdgeDEMGap) {
+            continue;
+        }
+        if (best && (better(bestRank, rank) || (!better(rank, bestRank) && !(dem < best->demTile)))) {
+            continue;
+        }
+        // u = position * scale + offset, in the DEM's 0..1: `tile`'s origin lies at offset.
+        const double scale = 1.0 / size;
+        best = EdgeDEM{.demTile = dem,
+                       .mapping = {{static_cast<float>(scale / util::EXTENT),
+                                    static_cast<float>((x0 - dx0) * scale),
+                                    static_cast<float>((y0 - dy0) * scale)}}};
+        bestRank = rank;
+    }
+    return best;
 }
 
 std::set<UnwrappedTileID> RenderTerrain::dilateCover(const std::set<UnwrappedTileID>& cover) {
@@ -753,6 +801,9 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     // tile of a Terrarium source arrives), drawables built on the old placeholder would sink
     // (Terrarium decodes the Mapbox zero texel to about -32 km) and are rebuilt below.
     const bool placeholderStale = placeholderDEMTexture && placeholderDEMUnpack != demUnpackVector;
+    // The loaded DEM tiles, listed the first time a tile with no DEM of its own or of an
+    // ancestor looks for a neighbour's (edgeDEM); not at all otherwise.
+    std::optional<std::vector<UnwrappedTileID>> demTileList;
 
     // Create terrain drawables for each mesh tile
     for (const auto& unwrapped : meshTiles) {
@@ -803,20 +854,50 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                     demTexture = entry.texture;
                 }
             }
-            if (!demTexture) {
-                // No DEM at all yet: render the mesh flat with the placeholder
-                // DEM so the draped map still shows (a briefly flat area is
-                // less jarring than a hole in the terrain)
-                demTexture = getPlaceholderDEMTexture(context);
-                if (!demTexture) {
-                    continue;
-                }
-            } else {
+            if (ancestorEntry) {
                 ancestorEntry->lastUsed = demUpdateCounter;
                 demTier = 1;
                 demTileUsed = ancestorID;
                 const auto mapping = demTileMapping(unwrapped.canonical, ancestorID->canonical);
                 demCoords = {{mapping[0], mapping[1], mapping[2], static_cast<float>(demDim)}};
+            } else {
+                // No DEM of its own or of an ancestor yet (a tile that just came into view, before
+                // its DEM arrives): carry a loaded neighbour's heights across it from their shared
+                // edge. Flat at sea level, it would sink below that neighbour on high ground - by
+                // kilometres in the mountains - and the camera would look down the neighbour's
+                // skirt, which smears its drape down the screen. Searched only for such tiles,
+                // never at rest. It stays in the placeholder's tier, with the neighbour's zoom, so
+                // the tile's own DEM or an ancestor's replaces it as soon as one loads.
+                // Not where the source answered empty, though: it has no DEM there, which the
+                // flat placeholder draws as sea level, as a DEM-less tile always has been.
+                const auto* rasterDEM = demSource->baseImpl->type == style::SourceType::RasterDEM
+                                            ? static_cast<const RenderRasterDEMSource*>(demSource)
+                                            : nullptr;
+                const auto demID = unwrapped.canonical.scaledTo(
+                    std::min(unwrapped.canonical.z, demSource->getMaxZoom()));
+                const bool knownEmpty = rasterDEM && rasterDEM->isKnownEmpty(demID);
+                if (!knownEmpty && !demTileList) {
+                    demTileList.emplace();
+                    demTileList->reserve(demTextures.size());
+                    for (const auto& entry : demTextures) {
+                        demTileList->push_back(entry.first);
+                    }
+                }
+                if (const auto edge = knownEmpty ? std::nullopt : edgeDEM(unwrapped, *demTileList)) {
+                    const auto neighbour = demTextures.find(edge->demTile);
+                    neighbour->second.lastUsed = demUpdateCounter;
+                    demTexture = neighbour->second.texture;
+                    demTileUsed = &neighbour->first;
+                    demCoords = {{edge->mapping[0], edge->mapping[1], edge->mapping[2], static_cast<float>(demDim)}};
+                } else {
+                    // No DEM anywhere near yet, or none there at all: render the mesh flat with the placeholder
+                    // DEM so the draped map still shows (a briefly flat area is
+                    // less jarring than a hole in the terrain)
+                    demTexture = getPlaceholderDEMTexture(context);
+                    if (!demTexture) {
+                        continue;
+                    }
+                }
             }
         }
 
@@ -828,8 +909,11 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             .tier = demTier,
             .demZoom = static_cast<int8_t>(demTileUsed ? static_cast<int>(demTileUsed->canonical.z) : -1)};
         if (const auto existing = tilesWithDrawables.find(tileID); existing != tilesWithDrawables.end()) {
-            if (!terrain::shouldRebind(existing->second, binding) &&
-                (!placeholderStale || existing->second.tier != 0)) {
+            // A drawable on the placeholder is rebuilt when the placeholder's encoding changed;
+            // one on a neighbour's DEM (tier 0 with a DEM zoom) does not use the placeholder.
+            const bool onStalePlaceholder = placeholderStale && existing->second.tier == 0 &&
+                                            existing->second.demZoom < 0;
+            if (!terrain::shouldRebind(existing->second, binding) && !onStalePlaceholder) {
                 continue;
             }
             lg->removeDrawablesIf(

@@ -8,7 +8,9 @@ namespace terrain {
 
 /// The DEM a terrain mesh drawable was built on.
 struct DEMBinding {
-    /// 0 = flat placeholder, 1 = closest loaded ancestor DEM, 2 = the tile's own DEM
+    /// 0 = no DEM of its own or of an ancestor: a loaded neighbour's DEM, its heights carried
+    /// across from the shared edge, or else the flat placeholder; 1 = closest loaded ancestor
+    /// DEM; 2 = the tile's own DEM
     uint8_t tier = 0;
     /// Zoom of the bound DEM tile (-1 for the placeholder)
     int8_t demZoom = -1;
@@ -20,12 +22,13 @@ struct DEMBinding {
 /// under a z13 tile samples 1/128th of that DEM, which renders flat), and the deeper ancestors that
 /// load moments later must replace it. maplibre-gl-js resolves the covering DEM tile every frame
 /// (Terrain.getTerrainData -> TileManager.getSourceTile(tileID, true)), so it never keeps a
-/// shallower one than it has.
+/// shallower one than it has. Within tier 0 a neighbour's DEM likewise beats the placeholder
+/// (zoom -1), and a deeper neighbour a shallower one.
 inline bool shouldRebind(const DEMBinding& current, const DEMBinding& available) {
     if (available.tier != current.tier) {
         return available.tier > current.tier;
     }
-    return available.tier == 1 && available.demZoom > current.demZoom;
+    return available.tier <= 1 && available.demZoom > current.demZoom;
 }
 
 /// How one draped layer group covers a drape target.

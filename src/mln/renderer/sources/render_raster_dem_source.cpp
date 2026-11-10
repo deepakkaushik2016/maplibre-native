@@ -86,6 +86,15 @@ std::optional<Range<int32_t>> RenderRasterDEMSource::getElevationRange(const Can
     return std::nullopt;
 }
 
+bool RenderRasterDEMSource::isKnownEmpty(const CanonicalTileID& id) const {
+    for (int z = id.z; z >= 0; --z) {
+        if (knownEmptyTiles->contains(id.scaledTo(static_cast<uint8_t>(z)))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::optional<Range<int32_t>> RenderRasterDEMSource::getNearbyElevationRange(const CanonicalTileID& id) const {
     // The tile's own entry wins over its ancestors': it already contains every loaded tile
     // inside the tile, which is what a large tile of the cover's traversal needs so that it is

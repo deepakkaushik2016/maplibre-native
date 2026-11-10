@@ -42,6 +42,11 @@ public:
     /// loaded.
     std::optional<Range<int32_t>> getNearbyElevationRange(const CanonicalTileID& id) const;
 
+    /// Whether `id`, or an ancestor of it, answered empty this session (see KnownEmptyDEMTiles):
+    /// the source has no DEM there, as opposed to one that has not arrived yet. A few hash
+    /// lookups.
+    bool isKnownEmpty(const CanonicalTileID& id) const;
+
 private:
     // RenderTileSetSource overrides
     void updateInternal(const Tileset&,
