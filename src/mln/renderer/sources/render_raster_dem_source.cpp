@@ -1,4 +1,5 @@
 #include <mln/renderer/sources/render_raster_dem_source.hpp>
+#include <mln/util/tile_range.hpp>
 #include <mln/renderer/render_tile.hpp>
 #include <mln/tile/raster_dem_tile.hpp>
 #include <mln/algorithm/update_tile_masks.hpp>
@@ -91,6 +92,26 @@ bool RenderRasterDEMSource::isKnownEmpty(const CanonicalTileID& id) const {
         if (knownEmptyTiles->contains(id.scaledTo(static_cast<uint8_t>(z)))) {
             return true;
         }
+    }
+    return false;
+}
+
+bool RenderRasterDEMSource::hasNoDEMAt(const CanonicalTileID& id) const {
+    const auto& tileset = getTileset();
+    if (tileset && tileset->bounds && id.z >= tileset->zoomRange.min && id.z <= tileset->zoomRange.max &&
+        !util::TileRange::fromLatLngBounds(*tileset->bounds, id.z).contains(id)) {
+        return true;
+    }
+    if (isKnownEmpty(id)) {
+        return true;
+    }
+    if (tileset && id.z < tileset->zoomRange.max) {
+        for (const auto& child : id.children()) {
+            if (!knownEmptyTiles->contains(child)) {
+                return false;
+            }
+        }
+        return true;
     }
     return false;
 }

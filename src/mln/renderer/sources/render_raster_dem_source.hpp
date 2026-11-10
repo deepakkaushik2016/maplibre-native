@@ -47,6 +47,16 @@ public:
     /// lookups.
     bool isKnownEmpty(const CanonicalTileID& id) const;
 
+    /// Whether the source will have no DEM at `id` (a tile at most at its maxzoom): it lies outside
+    /// the tileset's bounds, where nothing is asked for; or it, an ancestor, or all four of its
+    /// children answered empty (isKnownEmpty). False while its answer is still out, or when it
+    /// failed otherwise (the file source retries those).
+    bool hasNoDEMAt(const CanonicalTileID& id) const;
+
+    /// Moves whenever hasNoDEMAt may answer differently for some tile with the same tileset
+    /// (KnownEmptyDEMTiles::generation).
+    uint64_t noDEMGeneration() const { return knownEmptyTiles->generation(); }
+
 private:
     // RenderTileSetSource overrides
     void updateInternal(const Tileset&,

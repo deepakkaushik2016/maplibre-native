@@ -122,6 +122,15 @@ public:
     /// tiles that come into view on a pan, a row or two beyond the loaded ground.
     static constexpr double maxEdgeDEMGap = 4.0;
 
+    /// The DEM array layer the instanced depth pass samples for `tile` (OpenGL): that of the DEM
+    /// the tile's drawable is bound to (`boundTo`) as packed now (`layers`), or none when the tile
+    /// is on the placeholder or its DEM has left the array. Looked up every frame rather than kept
+    /// from when the drawable was built: a DEM leaving the cache frees its layer for another DEM,
+    /// while a tile bound to it (a neighbour's, which nothing retains for the tile) can outlive it.
+    static std::optional<uint32_t> depthLayerOf(const std::map<OverscaledTileID, UnwrappedTileID>& boundTo,
+                                                const std::map<UnwrappedTileID, uint32_t>& layers,
+                                                const OverscaledTileID& tile);
+
     /// The point the mesh-tile cap measures distance from, in normalized web-mercator [0, 1]:
     /// the ground under the camera (the map centre when the map is not tilted).
     static std::array<double, 2> meshTileCapOrigin(const TransformState& state);
@@ -579,10 +588,15 @@ private:
     // Per-drawable scale/offset into the bound DEM texture ({1,0,0,0} unless
     // an ancestor tile's DEM is bound); read by the terrain layer tweaker
     std::map<OverscaledTileID, std::array<float, 4>> drawableDemCoords;
+
+    // Tiles with no DEM of their own or of an ancestor (tier 0), with the DEM state
+    // {demCoverGeneration, the source's noDEMGeneration} their binding was resolved under; update()
+    // skips them until that state moves.
+    std::unordered_map<OverscaledTileID, std::pair<uint64_t, uint64_t>> settledWithoutDEM;
 #if MLN_RENDER_BACKEND_OPENGL
-    // Per-tile demTextureArray layer (own or ancestor DEM), -1 when the tile has no packed DEM;
-    // feeds the instanced depth pass (see rebuildInstancedDepthDrawable / depthInstances).
-    std::map<OverscaledTileID, float> drawableDemLayer;
+    // The DEM tile (own, ancestor or neighbour) each tile's drawable is bound to; the instanced
+    // depth pass looks its array layer up every frame (depthLayerOf).
+    std::map<OverscaledTileID, UnwrappedTileID> drawableDemTile;
 #endif
 
     // Mesh resolution (grid cells per side)

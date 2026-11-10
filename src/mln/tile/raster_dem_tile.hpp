@@ -92,7 +92,9 @@ public:
         const auto now = util::now();
         if (expires && *expires <= now) {
             // May not be reused: asked for again next time.
-            entries.erase(id);
+            if (entries.erase(id) > 0) {
+                ++changes;
+            }
             return;
         }
         if (entries.size() >= maxEntries && !entries.contains(id)) {
@@ -102,9 +104,26 @@ public:
             }
         }
         entries.insert_or_assign(id, expires);
+        ++changes;
     }
-    void remove(const CanonicalTileID& id) { entries.erase(id); }
-    void clear() { entries.clear(); }
+    void remove(const CanonicalTileID& id) {
+        if (entries.erase(id) > 0) {
+            ++changes;
+        }
+    }
+    void clear() {
+        if (!entries.empty()) {
+            ++changes;
+        }
+        entries.clear();
+    }
+    /// Moves whenever the record may answer contains() differently for some tile (an entry added,
+    /// replaced or dropped, or the record lapsing as a whole), so a caller can keep what it
+    /// derived from it until then. An entry reaching its expiry does not move it.
+    uint64_t generation() {
+        sync();
+        return changes;
+    }
     /// Whether `id` answered empty, that answer has not expired, and the cache has not changed as
     /// a whole since.
     bool contains(const CanonicalTileID& id) {
@@ -118,14 +137,18 @@ private:
     /// Forgets everything when the cache changed as a whole since the last look.
     void sync() {
         const auto current = ambientCacheGeneration().load(std::memory_order_relaxed);
-        if (current != generation) {
+        if (current != cacheGeneration) {
+            if (!entries.empty()) {
+                ++changes;
+            }
             entries.clear();
-            generation = current;
+            cacheGeneration = current;
         }
     }
 
     std::unordered_map<CanonicalTileID, std::optional<Timestamp>> entries;
-    uint64_t generation = ambientCacheGeneration().load(std::memory_order_relaxed);
+    uint64_t cacheGeneration = ambientCacheGeneration().load(std::memory_order_relaxed);
+    uint64_t changes = 0;
 };
 
 class RasterDEMTile final : public Tile {

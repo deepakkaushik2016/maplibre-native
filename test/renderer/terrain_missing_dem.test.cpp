@@ -16,6 +16,8 @@
 #include <mln/util/run_loop.hpp>
 
 #include <algorithm>
+#include <climits>
+#include <cstdlib>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -81,14 +83,16 @@ std::string stripes() {
     return R"({"type":"FeatureCollection","features":[)" + features + "]}";
 }
 
-std::string style() {
+// `bounds`: the DEM source's tileset bounds as a JSON array, or empty for none.
+std::string style(const std::string& bounds = "") {
     return R"STYLE({
   "version": 8,
   "sources": {
     "dem": {"type": "raster-dem", "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"], "encoding": "terrarium",
             "minzoom": )STYLE" +
            std::to_string(demZoom) + R"STYLE(, "maxzoom": )STYLE" + std::to_string(demZoom) +
-           R"STYLE(, "tileSize": 256},
+           R"STYLE(, "tileSize": 256)STYLE" + (bounds.empty() ? std::string() : ", \"bounds\": " + bounds) +
+           R"STYLE(},
     "stripes": {"type": "geojson", "data": )STYLE" +
            stripes() + R"STYLE(}
   },
@@ -121,7 +125,8 @@ CanonicalTileID demTileAt(const LatLng& point) {
 }
 
 // A phone-sized pitched map over the plateau. DEM tiles in `withheld` never arrive (they stay
-// loading, as over a slow network); every other one does at once.
+// loading, as over a slow network) until moved to `empty`, which answers them 204 No Content, as
+// a sparse tileset does where it has no data; every other one arrives at once.
 struct Scene {
     util::RunLoop loop;
     std::shared_ptr<StubFileSource> fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(),
@@ -131,11 +136,19 @@ struct Scene {
     MapAdapter map{
         frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
     std::set<CanonicalTileID> withheld;
+    std::set<CanonicalTileID> empty;
+    /// Every tile of this row and south of it answers empty too.
+    uint32_t emptyFromRow = UINT32_MAX;
     std::set<CanonicalTileID> served;
     const std::string tile = plateauTile();
 
-    explicit Scene(std::set<CanonicalTileID> withheld_)
-        : withheld(std::move(withheld_)) {
+    explicit Scene(std::set<CanonicalTileID> withheld_,
+                   std::set<CanonicalTileID> empty_ = {},
+                   const std::string& bounds = "",
+                   uint32_t emptyFromRow_ = UINT32_MAX)
+        : withheld(std::move(withheld_)),
+          empty(std::move(empty_)),
+          emptyFromRow(emptyFromRow_) {
         fileSource->tileResponse = [this](const Resource& resource) -> std::optional<Response> {
             Response res;
             if (!resource.tileData) {
@@ -144,6 +157,10 @@ struct Scene {
             }
             const CanonicalTileID id(
                 resource.tileData->z, static_cast<uint32_t>(resource.tileData->x), resource.tileData->y);
+            if (empty.contains(id) || id.y >= emptyFromRow) {
+                res.noContent = true;
+                return res;
+            }
             if (withheld.contains(id)) {
                 return std::nullopt;
             }
@@ -155,7 +172,7 @@ struct Scene {
             res.data = std::make_shared<std::string>(tile);
             return res;
         };
-        map.getStyle().loadJSON(style());
+        map.getStyle().loadJSON(style(bounds));
         map.jumpTo(CameraOptions().withCenter(center).withZoom(13.0).withPitch(50.0).withCenterAltitude(plateau *
                                                                                                         exaggeration));
         settle();
@@ -213,6 +230,35 @@ uint32_t tallestRun(const PremultipliedImage& image) {
     return tallest;
 }
 
+// The share of pixels that differ between two frames by more than a little in any channel.
+double differingShare(const PremultipliedImage& a, const PremultipliedImage& b) {
+    if (a.size != b.size) return 1.0;
+    size_t differing = 0;
+    const size_t count = static_cast<size_t>(a.size.width) * a.size.height;
+    for (size_t i = 0; i < count; ++i) {
+        for (int c = 0; c < 3; ++c) {
+            if (std::abs(int(a.data[i * 4 + c]) - int(b.data[i * 4 + c])) > 8) {
+                ++differing;
+                break;
+            }
+        }
+    }
+    return static_cast<double>(differing) / static_cast<double>(count);
+}
+
+// The DEM tiles under the bottom of the frame: under the eye's ground and under the bottom edge's
+// sea-level point, between which the line of sight meets the plateau.
+std::set<CanonicalTileID> nearTiles(Scene& scene) {
+    std::set<CanonicalTileID> near;
+    if (const auto eye = scene.map.getFreeCameraOptions().getLocation()) {
+        near.insert(demTileAt(eye->location));
+    }
+    for (const double x : {0.0, viewWidth / 2.0, static_cast<double>(viewWidth)}) {
+        near.insert(demTileAt(scene.map.latLngForPixel({x, static_cast<double>(viewHeight)})));
+    }
+    return near;
+}
+
 } // namespace
 
 TEST(TerrainMissingDEM, NearGroundWithNoDEMYetIsNotDrawnBelowItsNeighbours) {
@@ -222,14 +268,8 @@ TEST(TerrainMissingDEM, NearGroundWithNoDEMYetIsNotDrawnBelowItsNeighbours) {
         Scene loaded({});
         const auto still = loaded.image();
         ASSERT_LE(tallestRun(still), maxRun) << "the loaded view has no stripes: the test proves nothing";
-        // The DEM tiles under the bottom of the frame: under the eye's ground and under the
-        // bottom edge's sea-level point, between which the line of sight meets the plateau.
-        const auto eye = loaded.map.getFreeCameraOptions().getLocation();
-        ASSERT_TRUE(eye);
-        near.insert(demTileAt(eye->location));
-        for (const double x : {0.0, viewWidth / 2.0, static_cast<double>(viewWidth)}) {
-            near.insert(demTileAt(loaded.map.latLngForPixel({x, static_cast<double>(viewHeight)})));
-        }
+        near = nearTiles(loaded);
+        ASSERT_FALSE(near.empty());
         for (const auto& id : near) {
             ASSERT_TRUE(loaded.served.contains(id)) << "the near DEM tile is not in the cover";
         }
@@ -240,4 +280,73 @@ TEST(TerrainMissingDEM, NearGroundWithNoDEMYetIsNotDrawnBelowItsNeighbours) {
     Scene streaming(near);
     const auto still = streaming.image();
     EXPECT_LE(tallestRun(still), maxRun) << "the ground near the camera is drawn as walls";
+}
+
+namespace {
+
+// The near DEM tiles of the plateau view, from a scene with every tile loaded.
+std::set<CanonicalTileID> plateauNearTiles() {
+    Scene loaded({});
+    return nearTiles(loaded);
+}
+
+} // namespace
+
+// Where the source has no DEM (it answers 204), a tile has nothing to wait for and is drawn flat
+// at sea level, as before - even when, as in a continuous map, the empty answer lands after the
+// tile was first drawn on a neighbour's heights while its request was out. The frame then must
+// match that of a map that had the empty answers from the start.
+TEST(TerrainMissingDEM, ATileBorrowingHeightsGoesFlatOnceItsDEMAnswersEmpty) {
+    const auto near = plateauNearTiles();
+    ASSERT_FALSE(near.empty());
+
+    PremultipliedImage emptyFromTheStart;
+    {
+        Scene scene({}, near);
+        emptyFromTheStart = scene.image();
+        ASSERT_GT(tallestRun(emptyFromTheStart), maxRun)
+            << "the empty tiles are not drawn below their neighbours: the test proves nothing";
+    }
+
+    Scene scene(near);
+    const auto borrowing = scene.image();
+    ASSERT_LE(tallestRun(borrowing), maxRun) << "the loading tiles do not borrow heights: the test proves nothing";
+
+    // The requests still out now answer empty.
+    scene.empty = near;
+    scene.settle();
+    const auto still = scene.image();
+    EXPECT_LE(differingShare(still, emptyFromTheStart), 0.01)
+        << "the tile kept the heights it borrowed after its DEM answered empty";
+}
+
+// Past the DEM tileset's bounds the source asks for nothing, so no answer, empty or not, ever
+// comes: those tiles are drawn flat at sea level as before, not on a neighbour's heights.
+TEST(TerrainMissingDEM, ATileOutsideTheTilesetBoundsDoesNotBorrowHeights) {
+    const auto near = plateauNearTiles();
+    ASSERT_FALSE(near.empty());
+    // The bounds end a hair north of the northern edge of the southernmost near tile row, so the
+    // tiles south of that edge (the near ones; the view looks north) lie outside.
+    uint32_t nearRow = 0;
+    for (const auto& id : near) nearRow = std::max(nearRow, id.y);
+    uint32_t farRow = nearRow;
+    for (const auto& id : near) farRow = std::min(farRow, id.y);
+    const double n = std::pow(2.0, demZoom);
+    const double edge = util::rad2deg(std::atan(std::sinh(M_PI * (1.0 - 2.0 * farRow / n))));
+    const std::string bounds = "[10.0, " + std::to_string(edge + 0.0001) + ", 13.0, 49.0]";
+
+    PremultipliedImage emptyFromTheStart;
+    {
+        Scene scene({}, {}, "", farRow);
+        emptyFromTheStart = scene.image();
+        ASSERT_GT(tallestRun(emptyFromTheStart), maxRun)
+            << "the empty tiles are not drawn below their neighbours: the test proves nothing";
+    }
+    Scene scene({}, {}, bounds);
+    for (const auto& id : near) {
+        EXPECT_FALSE(scene.served.contains(id)) << "a near tile was asked for: the bounds miss it";
+    }
+    const auto still = scene.image();
+    EXPECT_LE(differingShare(still, emptyFromTheStart), 0.01)
+        << "a tile outside the tileset's bounds borrowed a neighbour's heights";
 }

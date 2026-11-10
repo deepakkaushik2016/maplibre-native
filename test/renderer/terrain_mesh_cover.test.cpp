@@ -341,6 +341,33 @@ TEST(TerrainMeshCover, ATileWithNoDEMMapsOntoNeighboursOfAnyZoom) {
     EXPECT_FALSE(RenderTerrain::edgeDEM(tile, {}));
 }
 
+TEST(TerrainMeshCover, ATileWithNoDEMPrefersAnEdgeToACorner) {
+    // A DEM touching only at a corner lends one texel's height to the whole tile (both axes clamp),
+    // so one along an edge wins even a tile away: 13/1375/3171 shares the tile's columns, two rows
+    // south; 13/1376/3168 touches its north-east corner.
+    const UnwrappedTileID tile(13, 1375, 3169);
+    const auto edge = RenderTerrain::edgeDEM(tile, {UnwrappedTileID(13, 1376, 3168), UnwrappedTileID(13, 1375, 3171)});
+    ASSERT_TRUE(edge);
+    EXPECT_EQ(UnwrappedTileID(13, 1375, 3171), edge->demTile);
+    // With only the corner one, it still lends that height rather than none.
+    const auto corner = RenderTerrain::edgeDEM(tile, {UnwrappedTileID(13, 1376, 3168)});
+    ASSERT_TRUE(corner);
+    EXPECT_EQ((std::array<float, 2>{{-1.0f, 1.0f}}), inDEM(corner->mapping, 0, 0));
+}
+
+TEST(TerrainMeshCover, TheDepthPassReadsTheLayerOfTheDEMATileIsBoundToNow) {
+    // A tile borrowing 13/1375/3168's DEM, packed in array layer 5. When that DEM leaves the cache
+    // its layer is freed and handed to another DEM; the tile must not keep sampling layer 5.
+    const OverscaledTileID tile(13, 0, CanonicalTileID(13, 1375, 3169));
+    const UnwrappedTileID donor(13, 1375, 3168);
+    const UnwrappedTileID other(13, 1380, 3160);
+    const std::map<OverscaledTileID, UnwrappedTileID> boundTo{{tile, donor}};
+    EXPECT_EQ(std::optional<uint32_t>(5), RenderTerrain::depthLayerOf(boundTo, {{donor, 5}}, tile));
+    EXPECT_EQ(std::nullopt, RenderTerrain::depthLayerOf(boundTo, {{other, 5}}, tile));
+    // A tile on the placeholder has no layer.
+    EXPECT_EQ(std::nullopt, RenderTerrain::depthLayerOf({}, {{donor, 5}}, tile));
+}
+
 namespace {
 
 // Elevation a flat plateau `meters` up, for a cover that is tested against terrain.
