@@ -977,7 +977,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         }
 #if MLN_RENDER_BACKEND_OPENGL
         if (demTileUsed) {
-            drawableDemTile[tileID] = *demTileUsed;
+            drawableDemTile.insert_or_assign(tileID, *demTileUsed);
         } else {
             drawableDemTile.erase(tileID);
         }
