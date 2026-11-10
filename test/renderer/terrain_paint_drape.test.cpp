@@ -11,6 +11,7 @@
 #include <mln/map/map_observer.hpp>
 #include <mln/map/map_options.hpp>
 #include <mln/renderer/renderer.hpp>
+#include <mln/renderer/texture_pool.hpp>
 #include <mln/storage/response.hpp>
 #include <mln/style/layers/background_layer.hpp>
 #include <mln/style/layers/color_relief_layer.hpp>
@@ -255,7 +256,11 @@ struct PaintScene {
         frontend, observer, fileSource, MapOptions().withMapMode(MapMode::Continuous).withSize(frontend.getSize())};
 
     /// `setup` runs on the style right after it is loaded (to add images, say).
-    explicit PaintScene(const std::string& layers, const std::function<void(style::Style&)>& setup = {}) {
+    /// `camera` replaces the default view, and `editStyle` the style JSON, when given.
+    explicit PaintScene(const std::string& layers,
+                        const std::function<void(style::Style&)>& setup = {},
+                        const std::optional<CameraOptions>& camera = std::nullopt,
+                        const std::function<std::string(std::string)>& editStyle = {}) {
         fileSource->tileResponse = [](const Resource& resource) -> std::optional<Response> {
             Response res;
             if (!resource.tileData) {
@@ -278,12 +283,14 @@ struct PaintScene {
             res.data = std::make_shared<std::string>(rasterTile());
             return res;
         };
-        map.getStyle().loadJSON(paintStyle(layers));
+        map.getStyle().loadJSON(editStyle ? editStyle(paintStyle(layers)) : paintStyle(layers));
         if (setup) {
             setup(map.getStyle());
         }
         map.jumpTo(
-            CameraOptions().withCenter(waypoint(0, viewNorthKm)).withZoom(13.0).withPitch(45.0).withBearing(0.0));
+            camera
+                ? *camera
+                : CameraOptions().withCenter(waypoint(0, viewNorthKm)).withZoom(13.0).withPitch(45.0).withBearing(0.0));
         settle();
     }
 
@@ -630,4 +637,66 @@ TEST(TerrainPaintDrape, LayerReorderShowsOnTheNextFrame) {
             style.addLayer(std::move(trail)); // on top
         },
         join({backgroundLayer, hillshadeLayer, translucentFill, wideLine}));
+}
+
+// A fly-to that crosses a zoom level replaces the whole drape cover, and the targets that leave it
+// lend their textures to the targets that join it. A lent texture still holds the old tile's
+// drape; the frame after the swap must show the new tiles' drape, exactly as the same swap does
+// with every target made anew.
+TEST(TerrainPaintDrape, ALentDrapeTextureShowsItsNewTile) {
+    const std::string layers = join({backgroundLayer, rasterLayer, fillLayer, lineLayer});
+    const CameraOptions near =
+        CameraOptions().withCenter(waypoint(0, viewNorthKm)).withZoom(13.0).withPitch(45.0).withBearing(0.0);
+    // A zoom level out and to the east: every drape tile of the cover changes.
+    const CameraOptions far =
+        CameraOptions().withCenter(waypoint(6.0, viewNorthKm + 1.0)).withZoom(11.8).withPitch(45.0).withBearing(20.0);
+    const auto swap = [&](bool lend, uint64_t& lent) {
+        TexturePool::setLendingEnabled(lend);
+        PaintScene scene(layers, {}, near);
+        PremultipliedImage before = scene.image();
+        const uint64_t lentBefore = TexturePool::texturesLent();
+        scene.map.jumpTo(far);
+        scene.settle();
+        lent = TexturePool::texturesLent() - lentBefore;
+        TexturePool::setLendingEnabled(true);
+        return std::make_pair(std::move(before), scene.image());
+    };
+    uint64_t lentWithout = 0;
+    uint64_t lentWith = 0;
+    const auto [nearImage, reference] = swap(false, lentWithout);
+    const auto [unused, lentImage] = swap(true, lentWith);
+    EXPECT_EQ(0u, lentWithout);
+    ASSERT_GT(lentWith, 0u) << "the cover swap lent no texture: the test proves nothing";
+    ASSERT_GE(differingShare(nearImage, reference), minChange) << "the two views look alike: the test proves nothing";
+    const double mismatch = differingShare(lentImage, reference);
+    EXPECT_LE(mismatch, maxMismatch) << mismatch * 100.0
+                                     << " % of the frame differs from the same swap without lending";
+}
+
+// RenderTerrain::update returns early when its DEM source has no tiles for the view. The terrain
+// drawables of the tiles that left the cover still go before the pool lends their textures, so
+// the pool can lend them, and nothing samples a lent texture for its old tile.
+TEST(TerrainPaintDrape, TheDrawablesOfLeavingTilesGoEvenWhenTheTerrainHasNoDEMTiles) {
+    const std::string layers = join({backgroundLayer, fillLayer});
+    const CameraOptions inside =
+        CameraOptions().withCenter(waypoint(0, viewNorthKm)).withZoom(13.0).withPitch(45.0).withBearing(0.0);
+    // Far outside the DEM's bounds: the DEM source has no tile there, so update() returns before
+    // it reaches its own pruning.
+    const CameraOptions outside =
+        CameraOptions().withCenter(LatLng{alpsLat, alpsLng + 3.0}).withZoom(12.5).withPitch(45.0);
+    const auto bounded = [](std::string style) {
+        const std::string anchor = R"("encoding": "terrarium",)";
+        const auto at = style.find(anchor);
+        EXPECT_NE(at, std::string::npos);
+        const std::string bounds = R"( "bounds": [)" + std::to_string(alpsLng - 0.5) + ", " +
+                                   std::to_string(alpsLat - 0.5) + ", " + std::to_string(alpsLng + 0.5) + ", " +
+                                   std::to_string(alpsLat + 0.5) + "],";
+        return style.insert(at + anchor.size(), bounds);
+    };
+    PaintScene scene(layers, {}, inside, bounded);
+    const uint64_t lentBefore = TexturePool::texturesLent();
+    scene.map.jumpTo(outside);
+    scene.settle();
+    EXPECT_GT(TexturePool::texturesLent(), lentBefore)
+        << "the leaving tiles' drawables still held their textures, so nothing was lent";
 }

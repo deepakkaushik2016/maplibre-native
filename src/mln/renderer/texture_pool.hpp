@@ -8,6 +8,14 @@
 namespace mln {
 class TexturePool {
 public:
+    /// How many drape textures pools have lent to new targets in this process (for tests and
+    /// diagnostics).
+    static uint64_t texturesLent();
+
+    /// Turns lending off or on for every pool in this process (on by default). For tests that
+    /// compare a frame drawn with lent textures against one drawn without.
+    static void setLendingEnabled(bool enabled);
+
     TexturePool(uint32_t tilesize);
     ~TexturePool();
 

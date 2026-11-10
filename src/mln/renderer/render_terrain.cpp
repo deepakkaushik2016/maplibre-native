@@ -517,6 +517,32 @@ std::set<UnwrappedTileID> RenderTerrain::coarsenFarMeshTiles(std::set<UnwrappedT
     return tiles;
 }
 
+void RenderTerrain::dropDrawablesOutside(const std::set<UnwrappedTileID>& cover) {
+    std::unordered_set<OverscaledTileID> keep;
+    for (const auto& id : cover) {
+        keep.emplace(id.canonical.z, id.wrap, id.canonical);
+    }
+    const auto leaving = [&](gfx::Drawable& drawable) {
+        return drawable.getTileID() && !keep.contains(*drawable.getTileID());
+    };
+    if (auto* lg = static_cast<LayerGroup*>(layerGroup.get())) {
+        lg->removeDrawablesIf(leaving);
+    }
+    if (auto* depthLg = static_cast<LayerGroup*>(depthLayerGroup.get())) {
+        if (depthLg->removeDrawablesIf(leaving) > 0) {
+            depthDirty = true;
+        }
+    }
+    for (auto it = tilesWithDrawables.begin(); it != tilesWithDrawables.end();) {
+        if (!keep.contains(it->first)) {
+            drawableDemCoords.erase(it->first);
+            it = tilesWithDrawables.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void RenderTerrain::prepareSource(RenderOrchestrator& orchestrator) {
     // Find the DEM source if we haven't already (see header: must happen before
     // the frame's drape-target pool is built, or the first frame renders no terrain)
@@ -670,29 +696,15 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     frameMeshCover.reset();
 
     // Drop drawables and cached DEM textures for tiles that left the mesh tile
-    // set, keeping everything else intact between frames
+    // set, keeping everything else intact between frames. Renderer::Impl has already
+    // dropped the drawables before building the frame's drape targets; this keeps the
+    // same when the mesh cover is computed here.
+    dropDrawablesOutside(meshTiles);
     std::unordered_set<OverscaledTileID> currentTiles;
     for (const auto& id : meshTiles) {
         currentTiles.emplace(id.canonical.z, id.wrap, id.canonical);
     }
-    lg->removeDrawablesIf(
-        [&](gfx::Drawable& drawable) { return drawable.getTileID() && !currentTiles.contains(*drawable.getTileID()); });
     auto* depthLg = static_cast<LayerGroup*>(depthLayerGroup.get());
-    if (depthLg) {
-        if (depthLg->removeDrawablesIf([&](gfx::Drawable& drawable) {
-                return drawable.getTileID() && !currentTiles.contains(*drawable.getTileID());
-            }) > 0) {
-            depthDirty = true;
-        }
-    }
-    for (auto it = tilesWithDrawables.begin(); it != tilesWithDrawables.end();) {
-        if (!currentTiles.contains(it->first)) {
-            drawableDemCoords.erase(it->first);
-            it = tilesWithDrawables.erase(it);
-        } else {
-            ++it;
-        }
-    }
     // Retain cached DEM textures that are related to the current tile set so they
     // can serve as ancestor fallbacks while exact tiles load (as maplibre-gl-js
     // retains terrain tiles in its source cache); drop unrelated ones

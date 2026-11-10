@@ -42,10 +42,19 @@ using LayerGroupBasePtr = std::shared_ptr<LayerGroupBase>;
 /// Render target class
 class RenderTarget {
 public:
+    /// What a target's offscreen texture is: its size, colour channel type and whether it has a
+    /// stencil (it always has depth).
+    struct Spec {
+        Size size;
+        gfx::TextureChannelDataType type;
+        bool stencil;
+        bool operator==(const Spec&) const = default;
+    };
+
     RenderTarget(gfx::Context& context, const Size size, const gfx::TextureChannelDataType type, bool stencil);
     /// A target drawing into the offscreen texture of one that is gone, which keeps its GPU
     /// memory: no texture, buffer or framebuffer is made for it.
-    RenderTarget(gfx::Context& context, std::unique_ptr<gfx::OffscreenTexture> offscreenTexture);
+    RenderTarget(gfx::Context& context, std::unique_ptr<gfx::OffscreenTexture> offscreenTexture, const Spec& spec);
     ~RenderTarget();
 
     /// Set the color the render target is cleared to before its layer groups are drawn. A drape
@@ -77,6 +86,11 @@ public:
     /// Hands over the offscreen texture, for a new target to draw into. The target can't draw
     /// afterwards; only its last owner may take it.
     std::unique_ptr<gfx::OffscreenTexture> takeOffscreenTexture() { return std::move(offscreenTexture); }
+
+    const Spec& getSpec() const { return spec; }
+
+    /// Whether this target can lend its offscreen texture to a new target of spec `wanted`.
+    bool canLend(const Spec& wanted) const;
 
     /// @brief Add a layer group to the render target
     /// @param replace Flag to replace if exists
@@ -177,6 +191,7 @@ protected:
     DrapeCoverage computeDrapeCoverage(RenderOrchestrator&, const PaintParameters&) const;
 
     gfx::Context& context;
+    Spec spec;
     std::unique_ptr<gfx::OffscreenTexture> offscreenTexture;
     using LayerGroupMap = std::map<int32_t, LayerGroupBasePtr>;
     LayerGroupMap layerGroupsByLayerIndex;

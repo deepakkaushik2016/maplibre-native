@@ -155,6 +155,11 @@ public:
     /// ever created - the map rendered empty.
     void setFrameMeshCover(std::set<UnwrappedTileID> cover) { frameMeshCover = std::move(cover); }
 
+    /// Drops the terrain drawables (and their bookkeeping) of tiles outside `cover`. Renderer::Impl
+    /// calls it before the drape-target pool is updated: a leaving tile's drawable holds its drape
+    /// texture, which the pool can lend to a joining tile only once nothing samples it.
+    void dropDrawablesOutside(const std::set<UnwrappedTileID>& cover);
+
     /**
      * @brief Update terrain rendering (create/update drawables)
      * @param orchestrator Render orchestrator for accessing render sources

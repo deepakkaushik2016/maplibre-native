@@ -42,13 +42,17 @@ RenderTarget::RenderTarget(gfx::Context& context_,
                            const Size size,
                            const gfx::TextureChannelDataType type,
                            const bool stencil)
-    : context(context_) {
+    : context(context_),
+      spec{.size = size, .type = type, .stencil = stencil} {
     offscreenTexture = context.createOffscreenTexture(size, type, /*depth=*/true, stencil);
     backgroundColor = Color{0.0f, 0.0f, 0.0f, 1.0f};
 }
 
-RenderTarget::RenderTarget(gfx::Context& context_, std::unique_ptr<gfx::OffscreenTexture> offscreenTexture_)
+RenderTarget::RenderTarget(gfx::Context& context_,
+                           std::unique_ptr<gfx::OffscreenTexture> offscreenTexture_,
+                           const Spec& spec_)
     : context(context_),
+      spec(spec_),
       offscreenTexture(std::move(offscreenTexture_)) {
     assert(offscreenTexture);
     backgroundColor = Color{0.0f, 0.0f, 0.0f, 1.0f};
@@ -56,8 +60,20 @@ RenderTarget::RenderTarget(gfx::Context& context_, std::unique_ptr<gfx::Offscree
 
 RenderTarget::~RenderTarget() = default;
 
+bool RenderTarget::canLend(const Spec& wanted) const {
+    if (!offscreenTexture || spec != wanted || offscreenTexture->getSize() != wanted.size) {
+        return false;
+    }
+    // The colour texture must be the offscreen texture's alone: a terrain drawable that still
+    // samples it would show whatever the new target draws for another tile.
+    const auto& texture = offscreenTexture->getTexture();
+    return texture && texture.use_count() == 1 && texture->getSize() == wanted.size;
+}
+
 const gfx::Texture2DPtr& RenderTarget::getTexture() {
-    return offscreenTexture->getTexture();
+    static const gfx::Texture2DPtr none;
+    // A target that has lent its offscreen texture has no texture.
+    return offscreenTexture ? offscreenTexture->getTexture() : none;
 };
 
 bool RenderTarget::addLayerGroup(LayerGroupBasePtr layerGroup, const bool replace) {

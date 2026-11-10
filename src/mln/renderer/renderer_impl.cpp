@@ -275,8 +275,11 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         terrain->prepareSource(orchestrator);
         const std::set<UnwrappedTileID> demTileIDs = terrain->computeMeshCover(state, updateParameters);
         // Targets leaving the cover lend their textures to those joining it (see
-        // TexturePool::updateRenderTargets), which needs the pool to be their only owner.
+        // TexturePool::updateRenderTargets) only when nothing else holds the target or its
+        // texture: the orchestrator's references and the leaving tiles' terrain drawables go
+        // first. RenderTerrain::update can return before its own pruning (no DEM tiles yet).
         orchestrator.releaseDrapeRenderTargets();
+        terrain->dropDrawablesOutside(demTileIDs);
         drapeTargetCreated = texturePool.updateRenderTargets(context, demTileIDs, renderTreeParameters.backgroundColor);
         frameDrapeTargetCount = demTileIDs.size();
         // Hand the exact cover to RenderTerrain so its mesh matches this pool
