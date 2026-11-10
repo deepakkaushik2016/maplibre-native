@@ -6,7 +6,9 @@
 #include <mln/gfx/offscreen_texture.hpp>
 #include <mln/gfx/render_pass.hpp>
 #include <mln/shaders/layer_ubo.hpp>
+#include <mln/shaders/program_parameters.hpp>
 #include <mln/shaders/shader_defines.hpp>
+#include <mln/shaders/vulkan/shader_program.hpp>
 #include <mln/vulkan/command_encoder.hpp>
 #include <mln/vulkan/context.hpp>
 #include <mln/vulkan/descriptor_set.hpp>
@@ -53,6 +55,9 @@ struct DescriptorProbe {
     PFN_vkDestroyFramebuffer destroyFramebuffer = nullptr;
     PFN_vkDestroyRenderPass destroyRenderPass = nullptr;
     PFN_vkDestroyImageView destroyImageView = nullptr;
+    PFN_vkCreateGraphicsPipelines createGraphicsPipelines = nullptr;
+    /// Graphics pipelines created
+    unsigned pipelinesCreated = 0;
 };
 
 DescriptorProbe* probe = nullptr;
@@ -93,6 +98,16 @@ VKAPI_ATTR void VKAPI_CALL updateDescriptorSets(VkDevice device,
         }
     }
     probe->updateDescriptorSets(device, writeCount, writes, copyCount, copies);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL createGraphicsPipelines(VkDevice device,
+                                                       VkPipelineCache cache,
+                                                       uint32_t count,
+                                                       const VkGraphicsPipelineCreateInfo* infos,
+                                                       const VkAllocationCallbacks* allocator,
+                                                       VkPipeline* pipelines) {
+    probe->pipelinesCreated += count;
+    return probe->createGraphicsPipelines(device, cache, count, infos, allocator, pipelines);
 }
 
 VKAPI_ATTR void VKAPI_CALL destroyFramebuffer(VkDevice device,
@@ -169,6 +184,7 @@ public:
         state.beginCommandBuffer = dispatcher.vkBeginCommandBuffer;
         state.cmdBindDescriptorSets = dispatcher.vkCmdBindDescriptorSets;
         state.updateDescriptorSets = dispatcher.vkUpdateDescriptorSets;
+        state.createGraphicsPipelines = dispatcher.vkCreateGraphicsPipelines;
         state.destroyFramebuffer = dispatcher.vkDestroyFramebuffer;
         state.destroyRenderPass = dispatcher.vkDestroyRenderPass;
         state.destroyImageView = dispatcher.vkDestroyImageView;
@@ -176,6 +192,7 @@ public:
         dispatcher.vkBeginCommandBuffer = beginCommandBuffer;
         dispatcher.vkCmdBindDescriptorSets = cmdBindDescriptorSets;
         dispatcher.vkUpdateDescriptorSets = updateDescriptorSets;
+        dispatcher.vkCreateGraphicsPipelines = createGraphicsPipelines;
         dispatcher.vkDestroyFramebuffer = destroyFramebuffer;
         dispatcher.vkDestroyRenderPass = destroyRenderPass;
         dispatcher.vkDestroyImageView = destroyImageView;
@@ -410,6 +427,112 @@ TEST(VulkanOffscreenTexture, CompatibleTargetsShareTheirPipelines) {
     EXPECT_EQ(hashOf(*first), hashOf(*second)) << "two targets with the same formats share a pipeline";
     EXPECT_NE(hashOf(*first), hashOf(*noStencil)) << "a target without a stencil has its own pipeline";
     test.backend.getDevice()->waitIdle(test.backend.getDispatcher());
+}
+
+namespace {
+
+// Draws a full-target green triangle with one shader, through the shader's pipeline cache.
+class TriangleDrawer {
+public:
+    explicit TriangleDrawer(DescriptorTest<>& test_)
+        : test(test_),
+          program(test.context.createProgram(shaders::BuiltIn::BackgroundShader,
+                                             "triangle",
+                                             R"(
+void main() {
+    const vec2 corners[3] = vec2[](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    gl_Position = vec4(corners[gl_VertexIndex], 0.0, 1.0);
+}
+)",
+                                             R"(
+layout(location = 0) out vec4 fragColor;
+void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
+)",
+                                             ProgramParameters(1.0f, false),
+                                             {})) {}
+
+    ~TriangleDrawer() { test.backend.getDevice()->waitIdle(test.backend.getDispatcher()); }
+
+    void draw(gfx::OffscreenTexture& target) {
+        auto& context = test.context;
+        context.beginFrame();
+        {
+            auto encoder = context.createCommandEncoder();
+            auto pass = encoder->createRenderPass(
+                "target", {.renderable = target, .clearColor = Color::white(), .clearDepth = 1.0f, .clearStencil = 0});
+            const auto& buffer = static_cast<vulkan::CommandEncoder&>(*encoder).getCommandBuffer();
+            const auto& dispatcher = test.backend.getDispatcher();
+
+            vulkan::PipelineInfo info;
+            info.setRenderable(target);
+            info.setScissorRect({0, 0, target.getSize().width, target.getSize().height});
+            info.setDynamicValues(test.backend, buffer);
+            buffer->bindPipeline(vk::PipelineBindPoint::eGraphics, program->getPipeline(info).get(), dispatcher);
+            buffer->draw(3, 1, 0, 0, dispatcher);
+        }
+        context.submitFrame();
+        test.backend.getDevice()->waitIdle(test.backend.getDispatcher());
+    }
+
+private:
+    DescriptorTest<>& test;
+    vulkan::UniqueShaderProgram program;
+};
+
+} // namespace
+
+// The pipeline cache across the life of real drape targets: compatible targets draw through one
+// pipeline, and it still draws after the target it was built for has gone, as a pipeline only
+// needs a render pass compatible with the one it was created with.
+TEST(VulkanOffscreenTexture, APipelineOutlivesTheTargetItWasBuiltFor) {
+    DescriptorTest<> test;
+    auto& context = test.context;
+    TriangleDrawer drawer(test);
+    const auto makeTarget = [&](Size size, gfx::TextureChannelDataType type) {
+        return context.createOffscreenTexture(size, type, /*depth=*/true, /*stencil=*/true);
+    };
+    const auto expectGreen = [](gfx::OffscreenTexture& target) {
+        const auto image = target.readStillImage();
+        ASSERT_TRUE(image.valid());
+        const auto* pixel = image.data.get() + (image.size.height / 2 * image.stride()) + image.size.width / 2 * 4;
+        EXPECT_EQ(pixel[0], 0);
+        EXPECT_EQ(pixel[1], 255);
+        EXPECT_EQ(pixel[2], 0);
+        EXPECT_EQ(pixel[3], 255);
+    };
+
+    auto first = makeTarget({64, 64}, gfx::TextureChannelDataType::UnsignedByte);
+    drawer.draw(*first);
+    EXPECT_EQ(test.state.pipelinesCreated, 1u);
+    expectGreen(*first);
+
+    auto second = makeTarget({64, 64}, gfx::TextureChannelDataType::UnsignedByte);
+    drawer.draw(*second);
+    EXPECT_EQ(test.state.pipelinesCreated, 1u) << "a compatible target uses the same pipeline";
+    expectGreen(*second);
+
+    // The first target goes, with the render pass the pipeline was created for.
+    const VkRenderPass firstRenderPass = first->getResource<vulkan::RenderableResource>().getRenderPass().get();
+    first.reset();
+    for (int frame = 0; frame < 2; ++frame) {
+        context.beginFrame();
+        context.submitFrame();
+    }
+    test.backend.getDevice()->waitIdle(test.backend.getDispatcher());
+    ASSERT_EQ(test.state.renderPassesDestroyed, std::vector<VkRenderPass>{firstRenderPass});
+
+    // A smaller target too: its viewport and scissor are dynamic state.
+    auto third = makeTarget({32, 32}, gfx::TextureChannelDataType::UnsignedByte);
+    drawer.draw(*third);
+    EXPECT_EQ(test.state.pipelinesCreated, 1u) << "the pipeline outlives the render pass it was built against";
+    expectGreen(*third);
+
+    // A different colour format is a different, incompatible render pass.
+    auto halfFloat = makeTarget({64, 64}, gfx::TextureChannelDataType::HalfFloat);
+    drawer.draw(*halfFloat);
+    EXPECT_EQ(test.state.pipelinesCreated, 2u) << "a half-float target gets its own pipeline";
+    drawer.draw(*third);
+    EXPECT_EQ(test.state.pipelinesCreated, 2u) << "the unsigned byte pipeline stays cached";
 }
 
 // A render target's colour image holds megabytes (a terrain drape target is 1024 x 1024 RGBA), so it
