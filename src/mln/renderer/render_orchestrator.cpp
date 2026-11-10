@@ -1389,10 +1389,12 @@ bool RenderOrchestrator::removeRenderTarget(const RenderTargetPtr& renderTarget)
     }
 }
 
-void RenderOrchestrator::addRenderTargets(const TexturePool& texturePool) {
+void RenderOrchestrator::releaseDrapeRenderTargets() {
     // The pool owns the terrain drape targets and drops them when their tile leaves
-    // the cover, so rebuild our drape entries from it each frame. Merely adding
-    // would keep every drape target ever created alive here, rendering forever.
+    // the cover, so our drape entries are rebuilt from it each frame (addRenderTargets).
+    // Merely adding would keep every drape target ever created alive here, rendering
+    // forever. Releasing them before the pool updates also leaves the pool the only
+    // owner of a target that leaves the cover, so it can lend that target's texture.
     //
     // Non-drape targets (the hillshade prepare targets, added by change request) are
     // owned by their tile's bucket. When only this list still references one, the
@@ -1406,6 +1408,10 @@ void RenderOrchestrator::addRenderTargets(const TexturePool& texturePool) {
                                            return renderTarget.use_count() == 1;
                                        }),
                         renderTargets.end());
+}
+
+void RenderOrchestrator::addRenderTargets(const TexturePool& texturePool) {
+    releaseDrapeRenderTargets();
     texturePool.visitRenderTargets(
         [&](const RenderTargetPtr& renderTarget) { renderTargets.emplace_back(renderTarget); });
 }

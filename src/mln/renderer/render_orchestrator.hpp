@@ -155,6 +155,9 @@ public:
 
     bool addRenderTarget(RenderTargetPtr);
     bool removeRenderTarget(const RenderTargetPtr&);
+    /// Drops this frame's references to the drape targets (and to non-drape targets only
+    /// this list still holds); addRenderTargets adds the pool's targets back.
+    void releaseDrapeRenderTargets();
     void addRenderTargets(const TexturePool& texturePool);
 
     template <typename Func /* void(RenderTarget&) */>

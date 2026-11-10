@@ -274,10 +274,10 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         // permanent blankness in single-frame still renders (the render tests).
         terrain->prepareSource(orchestrator);
         const std::set<UnwrappedTileID> demTileIDs = terrain->computeMeshCover(state, updateParameters);
-        for (const auto& id : demTileIDs) {
-            drapeTargetCreated |= texturePool.createRenderTarget(context, id, renderTreeParameters.backgroundColor);
-        }
-        texturePool.removeStaleRenderTargets(demTileIDs);
+        // Targets leaving the cover lend their textures to those joining it (see
+        // TexturePool::updateRenderTargets), which needs the pool to be their only owner.
+        orchestrator.releaseDrapeRenderTargets();
+        drapeTargetCreated = texturePool.updateRenderTargets(context, demTileIDs, renderTreeParameters.backgroundColor);
         frameDrapeTargetCount = demTileIDs.size();
         // Hand the exact cover to RenderTerrain so its mesh matches this pool
         terrain->setFrameMeshCover(demTileIDs);

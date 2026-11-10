@@ -43,6 +43,9 @@ using LayerGroupBasePtr = std::shared_ptr<LayerGroupBase>;
 class RenderTarget {
 public:
     RenderTarget(gfx::Context& context, const Size size, const gfx::TextureChannelDataType type, bool stencil);
+    /// A target drawing into the offscreen texture of one that is gone, which keeps its GPU
+    /// memory: no texture, buffer or framebuffer is made for it.
+    RenderTarget(gfx::Context& context, std::unique_ptr<gfx::OffscreenTexture> offscreenTexture);
     ~RenderTarget();
 
     /// Set the color the render target is cleared to before its layer groups are drawn. A drape
@@ -70,6 +73,10 @@ public:
 
     /// Get the render target texture
     const gfx::Texture2DPtr& getTexture();
+
+    /// Hands over the offscreen texture, for a new target to draw into. The target can't draw
+    /// afterwards; only its last owner may take it.
+    std::unique_ptr<gfx::OffscreenTexture> takeOffscreenTexture() { return std::move(offscreenTexture); }
 
     /// @brief Add a layer group to the render target
     /// @param replace Flag to replace if exists

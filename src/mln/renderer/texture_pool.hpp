@@ -17,6 +17,12 @@ public:
     /// The drape target of tile `id`, created unless it exists; returns whether it was created.
     bool createRenderTarget(gfx::Context& context, const UnwrappedTileID& id, const Color& backgroundColor);
 
+    /// Makes the drape targets those of `cover`: drops the targets of tiles that left it and
+    /// creates targets for tiles that joined it. Returns whether a target was created.
+    bool updateRenderTargets(gfx::Context& context,
+                             const std::set<UnwrappedTileID>& cover,
+                             const Color& backgroundColor);
+
     /// Remove render targets for tiles that are no longer part of the given set
     void removeStaleRenderTargets(const std::set<UnwrappedTileID>& currentTiles);
 
