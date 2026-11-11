@@ -38,8 +38,10 @@ std::string seaLevelDEMTile() {
     return encodePNG(image);
 }
 
-// Flat terrain under a background and a fill, and `sky` as the style's sky ("" for none).
-std::string fogStyle(const std::string& sky) {
+// Flat terrain under a background and a fill, and `sky` as the style's sky ("" for none). With
+// `groundFill` a large fill stands in for the background, so the clear colour shows (transparent)
+// wherever no terrain is drawn.
+std::string fogStyle(const std::string& sky, bool groundFill) {
     return std::string(R"STYLE({
   "version": 8,
   "center": [10.0, 46.0],
@@ -53,13 +55,23 @@ std::string fogStyle(const std::string& sky) {
         "properties": {},
         "geometry": {"type": "Polygon", "coordinates": [[[9.9, 46.02], [10.1, 46.02], [10.1, 46.06], [9.9, 46.06], [9.9, 46.02]]]}
       }
+    },
+    "ground": {
+      "type": "geojson",
+      "data": {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {"type": "Polygon", "coordinates": [[[0, 40], [20, 40], [20, 55], [0, 55], [0, 40]]]}
+      }
     }
   },
   "terrain": {"source": "dem", "exaggeration": 1},
-  "layers": [
-    {"id": "background", "type": "background", "paint": {"background-color": "#b7c98f"}},
+  "layers": [)STYLE") +
+           (groundFill ? R"({"id": "ground", "type": "fill", "source": "ground", "paint": {"fill-color": "#b7c98f"}},)"
+                       : R"({"id": "background", "type": "background", "paint": {"background-color": "#b7c98f"}},)") +
+           R"STYLE(
     {"id": "area", "type": "fill", "source": "area", "paint": {"fill-color": "#6f8f4e"}}
-  ])STYLE") +
+  ])STYLE" +
            (sky.empty() ? "" : ",\n  \"sky\": " + sky) + "\n}";
 }
 
@@ -75,7 +87,7 @@ struct FogScene {
     HeadlessFrontend frontend;
     MapAdapter map;
 
-    FogScene(const std::string& sky, double pitch, Size size = {256, 256})
+    FogScene(const std::string& sky, double pitch, Size size = {256, 256}, bool groundFill = false)
         : frontend(size, 1),
           map(frontend,
               MapObserver::nullObserver(),
@@ -87,7 +99,7 @@ struct FogScene {
             return res;
         };
         map.setBounds(BoundOptions().withMaxPitch(85));
-        map.getStyle().loadJSON(fogStyle(sky));
+        map.getStyle().loadJSON(fogStyle(sky, groundFill));
         map.jumpTo(CameraOptions().withPitch(pitch));
     }
 
@@ -96,6 +108,20 @@ struct FogScene {
 
 bool sameImage(const PremultipliedImage& a, const PremultipliedImage& b) {
     return a.size == b.size && std::memcmp(a.data.get(), b.data.get(), a.bytes()) == 0;
+}
+
+// Pixels the terrain covers in `noSky` (opaque: the clear colour is transparent in a groundFill
+// scene) that differ in `withSky`. The terrain is drawn over the sky, so a difference there is the
+// terrain's own colour: fog.
+int foggedTerrainPixels(const PremultipliedImage& withSky, const PremultipliedImage& noSky) {
+    int count = 0;
+    for (size_t i = 0; i < noSky.bytes(); i += 4) {
+        const auto* a = noSky.data.get() + i;
+        if (a[3] == 255 && std::memcmp(a, withSky.data.get() + i, 4) != 0) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 } // namespace
@@ -113,12 +139,22 @@ TEST(TerrainFog, NoFogBelowPitch60) {
     EXPECT_FALSE(sameImage(FogScene(trueEarthSky, 65).render(), FogScene("", 65).render()));
 }
 
-// A style turns the fog off with fog-ground-blend 1: the fog starts at the far plane (as in gl-js).
+// A style turns the fog off with fog-ground-blend 1, at every pitch: the fog would start at the far
+// plane (as in gl-js). At pitch 80 native draws terrain past gl-js's far plane, where the fog depth
+// is above 1, so that terrain must stay unfogged too.
 TEST(TerrainFog, GroundBlendOneTurnsTheFogOff) {
     util::RunLoop loop;
     const std::string noFogSky = R"({"sky-color": "#3E7CC0", "horizon-color": "#DCE7EF", "fog-color": "#C6D4E0",
                                      "fog-ground-blend": 1})";
+    // Below the horizon there is no sky in the frame, so the whole frame must match.
     EXPECT_TRUE(sameImage(FogScene(noFogSky, 65).render(), FogScene("", 65).render()));
+
+    // At pitch 80 the sky is on screen; the terrain must match.
+    const Size size{256, 256};
+    const auto noSky = FogScene("", 80, size, true).render();
+    EXPECT_EQ(foggedTerrainPixels(FogScene(noFogSky, 80, size, true).render(), noSky), 0);
+    // The control: the True Earth sky fogs that terrain.
+    EXPECT_GT(foggedTerrainPixels(FogScene(trueEarthSky, 80, size, true).render(), noSky), 0);
 }
 
 // Frame time of the same still frame of terrain, rendered over and over with the True Earth sky and

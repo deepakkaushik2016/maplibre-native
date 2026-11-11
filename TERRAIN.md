@@ -311,9 +311,16 @@ Both are ports of maplibre-gl-js 6.16.0 (`1e0fbefe56`), driven by the style's `s
 
 ### Turning the fog off from the style
 
-`"fog-ground-blend": 1` gives no fog on any pitch: the fog would start at the far plane (gl-js and
-native alike; gtest `TerrainFog.GroundBlendOneTurnsTheFogOff`). A style without `sky` has neither sky
-nor fog. `horizon-fog-blend` only chooses the fog's colour, so it cannot turn the fog off. Reduced-tier
+`"fog-ground-blend": 1` gives no fog at any pitch, and the sky still draws. In gl-js the fog would
+start at its far plane, so nothing is fogged. Native draws terrain past that plane at high pitch (see
+"Known differences"), where the fog depth is above 1. So the tweaker sets the fog opacity to 0 for a
+ground blend of 1 (or more, clamped), and the shader takes the unfogged path everywhere. The gtest
+`TerrainFog.GroundBlendOneTurnsTheFogOff` checks this at pitch 65 (the whole frame matches a frame
+without a sky) and at pitch 80 (every terrain pixel matches, including the rows past gl-js's far
+plane).
+
+A style without `sky` has neither sky nor fog. `horizon-fog-blend` only chooses the fog's colour, so
+it cannot turn the fog off; a value of 1 is safe (the shader keeps its divisor off zero). Reduced-tier
 phones (outdoor-styles spec section 9: flat sky gradient, no fog) can therefore keep the style's sky
 and set `fog-ground-blend` to 1.
 
@@ -336,7 +343,7 @@ relief the cameras, and with them the fog distances, would differ. They draw a b
 than the numbered raster, because native and gl-js choose different tile zooms for a draped raster
 in a pitched view. All three fail without the fog (differences 0.051, 0.077 and 0.105). gtests:
 `SkyPass.*` (no sky draw call when the horizon is off screen) and `TerrainFog.*` (no fog below pitch
-60, and `fog-ground-blend` 1 turns it off).
+60, and `fog-ground-blend` 1 turns it off at pitch 65 and 80).
 
 ### Known differences from gl-js
 

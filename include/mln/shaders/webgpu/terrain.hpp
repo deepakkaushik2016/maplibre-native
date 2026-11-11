@@ -129,7 +129,8 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     if (props.fog_ground_blend_opacity > 0.0 && in.fog_depth > props.fog_ground_blend) {
         let gamma = vec4<f32>(2.2);
         let surface_color_linear = pow(surface_color, gamma);
-        let blend_color = smoothstep(0.0, 1.0, max((in.fog_depth - props.horizon_fog_blend) / (1.0 - props.horizon_fog_blend), 0.0));
+        // gl-js divides by 1 - horizon-fog-blend; kept off 0 so a blend of 1 cannot divide by zero.
+        let blend_color = smoothstep(0.0, 1.0, max((in.fog_depth - props.horizon_fog_blend) / max(1.0 - props.horizon_fog_blend, 1e-6), 0.0));
         let fog_horizon_color_linear = mix(pow(props.fog_color, gamma), pow(props.horizon_color, gamma), vec4<f32>(blend_color));
         // gl-js clips at the fog's far plane (fog depth 1); native draws terrain past it, so there the
         // factor stops at 1, fully fogged, instead of overshooting the fog colour. In front of the far

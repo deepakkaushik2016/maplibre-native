@@ -134,7 +134,8 @@ void main() {
     // targets do not depend on the fog.
     if (props.fog_ground_blend_opacity > 0.0 && frag_fog_depth > props.fog_ground_blend) {
         const vec4 surface_color_linear = gammaToLinear(surface_color);
-        const float blend_color = smoothstep(0.0, 1.0, max((frag_fog_depth - props.horizon_fog_blend) / (1.0 - props.horizon_fog_blend), 0.0));
+        // gl-js divides by 1 - horizon-fog-blend; kept off 0 so a blend of 1 cannot divide by zero.
+        const float blend_color = smoothstep(0.0, 1.0, max((frag_fog_depth - props.horizon_fog_blend) / max(1.0 - props.horizon_fog_blend, 1e-6), 0.0));
         const vec4 fog_horizon_color_linear = mix(gammaToLinear(props.fog_color), gammaToLinear(props.horizon_color), blend_color);
         // gl-js clips at the fog's far plane (fog depth 1); native draws terrain past it, so there the
         // factor stops at 1, fully fogged, instead of overshooting the fog colour. In front of the far

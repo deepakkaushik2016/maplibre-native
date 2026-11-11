@@ -65,6 +65,11 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
         propsUBO.fog_color = evaluated.get<style::SkyFogColor>();
         propsUBO.horizon_color = evaluated.get<style::SkyHorizonColor>();
         propsUBO.horizon_fog_blend = util::clamp(evaluated.get<style::SkyHorizonFogBlend>(), 0.0f, 1.0f);
+        // fog-ground-blend 1 starts the fog at gl-js's far plane, so gl-js draws none. Native draws
+        // terrain past that plane, where the shader would fog it fully; no opacity keeps it unfogged.
+        if (propsUBO.fog_ground_blend >= 1.0f) {
+            propsUBO.fog_ground_blend_opacity = 0.0f;
+        }
     }
 
     // Populate layer-level UBO with terrain properties
