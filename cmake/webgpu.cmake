@@ -43,6 +43,7 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/src/mln/shaders/webgpu/line.cpp
         ${PROJECT_SOURCE_DIR}/src/mln/shaders/webgpu/location_indicator.cpp
         ${PROJECT_SOURCE_DIR}/src/mln/shaders/webgpu/raster.cpp
+        ${PROJECT_SOURCE_DIR}/src/mln/shaders/webgpu/sky.cpp
         ${PROJECT_SOURCE_DIR}/src/mln/shaders/webgpu/symbol.cpp
         ${PROJECT_SOURCE_DIR}/src/mln/shaders/webgpu/terrain.cpp
         ${PROJECT_SOURCE_DIR}/src/mln/shaders/webgpu/terrain_depth.cpp
@@ -83,6 +84,7 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/webgpu/line.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/webgpu/location_indicator.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/webgpu/raster.hpp
+        ${PROJECT_SOURCE_DIR}/include/mln/shaders/webgpu/sky.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/webgpu/symbol.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/webgpu/terrain.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/webgpu/terrain_depth.hpp

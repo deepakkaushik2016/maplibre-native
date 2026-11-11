@@ -45,6 +45,7 @@ list(APPEND
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/gl/location_indicator.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/gl/location_indicator_textured.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/gl/raster.hpp
+        ${PROJECT_SOURCE_DIR}/include/mln/shaders/gl/sky.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/gl/symbol_icon.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/gl/symbol_sdf.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/gl/symbol_text_and_icon.hpp
@@ -119,6 +120,7 @@ list(APPEND INCLUDE_FILES
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/line_layer_ubo.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/location_indicator_ubo.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/raster_layer_ubo.hpp
+        ${PROJECT_SOURCE_DIR}/include/mln/shaders/sky_layer_ubo.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/shader_defines.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/symbol_layer_ubo.hpp
         ${PROJECT_SOURCE_DIR}/include/mln/shaders/widevector_ubo.hpp

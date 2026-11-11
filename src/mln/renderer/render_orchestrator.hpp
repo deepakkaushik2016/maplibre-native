@@ -28,6 +28,7 @@ namespace mln {
 class ChangeRequest;
 class RendererObserver;
 class RenderSource;
+class RenderSky;
 class RenderTerrain;
 class UpdateParameters;
 class RenderStaticData;
@@ -184,6 +185,9 @@ public:
 
     RenderTerrain* getRenderTerrain() const { return renderTerrain.get(); }
 
+    /// The style's sky; null when it has none.
+    RenderSky* getRenderSky() const { return renderSky.get(); }
+
     gfx::RenderingStats::FrameRenderedFeaturesMap&& moveFrameRenderedFeatures() {
         return std::move(frameRenderedFeatures);
     }
@@ -251,6 +255,7 @@ private:
     std::unordered_map<std::string, std::unique_ptr<RenderLayer>> renderLayers;
     RenderLight renderLight;
     std::unique_ptr<RenderTerrain> renderTerrain;
+    std::unique_ptr<RenderSky> renderSky;
 
     CrossTileSymbolIndex crossTileSymbolIndex;
     PlacementController placementController;

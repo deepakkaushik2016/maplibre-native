@@ -43,6 +43,7 @@ MBGL_DEFINE_ENUM(BuiltIn,
                   {BuiltIn::SymbolTextAndIconShader, "SymbolTextAndIconShader"},
                   {BuiltIn::TerrainShader, "TerrainShader"},
                   {BuiltIn::TerrainDepthShader, "TerrainDepthShader"},
+                  {BuiltIn::SkyShader, "SkyShader"},
                   {BuiltIn::WideVectorShader, "WideVectorShader"}});
 
 } // namespace mln

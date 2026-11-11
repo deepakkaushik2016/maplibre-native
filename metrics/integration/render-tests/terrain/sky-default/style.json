@@ -1,0 +1,29 @@
+{
+  "version": 8,
+  "metadata": {
+    "test": {
+      "description": "The style's sky with every property at its default (sky: {}) at pitch 70, where the horizon is just on screen. No terrain: maplibre-gl-js draws the sky with or without terrain, and with terrain it also fogs the ground at pitch 60 and above, which is a separate pass. expected.png is maplibre-gl-js 6.16.0. See README.md.",
+      "width": 256,
+      "height": 256,
+      "maxPitch": 85
+    }
+  },
+  "center": [
+    35.38,
+    31.55
+  ],
+  "zoom": 15,
+  "pitch": 70,
+  "bearing": 0,
+  "sources": {},
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#ccaa83"
+      }
+    }
+  ],
+  "sky": {}
+}

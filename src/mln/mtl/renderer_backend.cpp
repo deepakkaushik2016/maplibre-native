@@ -29,6 +29,7 @@
 #include <mln/shaders/mtl/symbol.hpp>
 #include <mln/shaders/mtl/terrain.hpp>
 #include <mln/shaders/mtl/terrain_depth.hpp>
+#include <mln/shaders/mtl/sky.hpp>
 #include <mln/shaders/mtl/widevector.hpp>
 
 #include <cassert>
@@ -120,6 +121,7 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::SymbolTextAndIconShader,
                   shaders::BuiltIn::TerrainShader,
                   shaders::BuiltIn::TerrainDepthShader,
+                  shaders::BuiltIn::SkyShader,
                   shaders::BuiltIn::WideVectorShader>(shaders, programParameters);
 }
 

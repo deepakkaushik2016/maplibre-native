@@ -26,6 +26,7 @@
 #include <mln/shaders/webgpu/symbol.hpp>
 #include <mln/shaders/webgpu/terrain.hpp>
 #include <mln/shaders/webgpu/terrain_depth.hpp>
+#include <mln/shaders/webgpu/sky.hpp>
 #include <mln/shaders/webgpu/widevector.hpp>
 
 namespace mln {
@@ -123,6 +124,7 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& registry, const ProgramPa
                   shaders::BuiltIn::SymbolTextAndIconShader,
                   shaders::BuiltIn::TerrainShader,
                   shaders::BuiltIn::TerrainDepthShader,
+                  shaders::BuiltIn::SkyShader,
                   shaders::BuiltIn::WideVectorShader>(registry, parameters);
 }
 

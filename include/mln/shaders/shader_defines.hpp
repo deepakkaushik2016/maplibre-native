@@ -155,6 +155,11 @@ enum {
 };
 
 enum {
+    idSkyPropsUBO = getEnumValue(drawableReservedUBOCount, layerUBOStartId),
+    skyUBOCount
+};
+
+enum {
     idSymbolEvaluatedPropsUBO = getEnumValue(symbolLayerSSBOCount, layerUBOStartId),
     symbolLayerUBOCount
 };
@@ -295,6 +300,7 @@ static constexpr uint32_t maxUBOCountPerShader = std::max({static_cast<uint32_t>
                                                            static_cast<uint32_t>(lineUBOCount),
                                                            static_cast<uint32_t>(locationIndicatorUBOCount),
                                                            static_cast<uint32_t>(rasterUBOCount),
+                                                           static_cast<uint32_t>(skyUBOCount),
                                                            static_cast<uint32_t>(symbolUBOCount),
                                                            static_cast<uint32_t>(terrainUBOCount),
                                                            static_cast<uint32_t>(wideVectorUBOCount)});
@@ -535,6 +541,11 @@ enum {
 };
 
 enum {
+    idSkyPosVertexAttribute,
+    skyVertexAttributeCount
+};
+
+enum {
 #if MLN_USE_SYMBOL_INSTANCING
     idSymbolPosAttribute,
 
@@ -606,6 +617,7 @@ static constexpr uint32_t maxAttributeCountPerShader = std::max({
     static_cast<uint32_t>(lineVertexAttributeCount),
     static_cast<uint32_t>(locationIndicatorVertexAttributeCount),
     static_cast<uint32_t>(rasterVertexAttributeCount),
+    static_cast<uint32_t>(skyVertexAttributeCount),
     static_cast<uint32_t>(symbolAttributeCount),
     static_cast<uint32_t>(terrainVertexAttributeCount),
     static_cast<uint32_t>(wideVectorAttributeCount),

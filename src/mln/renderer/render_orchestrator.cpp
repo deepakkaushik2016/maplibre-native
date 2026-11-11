@@ -10,6 +10,7 @@
 #include <mln/renderer/render_target.hpp>
 #include <mln/renderer/render_tree.hpp>
 #include <mln/renderer/dem_elevation_provider.hpp>
+#include <mln/renderer/render_sky.hpp>
 #include <mln/renderer/render_terrain.hpp>
 #include <mln/renderer/update_parameters.hpp>
 #include <mln/renderer/upload_parameters.hpp>
@@ -254,6 +255,24 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
 
     if (lightChanged || zoomChanged || globalStateChanged || renderLight.hasTransition()) {
         renderLight.evaluate(evaluationParameters);
+    }
+
+    // Update sky.
+    if (updateParameters->sky) {
+        bool skyChanged = false;
+        if (!renderSky) {
+            renderSky = std::make_unique<RenderSky>(*updateParameters->sky);
+            skyChanged = true;
+        } else if (renderSky->impl != *updateParameters->sky) {
+            renderSky->impl = *updateParameters->sky;
+            renderSky->transition(transitionParameters);
+            skyChanged = true;
+        }
+        if (skyChanged || zoomChanged || globalStateChanged || renderSky->hasTransition()) {
+            renderSky->evaluate(evaluationParameters);
+        }
+    } else {
+        renderSky.reset();
     }
 
     // Update terrain. The per-frame drawable/DEM update happens later in
@@ -1151,7 +1170,7 @@ RenderSource* RenderOrchestrator::getRenderSource(const std::string& id) const {
 }
 
 bool RenderOrchestrator::hasTransitions(TimePoint timePoint) const {
-    if (renderLight.hasTransition()) {
+    if (renderLight.hasTransition() || (renderSky && renderSky->hasTransition())) {
         return true;
     }
 
@@ -1355,6 +1374,10 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     // Update terrain if enabled
     if (renderTerrain && renderTerrain->isEnabled()) {
         renderTerrain->update(*this, shaders, context, texturePool, state, updateParameters, renderTree, changes);
+    }
+
+    if (renderSky) {
+        renderSky->update(shaders, context, state);
     }
 
     addChanges(changes);

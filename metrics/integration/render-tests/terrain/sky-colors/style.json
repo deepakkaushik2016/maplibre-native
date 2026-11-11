@@ -1,0 +1,37 @@
+{
+  "version": 8,
+  "metadata": {
+    "test": {
+      "description": "The True Earth sky (outdoor-styles spec section 4) at pitch 80, so 70 of the 109 rows of the sky-horizon gradient are on screen. No terrain (see sky-default/README.md). expected.png is maplibre-gl-js 6.16.0. See README.md.",
+      "width": 256,
+      "height": 256,
+      "maxPitch": 85
+    }
+  },
+  "center": [
+    35.38,
+    31.55
+  ],
+  "zoom": 15,
+  "pitch": 80,
+  "bearing": 0,
+  "sources": {},
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#ccaa83"
+      }
+    }
+  ],
+  "sky": {
+    "sky-color": "#3E7CC0",
+    "horizon-color": "#DCE7EF",
+    "fog-color": "#C6D4E0",
+    "sky-horizon-blend": 0.85,
+    "horizon-fog-blend": 0.75,
+    "fog-ground-blend": 0.35,
+    "atmosphere-blend": 0.9
+  }
+}

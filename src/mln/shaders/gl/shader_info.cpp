@@ -586,5 +586,16 @@ const std::vector<TextureInfo> TerrainDepthShaderInfo::textures = {
     TextureInfo{"u_dem_array", idTerrainDEMArrayTexture},
 };
 
+// Sky
+using SkyShaderInfo = ShaderInfo<BuiltIn::SkyShader, gfx::Backend::Type::OpenGL>;
+
+const std::vector<UniformBlockInfo> SkyShaderInfo::uniformBlocks = {
+    UniformBlockInfo{"SkyPropsUBO", idSkyPropsUBO},
+};
+const std::vector<AttributeInfo> SkyShaderInfo::attributes = {
+    AttributeInfo{"a_pos", idSkyPosVertexAttribute},
+};
+const std::vector<TextureInfo> SkyShaderInfo::textures = {};
+
 } // namespace shaders
 } // namespace mln

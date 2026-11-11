@@ -25,8 +25,9 @@ cd "$ROOT"
 
 # GeoJSONTile.* holds the tile-level test of the feature-state revision (Task 33).
 # StillImageOffline.* and the Offline* storage tests cover still images offline (Task 35); they need
-# no test server. RenderTargetDrapeKey.* holds the drape zoom key per load mode.
-GTEST_FILTER='*Terrain*:*DEM*:*TileLod*:*TileCover*:GeoJSONTile.*:StillImageOffline.*:OnlineFileSource.Offline*:MainResourceLoader.Offline*:RenderTargetDrapeKey.*:Sky.*'
+# no test server. RenderTargetDrapeKey.* holds the drape zoom key per load mode. SkyPass.* holds the
+# sky pass's draw-call check.
+GTEST_FILTER='*Terrain*:*DEM*:*TileLod*:*TileCover*:GeoJSONTile.*:StillImageOffline.*:OnlineFileSource.Offline*:MainResourceLoader.Offline*:RenderTargetDrapeKey.*:Sky.*:SkyPass.*'
 RENDER_FILTER='terrain/'
 KNOWN="metrics/ignores/terrain-known.json"
 

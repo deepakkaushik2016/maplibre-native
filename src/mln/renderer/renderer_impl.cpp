@@ -30,6 +30,7 @@
 #include <mln/renderer/bucket.hpp>      // drape signature: Bucket::getID content revision
 #include <mln/util/hash.hpp>            // drape signature: hash_combine
 #include <map>
+#include <mln/renderer/render_sky.hpp>
 #include <mln/renderer/render_terrain.hpp>
 #include <mln/renderer/dem_elevation_provider.hpp>
 #include <mln/renderer/layers/terrain_layer_tweaker.hpp>
@@ -532,6 +533,14 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             }
         }
 
+        // The sky's layer group is not registered with the orchestrator either: it is drawn on its
+        // own, right after the clear (drawSky below).
+        if (auto* sky = orchestrator.getRenderSky()) {
+            if (const auto& skyLayerGroup = sky->getLayerGroup()) {
+                skyLayerGroup->upload(*uploadPass);
+            }
+        }
+
         // Give the render targets a chance to upload
         orchestrator.visitRenderTargets([&](RenderTarget& renderTarget) { renderTarget.upload(*uploadPass); });
 
@@ -665,6 +674,18 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         }
     };
 
+    // The sky goes down first, behind the terrain and every layer, as maplibre-gl-js draws it right
+    // after the clear. It tests and writes no depth, so it costs the layers nothing.
+    const auto drawSky = [&] {
+        auto* sky = orchestrator.getRenderSky();
+        if (!sky || !sky->getLayerGroup()) {
+            return;
+        }
+        const auto debugGroup(parameters.renderPass->createDebugGroup("sky"));
+        parameters.pass = RenderPass::Opaque;
+        sky->getLayerGroup()->render(orchestrator, parameters);
+    };
+
     // Actually render the layers
     // Drawables
     const auto drawableOpaquePass = [&] {
@@ -740,6 +761,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     }
     commonClearPass();
     context.bindGlobalUniformBuffers(*parameters.renderPass);
+    drawSky();
     drawableOpaquePass();
     drawableTranslucentPass();
     drawableDebugOverlays();

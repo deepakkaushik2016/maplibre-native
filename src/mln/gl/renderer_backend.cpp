@@ -148,7 +148,8 @@ void RendererBackend::initShaders(gfx::ShaderRegistry& shaders, const ProgramPar
                   shaders::BuiltIn::SymbolSDFShader,
                   shaders::BuiltIn::SymbolTextAndIconShader,
                   shaders::BuiltIn::TerrainShader,
-                  shaders::BuiltIn::TerrainDepthShader>(shaders, programParameters);
+                  shaders::BuiltIn::TerrainDepthShader,
+                  shaders::BuiltIn::SkyShader>(shaders, programParameters);
 
     // Initialize legacy shader programs
     Programs programs(programParameters);
