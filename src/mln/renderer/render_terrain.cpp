@@ -2113,11 +2113,18 @@ void RenderTerrain::updateInstancedDepthUBO(PaintParameters& parameters) {
     // Shared evaluated props (unpack / exaggeration / skirt offset), same as the tweaker.
     const auto zoom = std::max(parameters.state.getZoom(), 0.0);
     const float elevationOffset = static_cast<float>(util::M2PI * util::EARTH_RADIUS_M / std::pow(2.0, zoom) / 5.0);
+    // The depth pass draws no colour, so it has no fog.
     const shaders::TerrainEvaluatedPropsUBO propsUBO = {.unpack = getDEMUnpackVector(),
                                                         .exaggeration = getExaggeration(),
                                                         .elevation_offset = elevationOffset,
-                                                        .pad1 = 0.0f,
-                                                        .pad2 = 0.0f};
+                                                        .fog_ground_blend = 1.0f,
+                                                        .fog_ground_blend_opacity = 0.0f,
+                                                        .fog_color = Color::white(),
+                                                        .horizon_color = Color::white(),
+                                                        .horizon_fog_blend = 1.0f,
+                                                        .fog_start = 0.0f,
+                                                        .fog_end = 1.0f,
+                                                        .pad1 = 0.0f};
 
     depthLg->visitDrawables([&](gfx::Drawable& drawable) {
         auto& u = drawable.mutableUniformBuffers();

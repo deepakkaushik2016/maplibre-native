@@ -501,11 +501,12 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         // Run terrain tweaker if terrain is enabled
         if (auto* terrain = orchestrator.getRenderTerrain()) {
             if (auto* terrainTweaker = terrain->getTweaker()) {
+                const auto* sky = orchestrator.getRenderSky();
                 if (const auto& layerGroup = terrain->getLayerGroup()) {
-                    terrainTweaker->execute(*layerGroup, parameters);
+                    terrainTweaker->execute(*layerGroup, parameters, sky);
                 }
                 if (const auto& depthLayerGroup = terrain->getDepthLayerGroup()) {
-                    terrainTweaker->execute(*depthLayerGroup, parameters);
+                    terrainTweaker->execute(*depthLayerGroup, parameters, sky);
                 }
             }
         }

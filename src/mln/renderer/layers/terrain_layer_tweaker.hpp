@@ -9,6 +9,7 @@
 namespace mln {
 
 class RenderTerrain;
+class RenderSky;
 class LayerGroupBase;
 class PaintParameters;
 
@@ -28,7 +29,9 @@ public:
 
     ~TerrainLayerTweaker() = default;
 
-    void execute(LayerGroupBase&, const PaintParameters&);
+    /// `sky` is the style's sky, or null when it has none: it fogs the terrain (maplibre-gl-js
+    /// terrain fog); without one there is no fog.
+    void execute(LayerGroupBase&, const PaintParameters&, const RenderSky* sky);
 
 protected:
 #if MLN_UBO_CONSOLIDATION

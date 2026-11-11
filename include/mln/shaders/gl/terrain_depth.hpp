@@ -31,8 +31,14 @@ layout (std140) uniform TerrainEvaluatedPropsUBO {
     highp vec4 u_unpack;
     highp float u_exaggeration;
     highp float u_elevation_offset;
+    highp float u_fog_ground_blend;
+    highp float u_fog_ground_blend_opacity;
+    highp vec4 u_fog_color;
+    highp vec4 u_horizon_color;
+    highp float u_horizon_fog_blend;
+    highp float u_fog_start;
+    highp float u_fog_end;
     lowp float props_pad1;
-    lowp float props_pad2;
 };
 
 layout (location = 0) in vec4 a_pos; // xy = tile position, z = skirt flag (1 = skirt vertex)

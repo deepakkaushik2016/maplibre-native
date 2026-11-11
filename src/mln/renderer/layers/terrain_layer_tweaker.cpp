@@ -4,9 +4,11 @@
 #include <mln/gfx/drawable.hpp>
 #include <mln/renderer/layer_group.hpp>
 #include <mln/renderer/paint_parameters.hpp>
+#include <mln/renderer/render_sky.hpp>
 #include <mln/renderer/render_terrain.hpp>
 #include <mln/shaders/terrain_layer_ubo.hpp>
 #include <mln/shaders/shader_defines.hpp>
+#include <mln/math/clamp.hpp>
 #include <mln/util/constants.hpp>
 #include <mln/util/convert.hpp>
 #include <mln/util/mat4.hpp>
@@ -19,7 +21,7 @@ namespace mln {
 
 using namespace shaders;
 
-void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters) {
+void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParameters& parameters, const RenderSky* sky) {
     if (layerGroup.empty() || !terrain) {
         return;
     }
@@ -42,13 +44,31 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     const auto zoom = std::max(parameters.state.getZoom(), 0.0);
     const float elevationOffset = static_cast<float>(util::M2PI * util::EARTH_RADIUS_M / std::pow(2.0, zoom) / 5.0);
 
+    // Fog, as maplibre-gl-js terrainUniformValues: without a sky the opacity is 0, so the shader
+    // draws no fog. The blends are clamped here, as the style does not range-check them.
+    const auto fogRange = RenderSky::fogRange(parameters.state);
+    TerrainEvaluatedPropsUBO propsUBO = {.unpack = terrain->getDEMUnpackVector(),
+                                         .exaggeration = exaggeration,
+                                         .elevation_offset = elevationOffset,
+                                         .fog_ground_blend = 1.0f,
+                                         .fog_ground_blend_opacity = 0.0f,
+                                         .fog_color = Color::white(),
+                                         .horizon_color = Color::white(),
+                                         .horizon_fog_blend = 1.0f,
+                                         .fog_start = fogRange.start,
+                                         .fog_end = fogRange.end,
+                                         .pad1 = 0.0f};
+    if (sky) {
+        const auto& evaluated = sky->getEvaluated();
+        propsUBO.fog_ground_blend = util::clamp(evaluated.get<style::SkyFogGroundBlend>(), 0.0f, 1.0f);
+        propsUBO.fog_ground_blend_opacity = RenderSky::fogBlendOpacity(parameters.state.getPitch());
+        propsUBO.fog_color = evaluated.get<style::SkyFogColor>();
+        propsUBO.horizon_color = evaluated.get<style::SkyHorizonColor>();
+        propsUBO.horizon_fog_blend = util::clamp(evaluated.get<style::SkyHorizonFogBlend>(), 0.0f, 1.0f);
+    }
+
     // Populate layer-level UBO with terrain properties
     auto& layerUniforms = layerGroup.mutableUniformBuffers();
-    const TerrainEvaluatedPropsUBO propsUBO = {.unpack = terrain->getDEMUnpackVector(),
-                                               .exaggeration = exaggeration,
-                                               .elevation_offset = elevationOffset,
-                                               .pad1 = 0.0f,
-                                               .pad2 = 0.0f};
     layerUniforms.createOrUpdate(idTerrainEvaluatedPropsUBO, &propsUBO, context);
 
 #if MLN_UBO_CONSOLIDATION

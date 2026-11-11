@@ -23,6 +23,7 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) elevation: f32,
+    @location(2) fog_depth: f32,
 };
 
 struct GlobalIndexUBO {
@@ -39,8 +40,14 @@ struct TerrainEvaluatedPropsUBO {
     unpack: vec4<f32>,
     exaggeration: f32,
     elevation_offset: f32,
+    fog_ground_blend: f32,
+    fog_ground_blend_opacity: f32,
+    fog_color: vec4<f32>,
+    horizon_color: vec4<f32>,
+    horizon_fog_blend: f32,
+    fog_start: f32,
+    fog_end: f32,
     pad1: f32,
-    pad2: f32,
 };
 
 @group(0) @binding(1) var<uniform> globalIndex: GlobalIndexUBO;
@@ -73,6 +80,12 @@ fn main(in: VertexInput) -> VertexOutput {
     out.position = drawable.matrix * vec4<f32>(pos.x, pos.y, elevation - ele_delta, 1.0);
     out.uv = uv;
     out.elevation = elevation;
+
+    // maplibre-gl-js v_fog_depth: the depth of the surface point from the camera, its clip w (a skirt
+    // vertex takes the surface's: w is linear in the height), mapped from [fog_start, fog_end] to
+    // [0, 1] the way the perspective of gl-js's u_fog_matrix maps its z.
+    let fog_w = out.position.w + ele_delta * drawable.matrix[2][3];
+    out.fog_depth = props.fog_end * (fog_w - props.fog_start) / ((props.fog_end - props.fog_start) * fog_w);
     return out;
 }
 )";
@@ -81,8 +94,24 @@ fn main(in: VertexInput) -> VertexOutput {
 struct FragmentInput {
     @location(0) uv: vec2<f32>,
     @location(1) elevation: f32,
+    @location(2) fog_depth: f32,
 };
 
+struct TerrainEvaluatedPropsUBO {
+    unpack: vec4<f32>,
+    exaggeration: f32,
+    elevation_offset: f32,
+    fog_ground_blend: f32,
+    fog_ground_blend_opacity: f32,
+    fog_color: vec4<f32>,
+    horizon_color: vec4<f32>,
+    horizon_fog_blend: f32,
+    fog_start: f32,
+    fog_end: f32,
+    pad1: f32,
+};
+
+@group(0) @binding(4) var<uniform> props: TerrainEvaluatedPropsUBO;
 @group(1) @binding(0) var texture_sampler: sampler;
 @group(1) @binding(2) var map_texture: texture_2d<f32>;
 
@@ -92,7 +121,24 @@ fn main(in: FragmentInput) -> @location(0) vec4<f32> {
     // NDC is Y-up, as Metal's is, so the drape target is stored upright and uv.y is
     // sampled as it is. Flipping it (1.0 - uv.y, as Vulkan, whose NDC is Y-down, must)
     // turns the draped map upside down about each mesh tile.
-    return textureSample(map_texture, texture_sampler, in.uv);
+    let surface_color = textureSample(map_texture, texture_sampler, in.uv);
+
+    // maplibre-gl-js 6.16.0 terrain.fragment.glsl: fade the distance into the fog colour, which
+    // turns into the horizon colour near the far plane. Applied to the drape sample, so the drape
+    // targets do not depend on the fog.
+    if (props.fog_ground_blend_opacity > 0.0 && in.fog_depth > props.fog_ground_blend) {
+        let gamma = vec4<f32>(2.2);
+        let surface_color_linear = pow(surface_color, gamma);
+        let blend_color = smoothstep(0.0, 1.0, max((in.fog_depth - props.horizon_fog_blend) / (1.0 - props.horizon_fog_blend), 0.0));
+        let fog_horizon_color_linear = mix(pow(props.fog_color, gamma), pow(props.horizon_color, gamma), vec4<f32>(blend_color));
+        // gl-js clips at the fog's far plane (fog depth 1); native draws terrain past it, so there the
+        // factor stops at 1, fully fogged, instead of overshooting the fog colour. In front of the far
+        // plane the fog depth is above fog-ground-blend in this branch, so this is gl-js's
+        // max(depth - blend, 0) / (1 - blend).
+        let factor_fog = min((in.fog_depth - props.fog_ground_blend) / (1.0 - props.fog_ground_blend), 1.0);
+        return pow(mix(surface_color_linear, fog_horizon_color_linear, vec4<f32>(pow(factor_fog, 2.0) * props.fog_ground_blend_opacity)), 1.0 / gamma);
+    }
+    return surface_color;
 }
 )";
 };

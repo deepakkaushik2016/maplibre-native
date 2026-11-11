@@ -39,8 +39,14 @@ layout(set = LAYER_SET_INDEX, binding = idTerrainEvaluatedPropsUBO) uniform Terr
     vec4 unpack;
     float exaggeration;
     float elevation_offset;
+    float fog_ground_blend;
+    float fog_ground_blend_opacity;
+    vec4 fog_color;
+    vec4 horizon_color;
+    float horizon_fog_blend;
+    float fog_start;
+    float fog_end;
     float pad1;
-    float pad2;
 } props;
 
 layout(set = DRAWABLE_IMAGE_SET_INDEX, binding = 0) uniform sampler2D dem_sampler;

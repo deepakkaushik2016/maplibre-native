@@ -1,0 +1,396 @@
+{
+  "version": 8,
+  "metadata": {
+    "test": {
+      "height": 256,
+      "width": 256,
+      "maxPitch": 85,
+      "description": "Terrain fog under the sky at pitch 80 with the True Earth sky: the sky over fogged terrain, and the fog turning to horizon-color past horizon-fog-blend 0.75. Same flat scene as fog-ground-blend. expected.png is maplibre-gl-js 6.16.0. See README.md."
+    }
+  },
+  "center": [
+    11.52517,
+    47.34487
+  ],
+  "zoom": 13,
+  "pitch": 80,
+  "sources": {
+    "terrain": {
+      "type": "raster-dem",
+      "tiles": [
+        "local://tiles/terrain-shading/{z}-{x}-{y}.terrain.png"
+      ],
+      "maxzoom": 12,
+      "tileSize": 256
+    },
+    "grid": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.3
+                  ],
+                  [
+                    12.0,
+                    47.3
+                  ],
+                  [
+                    12.0,
+                    47.303
+                  ],
+                  [
+                    11.0,
+                    47.303
+                  ],
+                  [
+                    11.0,
+                    47.3
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.3069
+                  ],
+                  [
+                    12.0,
+                    47.3069
+                  ],
+                  [
+                    12.0,
+                    47.31197
+                  ],
+                  [
+                    11.0,
+                    47.31197
+                  ],
+                  [
+                    11.0,
+                    47.3069
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.318561
+                  ],
+                  [
+                    12.0,
+                    47.318561
+                  ],
+                  [
+                    12.0,
+                    47.3271293
+                  ],
+                  [
+                    11.0,
+                    47.3271293
+                  ],
+                  [
+                    11.0,
+                    47.318561
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.33826809
+                  ],
+                  [
+                    12.0,
+                    47.33826809
+                  ],
+                  [
+                    12.0,
+                    47.352748517
+                  ],
+                  [
+                    11.0,
+                    47.352748517
+                  ],
+                  [
+                    11.0,
+                    47.33826809
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.3715730721
+                  ],
+                  [
+                    12.0,
+                    47.3715730721
+                  ],
+                  [
+                    12.0,
+                    47.39604499373
+                  ],
+                  [
+                    11.0,
+                    47.39604499373
+                  ],
+                  [
+                    11.0,
+                    47.3715730721
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.427858491849
+                  ],
+                  [
+                    12.0,
+                    47.427858491849
+                  ],
+                  [
+                    12.0,
+                    47.469216039403705
+                  ],
+                  [
+                    11.0,
+                    47.469216039403705
+                  ],
+                  [
+                    11.0,
+                    47.427858491849
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.522980851224816
+                  ],
+                  [
+                    12.0,
+                    47.522980851224816
+                  ],
+                  [
+                    12.0,
+                    47.59287510659226
+                  ],
+                  [
+                    11.0,
+                    47.59287510659226
+                  ],
+                  [
+                    11.0,
+                    47.522980851224816
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.68373763856994
+                  ],
+                  [
+                    12.0,
+                    47.68373763856994
+                  ],
+                  [
+                    12.0,
+                    47.80185893014092
+                  ],
+                  [
+                    11.0,
+                    47.80185893014092
+                  ],
+                  [
+                    11.0,
+                    47.68373763856994
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    47.95541660918319
+                  ],
+                  [
+                    12.0,
+                    47.95541660918319
+                  ],
+                  [
+                    12.0,
+                    48.155041591938144
+                  ],
+                  [
+                    11.0,
+                    48.155041591938144
+                  ],
+                  [
+                    11.0,
+                    47.95541660918319
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {},
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    11.0,
+                    48.41455406951958
+                  ],
+                  [
+                    12.0,
+                    48.41455406951958
+                  ],
+                  [
+                    12.0,
+                    48.75192029037545
+                  ],
+                  [
+                    11.0,
+                    48.75192029037545
+                  ],
+                  [
+                    11.0,
+                    48.41455406951958
+                  ]
+                ]
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#b7c98f"
+      }
+    },
+    {
+      "id": "bands",
+      "type": "fill",
+      "source": "grid",
+      "filter": [
+        "!",
+        [
+          "has",
+          "lon"
+        ]
+      ],
+      "paint": {
+        "fill-color": "#6f8f4e",
+        "fill-antialias": false
+      }
+    },
+    {
+      "id": "stripes",
+      "type": "fill",
+      "source": "grid",
+      "filter": [
+        "has",
+        "lon"
+      ],
+      "paint": {
+        "fill-color": "#8a5a3c",
+        "fill-antialias": false
+      }
+    }
+  ],
+  "terrain": {
+    "source": "terrain",
+    "exaggeration": 0
+  },
+  "sky": {
+    "sky-color": "#3E7CC0",
+    "horizon-color": "#DCE7EF",
+    "fog-color": "#C6D4E0",
+    "sky-horizon-blend": 0.85,
+    "horizon-fog-blend": 0.75,
+    "fog-ground-blend": 0.35,
+    "atmosphere-blend": 0.9
+  }
+}

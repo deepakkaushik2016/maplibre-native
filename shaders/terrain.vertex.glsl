@@ -1,5 +1,6 @@
 out vec2 v_uv;
 out float v_elevation;
+out highp float v_fog_depth;
 
 layout (std140) uniform TerrainDrawableUBO {
     highp mat4 u_matrix;
@@ -10,8 +11,14 @@ layout (std140) uniform TerrainEvaluatedPropsUBO {
     highp vec4 u_unpack;
     highp float u_exaggeration;
     highp float u_elevation_offset;
+    highp float u_fog_ground_blend;
+    highp float u_fog_ground_blend_opacity;
+    highp vec4 u_fog_color;
+    highp vec4 u_horizon_color;
+    highp float u_horizon_fog_blend;
+    highp float u_fog_start;
+    highp float u_fog_end;
     lowp float props_pad1;
-    lowp float props_pad2;
 };
 
 layout (location = 0) in vec4 a_pos; // xy = tile position, z = skirt flag (1 = skirt vertex)
@@ -36,4 +43,10 @@ void main() {
     // levels (maplibre-gl-js u_ele_delta).
     float ele_delta = a_pos.z == 1.0 ? u_elevation_offset : 0.0;
     gl_Position = u_matrix * vec4(pos.x, pos.y, v_elevation - ele_delta, 1.0);
+
+    // maplibre-gl-js v_fog_depth: the depth of the surface point from the camera, its clip w (a skirt
+    // vertex takes the surface's: w is linear in the height), mapped from [u_fog_start, u_fog_end]
+    // to [0, 1] the way the perspective of gl-js's u_fog_matrix maps its z.
+    highp float fog_w = gl_Position.w + ele_delta * u_matrix[2][3];
+    v_fog_depth = u_fog_end * (fog_w - u_fog_start) / ((u_fog_end - u_fog_start) * fog_w);
 }

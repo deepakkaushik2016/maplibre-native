@@ -55,6 +55,8 @@ Terrain rendering enables draping the map over 3D elevation data from Digital El
 - **Exaggeration**: styled vertical exaggeration multiplier (1.0 = true scale)
 - **Shared Elevation Function**: a `get_elevation()` helper in every backend's
   shader prelude
+- **Sky and fog**: the style's `sky` draws a gradient above the horizon and fades the
+  distant terrain into its fog colour, as maplibre-gl-js 6.16.0 does (see "Sky and fog")
 
 ## Style Configuration
 
@@ -274,6 +276,99 @@ Layers opt in by adding the `dem_*` fields to their drawable UBO, binding the
 DEM texture in their layer tweaker via `RenderTerrain::getTerrainData()`, and
 calling the helper in their vertex shader (see the circle, symbol, and
 fill-extrusion layers for the pattern).
+
+## Sky and fog
+
+Both are ports of maplibre-gl-js 6.16.0 (`1e0fbefe56`), driven by the style's `sky` alone.
+
+### What is ported
+
+- **Sky** (`RenderSky`, `shaders/sky.*`): gl-js `drawSky` / `sky.fragment.glsl` (Mercator). A
+  gradient from `horizon-color` at the horizon line to `sky-color` over the `sky-horizon-blend`
+  band, drawn right after the clear and behind everything, with or without terrain (as gl-js). The
+  horizon line is gl-js `getMercatorHorizon`, so the sky is on screen only above a pitch of about
+  68.6° at the default field of view. The quad is built on the horizon line, so fragments below it
+  are never rasterised, and no draw is issued when the horizon is off screen.
+- **Fog** (`terrain.fragment.glsl` and the Metal, Vulkan and WebGPU terrain shaders): gl-js
+  `terrain.fragment.glsl`, line for line. Only the terrain is fogged.
+  - The fog depth of a terrain vertex is its camera depth (its clip w) mapped from
+    [`fog_start`, `fog_end`] to [0, 1] the way the perspective of gl-js's `u_fog_matrix` maps z.
+    `fog_start` and `fog_end` are that matrix's near and far planes (`RenderSky::fogRange`): the
+    camera's distance to the centre of the viewport at sea level, and gl-js's own far plane
+    (`_calculateNearFarZ`, the horizon-limited one), computed from the `TransformState` each frame.
+    No per-tile fog matrix is needed.
+  - Fog starts at fog depth `fog-ground-blend` and grows with the square of the distance from there
+    to the far plane. Its colour is `fog-color`, turning to `horizon-color` past fog depth
+    `horizon-fog-blend` (smoothstep), and it is mixed in linear space (gamma 2.2).
+  - Its strength is gl-js `calculateFogBlendOpacity`: no fog below a pitch of 60°, fading in to full
+    at 70°.
+  - The uniforms are fields of `TerrainEvaluatedPropsUBO`, written by `TerrainLayerTweaker` each
+    frame. Without a sky they are gl-js's no-sky values (opacity 0), and the shader takes the
+    unfogged path.
+  - The fog is applied to the drape sample in the terrain shader, so the drape targets never depend
+    on the fog and never re-bake for it.
+- **Not ported:** `atmosphere-blend` (globe only; native has no globe).
+
+### Turning the fog off from the style
+
+`"fog-ground-blend": 1` gives no fog on any pitch: the fog would start at the far plane (gl-js and
+native alike; gtest `TerrainFog.GroundBlendOneTurnsTheFogOff`). A style without `sky` has neither sky
+nor fog. `horizon-fog-blend` only chooses the fog's colour, so it cannot turn the fog off. Reduced-tier
+phones (outdoor-styles spec section 9: flat sky gradient, no fog) can therefore keep the style's sky
+and set `fog-ground-blend` to 1.
+
+### Oracle tests
+
+| test | what it grades | expected.png | macOS Metal |
+|---|---|---|---|
+| `sky-default` | `"sky": {}` at pitch 70, no terrain | gl-js 6.16.0 | byte-identical |
+| `sky-colors` | True Earth sky at pitch 80, no terrain | gl-js 6.16.0 | 1,024 px off by 1/255 |
+| `sky-no-horizon` | sky with the horizon off screen (pitch 30): draws nothing | native without the sky | byte-identical |
+| `no-sky-unchanged` | `terrain/default` without sky | native before the sky | byte-identical |
+| `fog-ground-blend` | fog at half strength (pitch 65), True Earth sky, flat terrain | gl-js 6.16.0 | pixelmatch 0 px |
+| `fog-horizon` | the sky over fogged terrain at pitch 80, fog turning to `horizon-color` | gl-js 6.16.0 | pixelmatch 0 px |
+| `fog-symbols` | circles over fogged terrain at pitch 75: not fogged, as in gl-js | gl-js 6.16.0 | pixelmatch 0 px |
+| `fog-none` | no sky, horizon on screen at pitch 78 | native before the fog (`f70d2ae7dd1`) | byte-identical |
+
+Each test's README says how its baseline was made. The fog tests use flat terrain (exaggeration 0):
+native stills put the camera centre at sea level while gl-js clamps it to the ground, so under real
+relief the cameras, and with them the fog distances, would differ. They draw a banded fill rather
+than the numbered raster, because native and gl-js choose different tile zooms for a draped raster
+in a pitched view. All three fail without the fog (differences 0.051, 0.077 and 0.105). gtests:
+`SkyPass.*` (no sky draw call when the horizon is off screen) and `TerrainFog.*` (no fog below pitch
+60, and `fog-ground-blend` 1 turns it off).
+
+### Known differences from gl-js
+
+- **Symbols and circles are not fogged**, as in gl-js 6.16.0, which fogs only the terrain. The
+  outdoor-styles plan asked for symbols and circles to fade at their anchor; that would be an
+  invention, so native follows gl-js (`terrain/fog-symbols`).
+- **Terrain past gl-js's far plane.** Native's projection reaches further than gl-js's far plane, so
+  at high pitch native draws terrain where gl-js shows the sky's gradient, just below the horizon
+  line. There the fog depth is above 1, and the shader holds the fog factor at 1 (fully fogged, in
+  `horizon-color`) where gl-js's formula would overshoot the fog colour; gl-js never reaches it,
+  because it clips at its far plane. In `terrain/fog-horizon` that is 9 rows, at most 25/255 off.
+- **The fog's far plane ignores the DEM below sea level.** gl-js lowers the plane under the minimum
+  elevation of the centre tile's DEM when it is below sea level; native has only the centre's
+  altitude.
+- **Real relief:** the camera difference above makes the fog start and end at slightly different
+  distances under real relief (the general camera difference of TERRAIN.md, Phase 4).
+
+### Cost (macOS Metal, uncapped)
+
+gtest `TerrainFog.DISABLED_FrameTime` (`--gtest_also_run_disabled_tests`): flat terrain under a
+background and a fill, 1024x1024 offscreen, with the True Earth sky against no sky, interleaved;
+each sample is `renderFrame()` plus the read-back that waits for the GPU, so frames are not capped by
+the display; 50 warm-up frames, then the median of 500. Apple M4 Max, `f70d2ae7dd1` + the fog.
+
+| run | pitch 50 without / with | Δ | pitch 60 without / with | Δ | pitch 75 without / with | Δ |
+|---|---|---|---|---|---|---|
+| 1 | 1.4414 / 1.4412 ms | -0.0002 ms | 1.4948 / 1.4842 ms | -0.0106 ms | 1.2385 / 1.2332 ms | -0.0053 ms |
+| 2 | 1.4690 / 1.4726 ms | +0.0035 ms | 1.5051 / 1.5039 ms | -0.0012 ms | 1.2102 / 1.2084 ms | -0.0018 ms |
+| 3 | 1.4507 / 1.4496 ms | -0.0011 ms | 1.5190 / 1.5148 ms | -0.0041 ms | 1.1826 / 1.1860 ms | +0.0035 ms |
+
+The budget is 0.5 ms. At pitch 50 and 60 gl-js draws no fog (the shader tests the opacity and takes
+the plain path); at 75 the sky and full fog draw, and the cost is still within the noise (±0.01 ms).
 
 ## Current Status
 

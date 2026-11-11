@@ -36,16 +36,29 @@ struct alignas(16) TerrainTilePropsUBO {
 };
 static_assert(sizeof(TerrainTilePropsUBO) == 16);
 
-/// Evaluated properties that do not depend on the tile
+/// Evaluated properties that do not depend on the tile. The fog fields are maplibre-gl-js 6.16.0's
+/// terrain fog uniforms (`terrainUniformValues`); only the terrain colour pass reads them.
 struct alignas(16) TerrainEvaluatedPropsUBO {
     /*  0 */ std::array<float, 4> unpack; // DEM unpack vector for the source's encoding
     /* 16 */ float exaggeration;
     /* 20 */ float elevation_offset;
-    /* 24 */ float pad1;
-    /* 28 */ float pad2;
-    /* 32 */
+    /// Fog starts at this fog depth (sky `fog-ground-blend`, in [0, 1]).
+    /* 24 */ float fog_ground_blend;
+    /// How much fog the pitch allows (gl-js `calculateFogBlendOpacity`); 0 draws no fog.
+    /* 28 */ float fog_ground_blend_opacity;
+    /* 32 */ Color fog_color;
+    /* 48 */ Color horizon_color;
+    /// From this fog depth on, the fog turns from `fog_color` to `horizon_color` (sky
+    /// `horizon-fog-blend`, in [0, 1]).
+    /* 64 */ float horizon_fog_blend;
+    /// The camera depths, in pixels, at which the fog depth is 0 and 1: gl-js `_fogMatrix`'s near
+    /// plane (the centre of the viewport) and far plane.
+    /* 68 */ float fog_start;
+    /* 72 */ float fog_end;
+    /* 76 */ float pad1;
+    /* 80 */
 };
-static_assert(sizeof(TerrainEvaluatedPropsUBO) == 32);
+static_assert(sizeof(TerrainEvaluatedPropsUBO) == 5 * 16);
 
 } // namespace shaders
 } // namespace mln

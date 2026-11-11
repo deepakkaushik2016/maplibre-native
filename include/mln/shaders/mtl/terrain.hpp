@@ -31,16 +31,22 @@ struct alignas(16) TerrainTilePropsUBO {
 };
 static_assert(sizeof(TerrainTilePropsUBO) == 16, "wrong size");
 
-/// Evaluated properties that do not depend on the tile
+/// Evaluated properties that do not depend on the tile, and the terrain fog
 struct alignas(16) TerrainEvaluatedPropsUBO {
     /*  0 */ float4 unpack; // DEM unpack vector for the source's encoding
     /* 16 */ float exaggeration;
     /* 20 */ float elevation_offset;
-    /* 24 */ float pad1;
-    /* 28 */ float pad2;
-    /* 32 */
+    /* 24 */ float fog_ground_blend;
+    /* 28 */ float fog_ground_blend_opacity;
+    /* 32 */ float4 fog_color;
+    /* 48 */ float4 horizon_color;
+    /* 64 */ float horizon_fog_blend;
+    /* 68 */ float fog_start;
+    /* 72 */ float fog_end;
+    /* 76 */ float pad1;
+    /* 80 */
 };
-static_assert(sizeof(TerrainEvaluatedPropsUBO) == 32, "wrong size");
+static_assert(sizeof(TerrainEvaluatedPropsUBO) == 5 * 16, "wrong size");
 
 )";
 
@@ -65,6 +71,7 @@ struct FragmentStage {
     float4 position [[position, invariant]];
     float2 uv;
     float elevation;
+    float fog_depth;
 };
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
@@ -94,10 +101,17 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const float ele_delta = (float(vertx.pos.z) == 1.0) ? props.elevation_offset : 0.0;
     float4 position = drawable.matrix * float4(pos.x, pos.y, elevation - ele_delta, 1.0);
 
+    // maplibre-gl-js v_fog_depth: the depth of the surface point from the camera, its clip w (a skirt
+    // vertex takes the surface's: w is linear in the height), mapped from [fog_start, fog_end] to
+    // [0, 1] the way the perspective of gl-js's u_fog_matrix maps its z.
+    const float fog_w = position.w + ele_delta * drawable.matrix[2][3];
+    const float fog_depth = props.fog_end * (fog_w - props.fog_start) / ((props.fog_end - props.fog_start) * fog_w);
+
     return {
         .position  = position,
         .uv        = uv,
         .elevation = elevation,
+        .fog_depth = fog_depth,
     };
 }
 
@@ -115,7 +129,24 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     // 1.0 - uv.y. Metal's NDC is Y-up, so the RTT is stored upright and the V must NOT
     // be flipped here - sampling 1.0 - uv.y flips the draped map vertically (north/south
     // swapped about the view). Sample uv.y directly on Metal.
-    return half4(mapTexture.sample(mapSampler, float2(in.uv.x, in.uv.y)));
+    const half4 surface_color = half4(mapTexture.sample(mapSampler, float2(in.uv.x, in.uv.y)));
+
+    // maplibre-gl-js 6.16.0 terrain.fragment.glsl: fade the distance into the fog colour, which
+    // turns into the horizon colour near the far plane. Applied to the drape sample, so the drape
+    // targets do not depend on the fog.
+    if (props.fog_ground_blend_opacity > 0.0 && in.fog_depth > props.fog_ground_blend) {
+        const float gamma = 2.2;
+        const float4 surface_color_linear = pow(float4(surface_color), float4(gamma));
+        const float blend_color = smoothstep(0.0, 1.0, max((in.fog_depth - props.horizon_fog_blend) / (1.0 - props.horizon_fog_blend), 0.0));
+        const float4 fog_horizon_color_linear = mix(pow(props.fog_color, float4(gamma)), pow(props.horizon_color, float4(gamma)), blend_color);
+        // gl-js clips at the fog's far plane (fog depth 1); native draws terrain past it, so there the
+        // factor stops at 1, fully fogged, instead of overshooting the fog colour. In front of the far
+        // plane the fog depth is above fog-ground-blend in this branch, so this is gl-js's
+        // max(depth - blend, 0) / (1 - blend).
+        const float factor_fog = min((in.fog_depth - props.fog_ground_blend) / (1.0 - props.fog_ground_blend), 1.0);
+        return half4(pow(mix(surface_color_linear, fog_horizon_color_linear, pow(factor_fog, 2.0) * props.fog_ground_blend_opacity), float4(1.0 / gamma)));
+    }
+    return surface_color;
 }
 )";
 };

@@ -94,6 +94,61 @@ std::optional<RenderSky::Quad> RenderSky::quad(const TransformState& state) {
                 .extent = static_cast<float>(reach)};
 }
 
+RenderSky::FogRange RenderSky::fogRange(const TransformState& state) {
+    const Size size = state.getSize();
+    const double width = size.width;
+    const double height = std::max(1.0, static_cast<double>(size.height));
+    const double pitch = state.getPitch();
+    const double roll = state.getRoll();
+    const double cameraToCenterDistance = state.getCameraToCenterDistance();
+    // gl-js getCenterOffset().y: the centre of the edge insets below the viewport's centre.
+    const EdgeInsets insets = state.getEdgeInsets();
+    const double offsetY = 0.5 * (insets.top() - insets.bottom());
+
+    // The camera to sea level distance, in respect of the centre's altitude (`z`, in pixels).
+    const double limitedPitch = std::min(pitch, maxMercatorHorizonAngle);
+    const double cameraToSeaLevelDistance = std::max(cameraToCenterDistance / 2.0,
+                                                     cameraToCenterDistance + state.getZ() / std::cos(limitedPitch));
+
+    // _calculateNearFarZ. gl-js lowers the plane under a negative minimum elevation, which it takes
+    // from the centre tile's DEM as well; native has the centre's altitude only.
+    const double lowestPlane = state.getZ() < 0.0 ? cameraToSeaLevelDistance - state.getZ() / std::cos(limitedPitch)
+                                                  : cameraToSeaLevelDistance;
+    const double groundAngle = std::numbers::pi / 2.0 + pitch;
+    const double zfov = state.getFieldOfView() *
+                        (std::abs(std::cos(roll)) * height + std::abs(std::sin(roll)) * width) / height;
+    const double fovAboveCenter = zfov * (0.5 + offsetY / height);
+    const auto surfaceDistance = [&](double fov) {
+        return std::sin(fov) * lowestPlane /
+               std::sin(util::clamp(std::numbers::pi - groundAngle - fov, 0.01, std::numbers::pi - 0.01));
+    };
+    const double topHalfSurfaceDistance = surfaceDistance(fovAboveCenter);
+
+    const double horizon = cameraToCenterDistance * std::min(std::tan(std::numbers::pi / 2.0 - pitch) * 0.85,
+                                                             std::tan(maxMercatorHorizonAngle - pitch));
+    const double horizonAngle = std::atan(horizon / cameraToCenterDistance);
+    const double minFovCenterToHorizon = std::numbers::pi / 2.0 - maxMercatorHorizonAngle;
+    const double fovCenterToHorizon = horizonAngle > minFovCenterToHorizon
+                                          ? 2.0 * horizonAngle * (0.5 + offsetY / (horizon * 2.0))
+                                          : minFovCenterToHorizon;
+    const double topHalfSurfaceDistanceHorizon = surfaceDistance(fovCenterToHorizon);
+
+    const double topHalfMinDistance = std::min(topHalfSurfaceDistance, topHalfSurfaceDistanceHorizon);
+    const double farZ = (std::cos(std::numbers::pi / 2.0 - limitedPitch) * topHalfMinDistance + lowestPlane) * 1.01;
+    return {.start = static_cast<float>(cameraToSeaLevelDistance), .end = static_cast<float>(farZ)};
+}
+
+float RenderSky::fogBlendOpacity(double pitch) {
+    const double degrees = pitch * 180.0 / std::numbers::pi;
+    if (degrees < 60.0) {
+        return 0.0f;
+    }
+    if (degrees < 70.0) {
+        return static_cast<float>((degrees - 60.0) / 10.0);
+    }
+    return 1.0f;
+}
+
 void RenderSky::update(gfx::ShaderRegistry& shaders, gfx::Context& context, const TransformState& state) {
     if (!layerGroup) {
         layerGroup = context.createLayerGroup(/*layerIndex=*/0, /*initialCapacity=*/1, "sky", false);

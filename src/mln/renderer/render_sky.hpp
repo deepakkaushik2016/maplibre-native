@@ -29,7 +29,8 @@ using EvaluatedSky = style::SkyProperties::PossiblyEvaluated;
 ///
 /// The sky's layer group is not registered with the orchestrator: Renderer::Impl uploads it and
 /// draws it right after clearing the main buffer. `fog-color`, `fog-ground-blend` and
-/// `horizon-fog-blend` colour the terrain, not the sky; `atmosphere-blend` applies to globe only.
+/// `horizon-fog-blend` colour the terrain, not the sky (TerrainLayerTweaker, with fogRange() and
+/// fogBlendOpacity() below); `atmosphere-blend` applies to globe only.
 class RenderSky {
 public:
     explicit RenderSky(Immutable<style::Sky::Impl>);
@@ -58,6 +59,19 @@ public:
     /// cameraToCenterDistance * min(0.85 * tan(90° - pitch), tan(89.25° - pitch)), turned by the
     /// roll.
     static std::optional<Quad> quad(const TransformState&);
+
+    /// Where maplibre-gl-js's terrain fog starts and ends, as camera depths in pixels: the near and
+    /// far planes of its `_fogMatrix` (`MercatorTransform._calcMatrices`, `_calculateNearFarZ`).
+    /// It starts at the centre of the viewport and ends at the far plane gl-js would draw to.
+    struct FogRange {
+        float start;
+        float end;
+    };
+    static FogRange fogRange(const TransformState&);
+
+    /// maplibre-gl-js `calculateFogBlendOpacity`: no fog below a pitch of 60°, fading in to full
+    /// fog at 70°. The pitch is in radians.
+    static float fogBlendOpacity(double pitch);
 
     /// Builds the sky drawable once, and sets this frame's uniforms; disables the layer group when
     /// quad() gives no sky, so no sky draw is issued.

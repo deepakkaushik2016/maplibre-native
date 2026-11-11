@@ -1,0 +1,57 @@
+{
+  "version": 8,
+  "metadata": {
+    "test": {
+      "height": 256,
+      "width": 256,
+      "maxPitch": 85,
+      "allowed": 0,
+      "description": "sky-no-horizon's scene (terrain-shading DEM at exaggeration 0, numbered raster) WITHOUT a sky at pitch 78, so the horizon and the map's far edge are on screen. A style with no sky must render exactly as before the fog: expected.png is native's render at f70d2ae7dd1, allowed 0. See README.md."
+    }
+  },
+  "center": [
+    11.52517,
+    47.34487
+  ],
+  "zoom": 13,
+  "pitch": 78,
+  "sources": {
+    "terrain": {
+      "type": "raster-dem",
+      "tiles": [
+        "local://tiles/terrain-shading/{z}-{x}-{y}.terrain.png"
+      ],
+      "maxzoom": 12,
+      "tileSize": 256
+    },
+    "osm": {
+      "type": "raster",
+      "tiles": [
+        "local://tiles/number/{z}.png"
+      ],
+      "maxzoom": 17,
+      "tileSize": 256
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "white"
+      }
+    },
+    {
+      "id": "raster",
+      "type": "raster",
+      "source": "osm",
+      "paint": {
+        "raster-opacity": 1.0
+      }
+    }
+  ],
+  "terrain": {
+    "source": "terrain",
+    "exaggeration": 0
+  }
+}

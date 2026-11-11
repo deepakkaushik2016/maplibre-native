@@ -37,8 +37,14 @@ struct TerrainEvaluatedPropsUBO {
     unpack: vec4<f32>,
     exaggeration: f32,
     elevation_offset: f32,
+    fog_ground_blend: f32,
+    fog_ground_blend_opacity: f32,
+    fog_color: vec4<f32>,
+    horizon_color: vec4<f32>,
+    horizon_fog_blend: f32,
+    fog_start: f32,
+    fog_end: f32,
     pad1: f32,
-    pad2: f32,
 };
 
 @group(0) @binding(1) var<uniform> globalIndex: GlobalIndexUBO;
