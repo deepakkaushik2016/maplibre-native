@@ -113,6 +113,10 @@ StyleParseResult Parser::parse(const std::string& json) {
         parseLight(document["light"]);
     }
 
+    if (document.HasMember("sky")) {
+        parseSky(document["sky"]);
+    }
+
     if (document.HasMember("terrain")) {
         parseTerrain(document["terrain"]);
     }
@@ -243,6 +247,23 @@ void Parser::parseLight(const JSValue& value) {
     }
 
     light = *converted;
+}
+
+// A property that does not convert is left at its default and logged; the rest of the sky
+// still applies, so one bad value does not cost the style its whole sky.
+void Parser::parseSky(const JSValue& value) {
+    if (!value.IsObject()) {
+        Log::Warning(Event::ParseStyle, "sky must be an object");
+        return;
+    }
+
+    sky.emplace();
+    for (const auto& member : value.GetObject()) {
+        const std::string property{member.name.GetString(), member.name.GetStringLength()};
+        if (const auto error = sky->setProperty(property, &member.value)) {
+            Log::Warning(Event::ParseStyle, "sky " + property + ": " + error->message);
+        }
+    }
 }
 
 void Parser::parseTerrain(const JSValue& value) {

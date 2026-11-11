@@ -134,6 +134,8 @@ void Style::Impl::parse(const std::string& json_) {
 
     setLight(std::make_unique<Light>(parser.light));
 
+    setSky(parser.sky ? std::make_unique<Sky>(*parser.sky) : nullptr);
+
     if (parser.terrain) {
         setTerrain(std::make_unique<Terrain>(*parser.terrain));
     } else {
@@ -349,6 +351,20 @@ Light* Style::Impl::getLight() const {
     return light.get();
 }
 
+void Style::Impl::setSky(std::unique_ptr<Sky> sky_) {
+    sky = std::move(sky_);
+    if (sky) {
+        sky->setObserver(this);
+        onSkyChanged(*sky);
+    } else {
+        observer->onUpdate();
+    }
+}
+
+Sky* Style::Impl::getSky() const {
+    return sky.get();
+}
+
 void Style::Impl::setTerrain(std::unique_ptr<Terrain> terrain_) {
     terrain = std::move(terrain_);
     if (terrain) {
@@ -534,6 +550,10 @@ void Style::Impl::onLayerChanged(Layer& layer) {
 }
 
 void Style::Impl::onLightChanged(const Light&) {
+    observer->onUpdate();
+}
+
+void Style::Impl::onSkyChanged(const Sky&) {
     observer->onUpdate();
 }
 

@@ -2,6 +2,7 @@
 #include <mln/style/image_impl.hpp>
 #include <mln/style/layer.hpp>
 #include <mln/style/light.hpp>
+#include <mln/style/sky.hpp>
 #include <mln/style/terrain.hpp>
 #include <mln/style/source.hpp>
 #include <mln/style/style.hpp>
@@ -92,6 +93,19 @@ void Style::setGlobalStateProperty(const std::string& name, const Value& value) 
 
 const Light* Style::getLight() const {
     return impl->getLight();
+}
+
+void Style::setSky(std::unique_ptr<Sky> sky) {
+    impl->setSky(std::move(sky));
+}
+
+Sky* Style::getSky() {
+    impl->mutated = true;
+    return impl->getSky();
+}
+
+const Sky* Style::getSky() const {
+    return impl->getSky();
 }
 
 void Style::setTerrain(std::unique_ptr<Terrain> terrain) {

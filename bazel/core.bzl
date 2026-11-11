@@ -27,6 +27,7 @@ MLN_PUBLIC_GENERATED_STYLE_HEADERS = [
     "include/mln/style/layers/background_layer.hpp",
     "include/mln/style/layers/location_indicator_layer.hpp",
     "include/mln/style/light.hpp",
+    "include/mln/style/sky.hpp",
 ]
 
 MLN_PRIVATE_GENERATED_STYLE_HEADERS = [
@@ -67,6 +68,7 @@ MLN_GENERATED_STYLE_SOURCE = [
     "src/mln/style/layers/location_indicator_layer_properties.cpp",
     "src/mln/style/layers/location_indicator_layer.cpp",
     "src/mln/style/light.cpp",
+    "src/mln/style/sky.cpp",
 ]
 
 MLN_GENERATED_SHADER_HEADERS = [
@@ -457,6 +459,8 @@ MLN_CORE_SOURCE = [
     "src/mln/style/properties.hpp",
     "src/mln/style/property_expression.cpp",
     "src/mln/style/rapidjson_conversion.hpp",
+    "src/mln/style/sky_impl.hpp",
+    "src/mln/style/sky_observer.hpp",
     "src/mln/style/source.cpp",
     "src/mln/style/source_impl.cpp",
     "src/mln/style/source_impl.hpp",

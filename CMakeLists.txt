@@ -409,6 +409,7 @@ list(APPEND INCLUDE_FILES
     ${PROJECT_SOURCE_DIR}/include/mln/style/property_expression.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/style/property_value.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/style/rotation.hpp
+    ${PROJECT_SOURCE_DIR}/include/mln/style/sky.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/style/source.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/style/sources/custom_geometry_source.hpp
     ${PROJECT_SOURCE_DIR}/include/mln/style/sources/custom_vector_source.hpp
@@ -857,6 +858,9 @@ list(APPEND SRC_FILES
     ${PROJECT_SOURCE_DIR}/src/mln/style/properties.hpp
     ${PROJECT_SOURCE_DIR}/src/mln/style/property_expression.cpp
     ${PROJECT_SOURCE_DIR}/src/mln/style/rapidjson_conversion.hpp
+    ${PROJECT_SOURCE_DIR}/src/mln/style/sky.cpp
+    ${PROJECT_SOURCE_DIR}/src/mln/style/sky_impl.hpp
+    ${PROJECT_SOURCE_DIR}/src/mln/style/sky_observer.hpp
     ${PROJECT_SOURCE_DIR}/src/mln/style/source.cpp
     ${PROJECT_SOURCE_DIR}/src/mln/style/source_impl.cpp
     ${PROJECT_SOURCE_DIR}/src/mln/style/source_impl.hpp

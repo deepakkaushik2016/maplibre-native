@@ -407,3 +407,13 @@ const lightHpp = readAndCompile(`include/mln/style/light.hpp.ejs`, root);
 const lightCpp = readAndCompile(`src/mln/style/light.cpp.ejs`, root);
 writeIfModified(`include/mln/style/light.hpp`, lightHpp({properties: lightProperties}), outLocation);
 writeIfModified(`src/mln/style/light.cpp`, lightCpp({properties: lightProperties}), outLocation);
+
+// Sky
+/** @type {any[]} **/
+const skyProperties = Object.keys(spec[`sky`]).map((name) => ({...spec[`sky`][name], name}));
+skyProperties.sort((a, b) => collator.compare(a.name, b.name));
+
+const skyHpp = readAndCompile(`include/mln/style/sky.hpp.ejs`, root);
+const skyCpp = readAndCompile(`src/mln/style/sky.cpp.ejs`, root);
+writeIfModified(`include/mln/style/sky.hpp`, skyHpp({properties: skyProperties}), outLocation);
+writeIfModified(`src/mln/style/sky.cpp`, skyCpp({properties: skyProperties}), outLocation);

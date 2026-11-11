@@ -4,6 +4,7 @@
 #include <mln/style/sprite.hpp>
 #include <mln/style/source.hpp>
 #include <mln/style/light.hpp>
+#include <mln/style/sky.hpp>
 #include <mln/style/terrain.hpp>
 
 #include <mln/text/glyph.hpp>
@@ -41,6 +42,8 @@ public:
 
     TransitionOptions transition{{util::DEFAULT_TRANSITION_DURATION}};
     Light light;
+    // The style's sky; absent when the style has none.
+    std::optional<Sky> sky;
     std::optional<Terrain> terrain;
 
     // Default values of the root "state" property, keyed by state property
@@ -61,6 +64,7 @@ public:
 private:
     void parseTransition(const JSValue&);
     void parseLight(const JSValue&);
+    void parseSky(const JSValue&);
     void parseTerrain(const JSValue&);
     void parseState(const JSValue&);
     void parseSources(const JSValue&);

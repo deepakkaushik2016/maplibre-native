@@ -99,6 +99,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/style/filter.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/properties.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/property_expression.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/style/sky.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/source.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/style.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/style_image.test.cpp

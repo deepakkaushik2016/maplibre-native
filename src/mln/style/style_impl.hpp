@@ -7,6 +7,7 @@
 #include <mln/style/source_observer.hpp>
 #include <mln/style/layer_observer.hpp>
 #include <mln/style/light_observer.hpp>
+#include <mln/style/sky_observer.hpp>
 #include <mln/style/terrain_observer.hpp>
 #include <mln/sprite/sprite_loader_observer.hpp>
 #include <mln/style/image.hpp>
@@ -39,6 +40,7 @@ class Style::Impl : public SpriteLoaderObserver,
                     public SourceObserver,
                     public LayerObserver,
                     public LightObserver,
+                    public SkyObserver,
                     public TerrainObserver,
                     public util::noncopyable {
 public:
@@ -88,6 +90,10 @@ public:
     void setLight(std::unique_ptr<Light>);
     Light* getLight() const;
 
+    /// nullptr clears the sky.
+    void setSky(std::unique_ptr<Sky>);
+    Sky* getSky() const;
+
     void setTerrain(std::unique_ptr<Terrain>);
     Terrain* getTerrain() const;
     /// Set a global state property. A null value resets the property to the
@@ -136,6 +142,7 @@ private:
     Collection<Layer> layers;
     TransitionOptions transitionOptions;
     std::unique_ptr<Light> light;
+    std::unique_ptr<Sky> sky;
     std::unique_ptr<Terrain> terrain;
     std::unordered_map<std::string, bool> spritesLoadingStatus;
 
@@ -165,6 +172,9 @@ private:
 
     // LightObserver implementation.
     void onLightChanged(const Light&) override;
+
+    // SkyObserver implementation.
+    void onSkyChanged(const Sky&) override;
 
     // TerrainObserver implementation.
     void onTerrainChanged(const Terrain&) override;

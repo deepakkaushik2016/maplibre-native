@@ -214,6 +214,11 @@ void Map::Impl::onUpdate() {
         }
     }
 
+    std::optional<Immutable<style::Sky::Impl>> skyImpl;
+    if (const auto* sky = style->impl->getSky()) {
+        skyImpl = sky->impl;
+    }
+
     std::optional<Immutable<style::Terrain::Impl>> terrainImpl;
     if (auto* terrain = style->impl->getTerrain()) {
         terrainImpl = terrain->impl;
@@ -240,6 +245,7 @@ void Map::Impl::onUpdate() {
                                .spriteLoaded = style->impl->areSpritesLoaded(),
                                .transitionOptions = style->impl->getTransitionOptions(),
                                .light = style->impl->getLight()->impl,
+                               .sky = skyImpl,
                                .terrain = terrainImpl,
                                .images = style->impl->getImageImpls(),
                                .sources = style->impl->getSourceImpls(),
