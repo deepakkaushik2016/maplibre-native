@@ -113,6 +113,11 @@ public:
     /// signature would force. Owned by the renderer for the frame; null off-terrain.
     const std::map<UnwrappedTileID, std::size_t>* perTargetDrapeSignature = nullptr;
 
+    /// The zoom step drape bakes are keyed on, from the map's TerrainLoadMode
+    /// (TerrainLoadBudget::drapeZoomStep): both signatures above and
+    /// RenderTarget::computeDrapeCoverage fold terrain::drapeZoomKey(zoom, drapeZoomStep).
+    double drapeZoomStep = 1.0;
+
     RenderPass pass = RenderPass::Opaque;
     MapMode mapMode;
     MapDebugOptions debugOptions;

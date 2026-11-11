@@ -164,11 +164,12 @@ RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrato
                                                                const PaintParameters& parameters) const {
     DrapeCoverage coverage;
     coverage.totalGroups = 0;
-    // Integer tile-zoom only, NOT the continuous zoom: a drape tile's rasterized content
-    // is stable within a zoom level, so a pinch within one level must not invalidate it
-    // every frame. Crossing an integer zoom changes the covering tiles (contentHash) and
-    // re-renders anyway. Matches maplibre-gl-js (a terrain tile's texture is per tile-z).
-    coverage.zoom = static_cast<double>(static_cast<int32_t>(parameters.state.getZoom()));
+    // The zoom key, NOT the continuous zoom: the zoom floored to the load mode's
+    // TerrainLoadBudget::drapeZoomStep, so a pinch re-bakes at most once per step rather than
+    // every frame. A quarter step (Quality, Balanced) keeps zoom-interpolated paint - a line
+    // width over z12 -> z13 - within a quarter zoom of the camera; a whole step (Performance)
+    // keys on the tile zoom, as maplibre-gl-js does (a terrain tile's texture is per tile-z).
+    coverage.zoom = terrain::drapeZoomKey(parameters.state.getZoom(), parameters.drapeZoomStep);
     // NOTE: the paint-property epoch is deliberately NOT tracked here. gl-js keys its
     // terrain RTT cache on tile coverage + source revision, never on paint changes.
     // Tracking the global epoch re-rendered every drape target on any paint transition -
@@ -418,7 +419,7 @@ RenderTarget::RenderResult RenderTarget::render(RenderOrchestrator& orchestrator
         // coarser ancestor fallbacks): while browsing, a tile's content briefly
         // drops out of the render set (eviction, reload) and re-rendering would
         // flash the drape empty before it recovers. A genuine change - a tile's
-        // drawable set changing (contentHash) or crossing an integer zoom - is not
+        // drawable set changing (contentHash) or a new zoom key - is not
         // "worse" and falls through to re-render. The target's lifetime bounds
         // staleness: when its terrain tile leaves the cover it is destroyed.
         if (coverage.worseThan(bakedCoverage) && !clearColorChanged) {

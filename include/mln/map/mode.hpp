@@ -98,6 +98,14 @@ struct TerrainLoadBudget {
     /// magnifies them; 1 (512 px) takes a quarter of the GPU memory per target, at the cost of
     /// softer, more aliased draped detail in close-ups. Changing it rebuilds the drape pool.
     uint32_t drapeQualityFactor;
+    /// The zoom step a drape target's cached bake is keyed on: a target re-bakes when the camera
+    /// zoom, floored to a multiple of this step (terrain::drapeZoomKey), changes. Draped paint that
+    /// is interpolated over zoom - a line width, an opacity - is baked at the zoom of the last
+    /// re-bake, so 0.25 keeps it within a quarter zoom of the camera, as it is without terrain, at
+    /// the cost of at most 4 re-bakes per zoom level while pinching (panning re-bakes nothing).
+    /// 1.0 keys on whole zooms, as maplibre-gl-js's render-to-texture does, and re-bakes only when
+    /// the tile zoom changes.
+    double drapeZoomStep;
 };
 
 constexpr TerrainLoadBudget terrainLoadBudget(TerrainLoadMode mode) {
@@ -107,13 +115,15 @@ constexpr TerrainLoadBudget terrainLoadBudget(TerrainLoadMode mode) {
                     .drapeRerendersPerFrame = 16,
                     .maxMeshTiles = 48,
                     .meshTargetZoom = 15,
-                    .drapeQualityFactor = 2};
+                    .drapeQualityFactor = 2,
+                    .drapeZoomStep = 0.25};
         case TerrainLoadMode::Performance:
             return {.newTileBuildsPerFrame = 8,
                     .drapeRerendersPerFrame = 4,
                     .maxMeshTiles = 24,
                     .meshTargetZoom = 14,
-                    .drapeQualityFactor = 1};
+                    .drapeQualityFactor = 1,
+                    .drapeZoomStep = 1.0};
         case TerrainLoadMode::Quality:
         default:
             // no per-frame budget, generous tile cap, mesh follows the view
@@ -121,7 +131,8 @@ constexpr TerrainLoadBudget terrainLoadBudget(TerrainLoadMode mode) {
                     .drapeRerendersPerFrame = 0,
                     .maxMeshTiles = 64,
                     .meshTargetZoom = 22,
-                    .drapeQualityFactor = 2};
+                    .drapeQualityFactor = 2,
+                    .drapeZoomStep = 0.25};
     }
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -29,6 +30,12 @@ inline bool shouldRebind(const DEMBinding& current, const DEMBinding& available)
         return available.tier > current.tier;
     }
     return available.tier <= 1 && available.demZoom > current.demZoom;
+}
+
+/// The zoom a drape target's bake is keyed on: `zoom` floored to a multiple of `step`
+/// (TerrainLoadBudget::drapeZoomStep). The target re-bakes when this changes.
+inline double drapeZoomKey(double zoom, double step) {
+    return std::floor(zoom / step) * step;
 }
 
 /// How one draped layer group covers a drape target.

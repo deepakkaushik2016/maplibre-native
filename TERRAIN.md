@@ -886,7 +886,10 @@ unlimited** = the historical sharp snap-load, so nothing regresses; Balanced =
 cap (`maxMeshTiles`: 64 / 48 / 24) and how deep the mesh goes past a coarse DEM
 (`meshTargetZoom`: Quality follows the view as gl-js does; Balanced z15, Performance z14,
 at most three levels past the DEM) and the drape target size (`drapeQualityFactor`:
-1024 / 1024 / 512 px; the pool is rebuilt on a change, see "Drape target size"), so it
+1024 / 1024 / 512 px; the pool is rebuilt on a change, see "Drape target size") and the zoom
+step drapes re-bake at (`drapeZoomStep`: 0.25 / 0.25 / 1.0, so zoom-interpolated paint such as a
+line width keeps up during a pinch at up to 4 re-bakes per zoom level, where gl-js and Performance
+hold it at the tile zoom; render test `terrain/line-width-fractional-zoom`), so it
 changes the final image too: close-up sharpness, and detail in the distance in tilted views. Exposed on Android
 (`MapLibreMap.setTerrainLoadMode`, `TerrainLoadMode` enum). All five "3D Terrain"
 test activities share a `TerrainTestOptions` overflow menu that toggles terrain,

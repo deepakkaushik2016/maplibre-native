@@ -163,9 +163,9 @@ protected:
         /// ids: those are rebuilt with fresh ids every frame during fades/bucket updates, which
         /// churned the signature and re-rendered every drape each frame while panning.
         std::size_t contentHash = 0;
-        /// Integer tile-zoom (draped UBOs carry zoom-derived values like line ratio);
-        /// stored quantized so a pinch within one zoom level does not invalidate the
-        /// cache. See computeDrapeCoverage.
+        /// Zoom key: the zoom floored to TerrainLoadBudget::drapeZoomStep (draped UBOs carry
+        /// zoom-derived values like line width and ratio); stored quantized so a pinch within
+        /// one step does not invalidate the cache. See computeDrapeCoverage.
         double zoom = -1;
         /// Evaluated-property generation. Retained for reference but intentionally NOT
         /// part of sameContentAs: the drape cache must not re-render on paint changes

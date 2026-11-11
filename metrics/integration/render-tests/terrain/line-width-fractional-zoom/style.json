@@ -1,0 +1,106 @@
+{
+  "version": 8,
+  "metadata": {
+    "test": {
+      "description": "A line whose width is interpolated 2 -> 12 px over z12 -> z13, draped on terrain in TerrainLoadMode Balanced. The map renders at z12, then zooms to z12.5 with the same covering tiles: the drape must re-bake at the quarter-zoom key so the line is 7 px wide, not the z12 bake magnified (2.8 px). Exaggeration 0 keeps the camera model out of the comparison; the DEM's maxzoom 10 holds the Balanced mesh at z13 at both zooms. expected.png is maplibre-gl-js WITHOUT terrain at z12.5. See README.md.",
+      "height": 256,
+      "width": 256,
+      "terrainLoadMode": "balanced",
+      "operations": [
+        [
+          "wait"
+        ],
+        [
+          "setZoom",
+          12.5
+        ],
+        [
+          "wait"
+        ]
+      ]
+    }
+  },
+  "center": [
+    11.52517,
+    47.34487
+  ],
+  "zoom": 12,
+  "pitch": 0,
+  "bearing": 0,
+  "sources": {
+    "terrain": {
+      "type": "raster-dem",
+      "tiles": [
+        "local://tiles/terrain-shading/{z}-{x}-{y}.terrain.png"
+      ],
+      "maxzoom": 10,
+      "tileSize": 256
+    },
+    "line": {
+      "type": "geojson",
+      "data": {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {
+          "type": "LineString",
+          "coordinates": [
+            [
+              11.512,
+              47.338
+            ],
+            [
+              11.52,
+              47.351
+            ],
+            [
+              11.53,
+              47.338
+            ],
+            [
+              11.538,
+              47.351
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "white"
+      }
+    },
+    {
+      "id": "line",
+      "type": "line",
+      "source": "line",
+      "layout": {
+        "line-cap": "butt",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": "#d00",
+        "line-width": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          2,
+          13,
+          12
+        ]
+      }
+    }
+  ],
+  "terrain": {
+    "source": "terrain",
+    "exaggeration": 0.0
+  }
+}

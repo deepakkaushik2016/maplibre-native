@@ -251,6 +251,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     parameters.symbolFadeChange = renderTreeParameters.symbolFadeChange;
     parameters.opaquePassCutoff = renderTreeParameters.opaquePassCutOff;
     parameters.terrain = orchestrator.getRenderTerrain();
+    parameters.drapeZoomStep = terrainLoadBudget(updateParameters->terrainLoadMode).drapeZoomStep;
     const auto& sourceRenderItems = renderTree.getSourceRenderItems();
 
     const auto& layerRenderItems = renderTree.getLayerRenderItemMap();
@@ -371,19 +372,21 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         // PaintParameters::drapedContentSignature) and each drape target's own signature
         // (perTargetDrapeSignature), so RenderTarget::render can skip re-rendering - and
         // re-scanning - a target whose content is unchanged. Both fold the covering-tile
-        // ids of all draped drawables, the draped group count, and the INTEGER tile-zoom
-        // (not the continuous zoom), so pan / pitch / in-level pinch reuse the baked drape
-        // textures and drapes re-render only when the covering tiles or integer zoom change
-        // (matches maplibre-gl-js). The global paint-property epoch is deliberately not folded
-        // in, since it would re-render every drape on any transition (e.g. a single label
-        // fading in). Each draped layer's own paint revision and each bucket's feature-state
+        // ids of all draped drawables, the draped group count, and the drape zoom key (the
+        // zoom floored to the load mode's TerrainLoadBudget::drapeZoomStep, not the
+        // continuous zoom), so pan / pitch reuse the baked drape textures and drapes
+        // re-render only when the covering tiles or the zoom key change: at most 4 times per
+        // zoom level while pinching in Quality and Balanced, and only at whole zooms in
+        // Performance, as in maplibre-gl-js. The global paint-property epoch is deliberately
+        // not folded in, since it would re-render every drape on any transition (e.g. a single
+        // label fading in). Each draped layer's own paint revision and each bucket's feature-state
         // revision are (see RenderTarget::drapedSourceHash): a paint or feature-state change
         // keeps the same tiles and buckets, and the cached drape kept the old paint until the
-        // covering tiles or the integer zoom moved.
+        // covering tiles or the zoom key moved.
         const bool terrainActive = orchestrator.getRenderTerrain() != nullptr;
         bool drapedContentChanged = true;
         if (terrainActive) {
-            const int32_t zoomLevel = static_cast<int32_t>(parameters.state.getZoom());
+            const double zoomKey = terrain::drapeZoomKey(parameters.state.getZoom(), parameters.drapeZoomStep);
             // Single pass over all draped drawables: fold each covering-tile hash into the
             // global signature and record (tile, hash) in a flat vector. A target's own
             // signature is then an order-independent sum of the hashes whose tile overlaps
@@ -421,7 +424,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
                 });
             });
             util::hash_combine(signature, drapedGroupCount);
-            util::hash_combine(signature, zoomLevel);
+            util::hash_combine(signature, zoomKey);
             parameters.drapedContentSignature = signature;
             // Also treat the content as changed on the frame the drape cover reappears (fresh
             // targets after terrain was off / had an empty cover): the draped drawables still
@@ -431,7 +434,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             const bool coverJustReappeared = frameDrapeTargetCount > 0 && !terrainHadCoverLastFrame;
             // Likewise on a frame that adds a drape target: it bakes now, with the draped
             // drawables' UBOs as their tweakers last left them. Those carry the camera's zoom of
-            // that frame, so a target that enters the cover within the same integer zoom with no
+            // that frame, so a target that enters the cover within the same zoom key with no
             // draped tile changing - the mesh moving from z13 to z14 tiles between z13.2 and z13.5
             // over a DEM drawn from its z12 tiles - drew lines 2^0.3 too wide, for as long as it
             // lived. Targets kept from earlier frames are not re-rendered by this (their coverage
@@ -441,11 +444,11 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             lastDrapedContentSignature = signature;
 
             // Rebuild the per-target signature map only when the drape content actually
-            // changed. When it did not (steady panning, idle, in-level pinch) the map is
+            // changed. When it did not (steady panning, idle, a pinch within one zoom step) the map is
             // identical to last frame's, so reusing the cached member skips this
             // O(targets x draped-tiles) pass - pure per-frame overhead otherwise, and the
             // dominant per-frame cost on CPU-encode-bound low-end GPUs. Because the global
-            // signature folds the covering-tile set, group count and integer zoom, an
+            // signature folds the covering-tile set, group count and zoom key, an
             // unchanged signature guarantees the same targets with the same per-target sums.
             if (drapedContentChanged) {
                 perTargetDrapeSignature.clear();
@@ -461,7 +464,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
                         }
                     }
                     util::hash_combine(sig, drapedGroupCount);
-                    util::hash_combine(sig, zoomLevel);
+                    util::hash_combine(sig, zoomKey);
                     perTargetDrapeSignature[*tid] = sig;
                 });
             }
