@@ -1,12 +1,35 @@
 # terrain/drape-performance
 
-`terrain/line-solid` at `TerrainLoadMode::Performance` (style metadata
-`"terrainLoadMode": "performance"`, read by the render-test runner). Performance drapes each
-terrain mesh tile into a 512 px target (`TerrainLoadBudget::drapeQualityFactor` 1), where
-Quality and Balanced use 1024 px (factor 2).
+Guards that `TerrainLoadMode::Performance` drapes into 512 px targets
+(`TerrainLoadBudget::drapeQualityFactor` 1), matching maplibre-gl-js at its render-to-texture
+`qualityFactor` 1, where Quality and Balanced drape at 1024 px.
 
-The style is `terrain/line-solid/style.json` with only the description and the
-`terrainLoadMode` key changed.
+The scene is the `terrain-shading` Innsbruck DEM and centre of the other terrain tests, with
+the 4 px red line of `terrain/line-solid`, at zoom 14, pitch 45, 512x512, terrain exaggeration 0.
+The style metadata sets `"terrainLoadMode": "performance"`, which the render-test runner applies.
+
+Why this camera:
+
+- **Exaggeration 0.** Native still renders centre the camera at sea level, but maplibre-gl-js
+  clamps the centre to the ground (about 2,400 m here). Over relief, the two cameras see
+  different scenes, and no `centerAltitude` lines them up (a sweep of 2,000-4,500 m left 33-58 %
+  of pixels different with the numbered raster). On a flat mesh the two cameras agree, so the
+  only difference left is how the drape is sampled. The line is still drawn into the drape
+  targets and sampled through the terrain mesh.
+- **Zoom 14, pitch 45.** The mesh magnifies the drape in the near field enough that 512 and
+  1024 px targets rasterise the line differently. At zoom 12 the gap fits inside the default
+  `allowed`.
+- **No numbered raster.** Native and gl-js pick different raster tiles in this view (24-35 %
+  of pixels differ at either resolution), which would hide the drape difference.
+
+On macOS Metal against this baseline:
+
+| native mode | drape px | diff | result |
+|---|---|---|---|
+| Performance | 512 | 0.0000801 | pass |
+| Performance with the factor forced to 2 | 1024 | 0.000675 | fail |
+| Balanced | 1024 | 0.00103 | fail |
+| Quality | 1024 | 0.00103 | fail |
 
 ## expected.png: maplibre-gl-js at qualityFactor 1
 
@@ -30,17 +53,3 @@ baseline was made from a source edit:
   ```
 
 - The edit reverted and `npm run build-dev` run again.
-
-Checks made on the result:
-
-- It differs from `terrain/line-solid/expected.png` (gl-js at qualityFactor 2, same scene) in
-  1828 pixels, 323 of them by more than 16 in a channel, along the draped line.
-- Stock gl-js (qualityFactor 2) fails against it: the 512 px drape is what this baseline grades.
-
-## Status
-
-Listed in the terrain known-failure list under `metrics/ignores/`: native renders this pitched, exaggerated
-scene white (the camera sits below the relief), as it does `terrain/line-solid`, so the oracle
-cannot grade the drape yet. The 512 px pool is proven by the gtests
-`TerrainDrapePool.PerformanceModeUses512Targets` and
-`TerrainDrapePool.ModeSwitchRebuildsPoolWithoutLeak`.

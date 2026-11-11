@@ -2,9 +2,9 @@
   "version": 8,
   "metadata": {
     "test": {
-      "description": "terrain/line-solid at TerrainLoadMode Performance, which drapes into 512 px targets (qualityFactor 1) instead of 1024 px. expected.png is maplibre-gl-js with its render-to-texture qualityFactor set to 1; see README.md.",
-      "height": 256,
-      "width": 256,
+      "description": "A 4 px line draped on terrain at TerrainLoadMode Performance, which drapes into 512 px targets (drapeQualityFactor 1) instead of 1024 px. Exaggeration 0 keeps the camera model out of the comparison (native and maplibre-gl-js agree on a flat mesh), and zoom 14 at pitch 45 magnifies the drape in the near field. expected.png is maplibre-gl-js with its render-to-texture qualityFactor set to 1; native in Quality (1024 px) fails against it. See README.md.",
+      "height": 512,
+      "width": 512,
       "terrainLoadMode": "performance"
     }
   },
@@ -12,8 +12,9 @@
     11.52517,
     47.34487
   ],
-  "zoom": 13,
-  "pitch": 60,
+  "zoom": 14.0,
+  "pitch": 45.0,
+  "bearing": 0,
   "sources": {
     "terrain": {
       "type": "raster-dem",
@@ -84,6 +85,6 @@
   ],
   "terrain": {
     "source": "terrain",
-    "exaggeration": 1.5
+    "exaggeration": 0.0
   }
 }
