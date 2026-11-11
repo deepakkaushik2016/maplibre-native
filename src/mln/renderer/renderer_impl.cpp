@@ -261,6 +261,19 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     // Whether this frame's cover has a drape target it did not have last frame. A new target bakes
     // this frame, so the draped tweakers must run (see skipDrapedTweaker below).
     bool drapeTargetCreated = false;
+    // The drape target size follows the load mode (TerrainLoadBudget::drapeQualityFactor). On a
+    // change, drop every holder of the old targets before the pool rebuilds at the new size: the
+    // orchestrator's references, and the terrain drawables, each built on its tile's target
+    // texture - kept, they would sample a texture nothing renders into any more. The drawables are
+    // rebuilt on the new targets by RenderTerrain::update below, so the old textures are freed now.
+    const uint32_t drapeSize = drapeTileSize * terrainLoadBudget(updateParameters->terrainLoadMode).drapeQualityFactor;
+    if (drapeSize != texturePool.getTileSize()) {
+        orchestrator.releaseDrapeRenderTargets();
+        if (auto* terrain = orchestrator.getRenderTerrain()) {
+            terrain->dropDrawablesOutside({});
+        }
+        texturePool.setTileSize(drapeSize);
+    }
     if (auto* terrain = orchestrator.getRenderTerrain()) {
         // Drape targets must exist before RenderTerrain::update drapes into them,
         // so build the same mesh cover it will use - the elevation-aware LOD ideal

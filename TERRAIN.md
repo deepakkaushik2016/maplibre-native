@@ -885,8 +885,9 @@ unlimited** = the historical sharp snap-load, so nothing regresses; Balanced =
 32 tiles / 16 drapes per frame, Performance = 8 / 4. The mode also sets the mesh-tile
 cap (`maxMeshTiles`: 64 / 48 / 24) and how deep the mesh goes past a coarse DEM
 (`meshTargetZoom`: Quality follows the view as gl-js does; Balanced z15, Performance z14,
-at most three levels past the DEM), so it changes the final image too: close-up
-sharpness, and detail in the distance in tilted views. Exposed on Android
+at most three levels past the DEM) and the drape target size (`drapeQualityFactor`:
+1024 / 1024 / 512 px; the pool is rebuilt on a change, see "Drape target size"), so it
+changes the final image too: close-up sharpness, and detail in the distance in tilted views. Exposed on Android
 (`MapLibreMap.setTerrainLoadMode`, `TerrainLoadMode` enum). All five "3D Terrain"
 test activities share a `TerrainTestOptions` overflow menu that toggles terrain,
 switches load mode, toggles the built-in rendering-stats HUD (FPS + frame
@@ -1031,7 +1032,14 @@ This known issue is closed.
 ### Phase 3 - Seams and quality
 
 - **Drape target size** (`Renderer::Impl::texturePool`). Now `drapeTileSize *
-  drapeQualityFactor` = 512 * 2 = **1024x1024**, matching maplibre-gl-js, which
+  TerrainLoadBudget::drapeQualityFactor` = 512 * 2 = **1024x1024** in Quality and
+  Balanced, and 512 * 1 = **512x512** in Performance (a quarter of the drape memory, for
+  constrained devices). When the factor changes, `Renderer::Impl::render` drops the
+  orchestrator's drape references and every terrain drawable (each holds its target's
+  texture) and rebuilds the pool at the new size before the drape pass; the drawables are
+  rebuilt on the new targets the same frame (gtest `TerrainDrapePool.ModeSwitchRebuildsPoolWithoutLeak`,
+  render test `terrain/drape-performance` against gl-js at qualityFactor 1). 1024 matches
+  maplibre-gl-js, which
   renders its render-to-texture tiles at `tileSize * qualityFactor` (a fixed
   `qualityFactor = 2`) *specifically* so draped thin lines are not pixelated/
   aliased when the mesh magnifies them (`src/render/terrain.ts`,
@@ -1041,8 +1049,8 @@ This known issue is closed.
   lower-res target and produced no effective AA. Like gl-js, this is a fixed
   factor independent of `pixelRatio`, so at very high DPR in the foreground the
   1024 target can still be below screen resolution (softer, but no longer
-  aliased); `drapeQualityFactor` is the single knob to raise it (each step is 4x
-  GPU memory per target) or drop back to 1 on constrained devices. Was the
+  aliased); `drapeQualityFactor` is the single knob (each step is 4x GPU memory per
+  target). Was the
   long-standing `// TODO: tile size`.
 - Camera-terrain collision: a collision-only fix was prototyped and reverted
   (felt worse - it corrected only after the gesture); the real fix is the

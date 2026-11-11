@@ -26,6 +26,14 @@ TexturePool::TexturePool(uint32_t tilesize)
 
 TexturePool::~TexturePool() = default;
 
+void TexturePool::setTileSize(uint32_t size) {
+    if (size == tileSize) {
+        return;
+    }
+    tileSize = size;
+    renderTargets.clear();
+}
+
 bool TexturePool::createRenderTarget(gfx::Context& context, const UnwrappedTileID& id, const Color& backgroundColor) {
     // Keep an existing render target; recreating it every frame churns GL
     // texture memory and invalidates the texture bound to the terrain drawable

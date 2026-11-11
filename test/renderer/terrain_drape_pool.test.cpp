@@ -1,15 +1,27 @@
 #include <mln/test/util.hpp>
+#include <mln/test/map_adapter.hpp>
+#include <mln/test/renderer_test_access.hpp>
+#include <mln/test/stub_file_source.hpp>
 
 #include <mln/gfx/backend_scope.hpp>
 #include <mln/gfx/context.hpp>
 #include <mln/gfx/headless_backend.hpp>
+#include <mln/gfx/headless_frontend.hpp>
 #include <mln/gfx/offscreen_texture.hpp>
 #include <mln/gfx/texture2d.hpp>
 #include <mln/renderer/texture_pool.hpp>
+#include <mln/map/camera.hpp>
+#include <mln/map/map_options.hpp>
+#include <mln/map/mode.hpp>
+#include <mln/style/style.hpp>
 #include <mln/tile/tile_id.hpp>
+#include <mln/util/image.hpp>
+#include <mln/util/run_loop.hpp>
 
 #include <memory>
 #include <set>
+#include <string>
+#include <vector>
 
 using namespace mln;
 
@@ -150,4 +162,109 @@ TEST_F(TerrainDrapePool, ATargetThatHasLentItsTextureHasNone) {
     ASSERT_NE(nullptr, offscreen);
     EXPECT_EQ(nullptr, target.getTexture());
     EXPECT_FALSE(target.canLend(drapeSpec(64)));
+}
+
+// The drape target size follows the map's TerrainLoadMode: Performance drapes at 512 px
+// (TerrainLoadBudget::drapeQualityFactor 1), a quarter of the memory of the 1024 px targets the
+// other modes use. These render a terrain map, so they read the pool through RendererTestAccess.
+namespace {
+
+const char* const drapeModeStyle = R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 10,
+      "tileSize": 256
+    }
+  },
+  "terrain": {"source": "dem", "exaggeration": 1.0},
+  "layers": [{"id": "background", "type": "background", "paint": {"background-color": "white"}}]
+})STYLE";
+
+// A 1000 m plateau in Terrain-RGB: -10000 + (1 * 65536 + 173 * 256 + 176) * 0.1 = 1000.
+std::string plateauDEMTile() {
+    PremultipliedImage image({256, 256});
+    for (uint32_t i = 0; i < 256 * 256; ++i) {
+        uint8_t* px = image.data.get() + i * 4;
+        px[0] = 1;
+        px[1] = 173;
+        px[2] = 176;
+        px[3] = 255;
+    }
+    return encodePNG(image);
+}
+
+struct DrapeModeScene {
+    util::RunLoop loop;
+    std::shared_ptr<StubFileSource> fileSource = std::make_shared<StubFileSource>(ResourceOptions::Default(),
+                                                                                  ClientOptions());
+    std::string tile = plateauDEMTile();
+    HeadlessFrontend frontend{{256, 256}, 1};
+    MapAdapter map{frontend,
+                   MapObserver::nullObserver(),
+                   fileSource,
+                   MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize())};
+
+    DrapeModeScene() {
+        fileSource->tileResponse = [this](const Resource&) {
+            Response res;
+            res.data = std::make_shared<std::string>(tile);
+            return res;
+        };
+        map.getStyle().loadJSON(drapeModeStyle);
+        map.jumpTo(CameraOptions().withCenter(LatLng{46.0, 10.0}).withZoom(12.0).withPitch(45.0));
+    }
+
+    // One settled still frame in `mode`; returns the GPU textures alive after it.
+    int render(TerrainLoadMode mode) {
+        map.setTerrainLoadMode(mode);
+        return frontend.render(map).stats.numActiveTextures;
+    }
+
+    std::vector<mln::Size> targetSizes() { return RendererTestAccess::drapeTargetSizes(*frontend.getRenderer()); }
+};
+
+// Every drape target has this size; the pool is not empty.
+::testing::AssertionResult allTargetsAre(const std::vector<mln::Size>& sizes, uint32_t size) {
+    if (sizes.empty()) return ::testing::AssertionFailure() << "no drape targets";
+    for (const auto& s : sizes) {
+        if (s.width != size || s.height != size) {
+            return ::testing::AssertionFailure()
+                   << "a drape target is " << s.width << "x" << s.height << ", not " << size << "x" << size;
+        }
+    }
+    return ::testing::AssertionSuccess();
+}
+
+} // namespace
+
+TEST_F(TerrainDrapePool, PerformanceModeUses512Targets) {
+    DrapeModeScene scene;
+    scene.render(TerrainLoadMode::Performance);
+    const auto sizes = scene.targetSizes();
+    EXPECT_TRUE(allTargetsAre(sizes, 512));
+    // Colour (RGBA8) and depth-stencil at 4 bytes a texel each, per target; Performance caps
+    // the mesh, and with it the drape targets, at 24 tiles (TerrainLoadBudget::maxMeshTiles).
+    size_t bytes = 0;
+    for (const auto& s : sizes) bytes += size_t{s.width} * s.height * 8;
+    EXPECT_LE(bytes, size_t{24} * 512 * 512 * 8);
+}
+
+// Switching mode rebuilds the pool at the new size and frees the targets of the old one, and the
+// terrain drawables that sampled them: back in the first mode, as many textures are alive as before.
+TEST_F(TerrainDrapePool, ModeSwitchRebuildsPoolWithoutLeak) {
+    DrapeModeScene scene;
+    scene.render(TerrainLoadMode::Quality);
+    const int texturesAtFirst = scene.render(TerrainLoadMode::Quality);
+    EXPECT_TRUE(allTargetsAre(scene.targetSizes(), 1024));
+
+    scene.render(TerrainLoadMode::Performance);
+    EXPECT_TRUE(allTargetsAre(scene.targetSizes(), 512));
+
+    scene.render(TerrainLoadMode::Quality);
+    EXPECT_TRUE(allTargetsAre(scene.targetSizes(), 1024));
+    EXPECT_EQ(texturesAtFirst, scene.render(TerrainLoadMode::Quality));
 }

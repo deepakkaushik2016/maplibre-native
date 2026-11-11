@@ -1,6 +1,7 @@
 #pragma once
 
 #include <mln/gfx/context_observer.hpp>
+#include <mln/map/mode.hpp>
 #include <mln/renderer/render_orchestrator.hpp>
 #include <mln/renderer/texture_pool.hpp>
 
@@ -57,18 +58,18 @@ private:
     /// textures they sample. Rebuilding the pool per frame would reallocate every
     /// tile-sized target every frame - churning GPU memory and discarding the
     /// baked content that suppresses drape flicker.
-    // Drape target resolution = base tile size x qualityFactor. maplibre-gl-js renders
-    // its render-to-texture tiles at tileSize * qualityFactor (qualityFactor = 2, i.e.
-    // 1024x1024) precisely so draped content - thin lines especially - is not pixelated
-    // or aliased when the terrain mesh magnifies it onto the screen. Its own words
-    // (src/render/terrain.ts): "to not see pixels in the render-to-texture tiles it is
-    // good to render them bigger ... a value of 2 should be fine". At 512 (qualityFactor
-    // 1) draped roads look aliased because the line AA band, sized to the screen's device
-    // pixel ratio, falls sub-texel in the lower-resolution target. Lower drapeQualityFactor
-    // back to 1 to save GPU memory on constrained devices (each step is 4x memory/target).
+    // Drape target resolution = base tile size x TerrainLoadBudget::drapeQualityFactor, which
+    // follows the map's TerrainLoadMode. maplibre-gl-js renders its render-to-texture tiles at
+    // tileSize * qualityFactor (qualityFactor = 2, i.e. 1024x1024) precisely so draped content -
+    // thin lines especially - is not pixelated or aliased when the terrain mesh magnifies it onto
+    // the screen. Its own words (src/render/terrain.ts): "to not see pixels in the
+    // render-to-texture tiles it is good to render them bigger ... a value of 2 should be fine".
+    // Quality and Balanced use 2. Performance uses 1 (512x512): a quarter of the GPU memory per
+    // target for constrained devices, at the cost of draped roads looking aliased in close-ups,
+    // because the line AA band, sized to the screen's device pixel ratio, falls sub-texel in the
+    // lower-resolution target. render() rebuilds the pool when the factor changes.
     static constexpr uint32_t drapeTileSize = 512;
-    static constexpr uint32_t drapeQualityFactor = 2;
-    TexturePool texturePool{drapeTileSize * drapeQualityFactor};
+    TexturePool texturePool{drapeTileSize * terrainLoadBudget(TerrainLoadMode::Quality).drapeQualityFactor};
 
     gfx::RendererBackend& backend;
 

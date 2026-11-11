@@ -526,6 +526,22 @@ TestMetadata parseTestMetadata(const TestPaths& paths) {
         metadata.allowed = testValue["allowed"].GetDouble();
     }
 
+    if (testValue.HasMember("terrainLoadMode")) {
+        assert(testValue["terrainLoadMode"].IsString());
+        const std::string modeStr{testValue["terrainLoadMode"].GetString(),
+                                  testValue["terrainLoadMode"].GetStringLength()};
+        if (modeStr == "quality") {
+            metadata.terrainLoadMode = mln::TerrainLoadMode::Quality;
+        } else if (modeStr == "balanced") {
+            metadata.terrainLoadMode = mln::TerrainLoadMode::Balanced;
+        } else if (modeStr == "performance") {
+            metadata.terrainLoadMode = mln::TerrainLoadMode::Performance;
+        } else {
+            mln::Log::Warning(mln::Event::ParseStyle,
+                              "Unknown terrain load mode: " + modeStr + ". Falling back to quality");
+        }
+    }
+
     if (testValue.HasMember("terrainSkirtLength")) {
         assert(testValue["terrainSkirtLength"].IsString());
         const std::string skirtStr{testValue["terrainSkirtLength"].GetString(),

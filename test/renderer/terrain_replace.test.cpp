@@ -1,13 +1,12 @@
 #include <mln/test/util.hpp>
 #include <mln/test/stub_file_source.hpp>
 #include <mln/test/map_adapter.hpp>
+#include <mln/test/renderer_test_access.hpp>
 
 #include <mln/gfx/headless_frontend.hpp>
 #include <mln/map/camera.hpp>
 #include <mln/map/map_options.hpp>
-#include <mln/renderer/layer_group.hpp>
 #include <mln/renderer/renderer.hpp>
-#include <mln/renderer/renderer_impl.hpp>
 #include <mln/style/style.hpp>
 #include <mln/style/terrain.hpp>
 #include <mln/util/image.hpp>
@@ -19,22 +18,6 @@
 #include <string>
 
 using namespace mln;
-
-namespace mln {
-
-// Renderer and Renderer::Impl befriend this, so the test can count the layer groups the
-// orchestrator draws without public API for it.
-class RendererTestAccess {
-public:
-    static size_t layerGroupCount(Renderer& renderer, const std::string& name) {
-        size_t count = 0;
-        renderer.impl->orchestrator.visitLayerGroups(
-            [&](LayerGroupBase& group) { count += group.getName() == name ? 1 : 0; });
-        return count;
-    }
-};
-
-} // namespace mln
 
 // Replacing the terrain at runtime (an exaggeration slider, a 3D toggle) drops the RenderTerrain
 // and builds a new one. The old mesh layer group must be unregistered from the orchestrator on

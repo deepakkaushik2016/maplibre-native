@@ -19,6 +19,12 @@ public:
     TexturePool(uint32_t tilesize);
     ~TexturePool();
 
+    /// The width and height of every drape target, in pixels.
+    uint32_t getTileSize() const { return tileSize; }
+    /// Makes the drape targets `size` pixels square. A change drops every target (no texture of
+    /// the old size can serve the new one); the next updateRenderTargets creates them anew.
+    void setTileSize(uint32_t size);
+
     std::shared_ptr<RenderTarget> getRenderTarget(const UnwrappedTileID& id) const;
     std::shared_ptr<RenderTarget> getRenderTargetAncestorOrDescendant(
         const UnwrappedTileID& id, std::optional<UnwrappedTileID>& terrainTileID) const;
