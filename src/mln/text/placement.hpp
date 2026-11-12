@@ -124,7 +124,11 @@ public:
     virtual ~Placement();
     /// `terrain`: the terrain symbols are drawn on, read during this call only; null without terrain.
     virtual void placeLayers(const RenderLayerReferences&, const RenderTerrain* terrain);
-    void updateLayerBuckets(const RenderLayer&, const TransformState&, bool updateOpacities) const;
+    /// `terrain`: the terrain line labels and variable anchors are projected onto; null without terrain.
+    void updateLayerBuckets(const RenderLayer&,
+                            const TransformState&,
+                            bool updateOpacities,
+                            const RenderTerrain* terrain) const;
     virtual float symbolFadeChange(TimePoint now) const;
     virtual bool hasTransitions(TimePoint now) const;
     virtual bool transitionsEnabled() const;
@@ -173,7 +177,10 @@ protected:
     }
 
     // Returns `true` if bucket vertices were updated; returns `false` otherwise.
-    bool updateBucketDynamicAttributeData(SymbolBucket&, const TransformState&, const RenderTile& tile) const;
+    bool updateBucketDynamicAttributeData(SymbolBucket&,
+                                          const TransformState&,
+                                          const RenderTile& tile,
+                                          const RenderTerrain* terrain) const;
     void updateBucketOpacities(SymbolBucket&, const TransformState&, std::set<uint32_t>&) const;
     void markUsedJustification(SymbolBucket&,
                                style::TextVariableAnchorType,

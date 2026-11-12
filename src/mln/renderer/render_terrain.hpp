@@ -1,6 +1,8 @@
 #pragma once
 
+#include <mln/geometry/dem_data.hpp>
 #include <mln/map/mode.hpp>
+#include <mln/math/clamp.hpp>
 #include <mln/style/terrain_impl.hpp>
 #include <mln/util/immutable.hpp>
 #include <mln/tile/tile_id.hpp>
@@ -16,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <map>
 #include <set>
@@ -266,17 +269,43 @@ public:
     class TileElevation {
     public:
         TileElevation(std::shared_ptr<const DEMData> dem, float scale, float dx, float dy, float exaggeration);
-        /// The DEM height in metres (not exaggerated) at a tile-local coordinate
-        float height(float x, float y) const;
+        /// The DEM height in metres (not exaggerated) at a tile-local coordinate: sampleDEM, with
+        /// the tile's mapping into the DEM folded into one multiply-add per axis, and inline, as
+        /// the CPU samples it under every line label's vertices each frame (reprojectLineLabels).
+        float height(float x, float y) const {
+            const float px = x * texelsPerUnit + originX;
+            const float py = y * texelsPerUnit + originY;
+            const float x0 = std::floor(px);
+            const float y0 = std::floor(py);
+            const float fx = px - x0;
+            const float fy = py - y0;
+            const auto texel = [&](float t) {
+                return static_cast<int32_t>(util::clamp(t, -2.0f, maxTexel));
+            };
+            const int32_t xa = texel(x0);
+            const int32_t xb = texel(x0 + 1.0f);
+            const int32_t ya = texel(y0);
+            const int32_t yb = texel(y0 + 1.0f);
+            const float tl = dem->get(xa, ya);
+            const float tr = dem->get(xb, ya);
+            const float bl = dem->get(xa, yb);
+            const float br = dem->get(xb, yb);
+            const float top = tl + (tr - tl) * fx;
+            const float bottom = bl + (br - bl) * fx;
+            return top + (bottom - top) * fy;
+        }
         /// The exaggerated height in metres the shaders lift a tile-local point by
         float operator()(const Point<float>& point) const { return height(point.x, point.y) * exaggeration; }
 
     private:
         std::shared_ptr<const DEMData> dem;
-        /// Maps the tile into the DEM tile: it is the 1/scale sub-square at (dx, dy)
-        float scale;
-        float dx;
-        float dy;
+        /// Maps a tile coordinate to DEM pixels, the tile being the 1/scale sub-square at (dx, dy)
+        /// of the DEM tile, and each pixel describing the cell centred on it.
+        float texelsPerUnit;
+        float originX;
+        float originY;
+        /// The last texel of the DEM's 2-texel border
+        float maxTexel;
         float exaggeration;
     };
 

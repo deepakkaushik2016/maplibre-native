@@ -145,16 +145,7 @@ public:
 
     bool hasIconTextFit = getLayout().get<IconTextFit>() != IconTextFitType::None;
 
-    // Whether the text and the icon are drawn lifted onto the terrain. The symbol shaders lift the
-    // anchor by the terrain under it through the label-plane matrix, which line labels and
-    // variable anchors replace with an identity over positions projected on the CPU, at sea level
-    // (see SymbolLayerTweaker).
-    bool textOnTerrain = (placementType == SymbolPlacementType::Point || !rotateTextWithMap) &&
-                         !getBucket().hasVariablePlacement;
-    bool iconOnTerrain = (placementType == SymbolPlacementType::Point || !rotateIconWithMap) &&
-                         (!getBucket().hasVariablePlacement || !hasIconTextFit);
-
-    // The terrain under the tile's symbols; empty without terrain, or where none is drawn lifted.
+    // The terrain under the tile's symbols; empty without terrain.
     std::optional<RenderTerrain::TileElevation> elevation;
 
     std::optional<CollisionBoundaries> avoidEdges;
@@ -269,7 +260,7 @@ void Placement::placeSymbolBucket(const BucketPlacementData& params, std::set<ui
                          placementZoom,
                          collisionGroups.get(params.sourceId),
                          getAvoidEdges(symbolBucket, renderTile.matrix)};
-    if (terrain && (ctx.textOnTerrain || ctx.iconOnTerrain)) {
+    if (terrain) {
         // One DEM tile search per bucket; each symbol then samples it in O(1).
         ctx.elevation = terrain->getTileElevation(renderTile.id);
     }
@@ -310,15 +301,27 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
     const mat4& posMatrix = ctx.getRenderTile().matrix;
     // Collide the symbol where it is drawn: with terrain, lifted by the terrain under its anchor.
     // That puts it in the collision index, which queryRenderedFeatures matches symbols against,
-    // where a tap on it lands.
+    // where a tap on it lands. The shaders draw a point symbol there, and a label along a line
+    // pitched with the map, every glyph at its anchor's height; the CPU projects a variable anchor
+    // there (updateBucketDynamicAttributeData). A label along a line aligned with the viewport is
+    // drawn on the line's height under each glyph (reprojectLineLabels); it collides at its
+    // anchor's height, which costs one DEM sample per symbol rather than one per vertex and circle.
     std::optional<mat4> onTerrainMatrix;
+    std::optional<mat4> onTerrainTextLabelPlane;
+    std::optional<mat4> onTerrainIconLabelPlane;
     if (ctx.elevation) {
         if (const float elevation = (*ctx.elevation)(symbolInstance.getAnchor().point); elevation != 0.0f) {
             onTerrainMatrix = elevatedMatrix(posMatrix, elevation);
+            if (ctx.placementType != SymbolPlacementType::Point) {
+                onTerrainTextLabelPlane = elevatedMatrix(ctx.textLabelPlaneMatrix, elevation);
+                onTerrainIconLabelPlane = elevatedMatrix(ctx.iconLabelPlaneMatrix, elevation);
+            }
         }
     }
-    const mat4& textMatrix = onTerrainMatrix && ctx.textOnTerrain ? *onTerrainMatrix : posMatrix;
-    const mat4& iconMatrix = onTerrainMatrix && ctx.iconOnTerrain ? *onTerrainMatrix : posMatrix;
+    const mat4& textMatrix = onTerrainMatrix ? *onTerrainMatrix : posMatrix;
+    const mat4& iconMatrix = onTerrainMatrix ? *onTerrainMatrix : posMatrix;
+    const mat4& textLabelPlaneMatrix = onTerrainTextLabelPlane ? *onTerrainTextLabelPlane : ctx.textLabelPlaneMatrix;
+    const mat4& iconLabelPlaneMatrix = onTerrainIconLabelPlane ? *onTerrainIconLabelPlane : ctx.iconLabelPlaneMatrix;
     const auto& collisionGroup = ctx.collisionGroup;
     auto variableTextAnchors = symbolInstance.getTextAnchors();
     textBoxes.clear();
@@ -372,7 +375,7 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
                 auto placedFeature = collisionIndex.placeFeature(collisionFeature,
                                                                  {},
                                                                  textMatrix,
-                                                                 ctx.textLabelPlaneMatrix,
+                                                                 textLabelPlaneMatrix,
                                                                  ctx.pixelRatio,
                                                                  placedSymbol,
                                                                  ctx.scale,
@@ -459,13 +462,13 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
                                                           static_cast<float>(ctx.getTransformState().getBearing()));
                     textBoxes.clear();
                     if (!canPlaceAtVariableAnchor(
-                            textBox, anchor, shift, variableTextAnchors, posMatrix, ctx.pixelRatio)) {
+                            textBox, anchor, shift, variableTextAnchors, textMatrix, ctx.pixelRatio)) {
                         continue;
                     }
 
                     placedFeature = collisionIndex.placeFeature(textCollisionFeature,
                                                                 shift,
-                                                                posMatrix,
+                                                                textMatrix,
                                                                 mat4(),
                                                                 ctx.pixelRatio,
                                                                 placedSymbol,
@@ -483,7 +486,7 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
                             iconCollisionFeature,
                             shift,
                             iconMatrix,
-                            ctx.iconLabelPlaneMatrix,
+                            iconLabelPlaneMatrix,
                             ctx.pixelRatio,
                             placedSymbol,
                             ctx.scale,
@@ -581,7 +584,7 @@ JointPlacement Placement::placeSymbol(const SymbolInstance& symbolInstance, cons
             return collisionIndex.placeFeature(collisionFeature,
                                                shift,
                                                iconMatrix,
-                                               ctx.iconLabelPlaneMatrix,
+                                               iconLabelPlaneMatrix,
                                                ctx.pixelRatio,
                                                placedSymbol,
                                                ctx.scale,
@@ -790,11 +793,14 @@ void Placement::commit() {
                                      : (getPrevPlacement() ? getPrevPlacement()->fadeStartTime : TimePoint{});
 }
 
-void Placement::updateLayerBuckets(const RenderLayer& layer, const TransformState& state, bool updateOpacities) const {
+void Placement::updateLayerBuckets(const RenderLayer& layer,
+                                   const TransformState& state,
+                                   bool updateOpacities,
+                                   const RenderTerrain* terrain_) const {
     std::set<uint32_t> seenCrossTileIDs;
     for (const auto& item : layer.getPlacementData()) {
         if (!item.sortKeyRange || item.sortKeyRange->isFirstRange()) {
-            item.bucket.get().updateVertices(*this, updateOpacities, state, item.tile, seenCrossTileIDs);
+            item.bucket.get().updateVertices(*this, updateOpacities, state, item.tile, seenCrossTileIDs, terrain_);
         }
     }
 }
@@ -816,7 +822,8 @@ Point<float> calculateVariableRenderShift(style::SymbolAnchorType anchor,
 
 bool Placement::updateBucketDynamicAttributeData(SymbolBucket& bucket,
                                                  const TransformState& state,
-                                                 const RenderTile& tile) const {
+                                                 const RenderTile& tile,
+                                                 const RenderTerrain* terrain_) const {
     using namespace style;
     const auto& layout = *bucket.layout;
     const bool alongLine = layout.get<SymbolPlacement>() != SymbolPlacementType::Point;
@@ -825,6 +832,15 @@ bool Placement::updateBucketDynamicAttributeData(SymbolBucket& bucket,
                                    (bucket.allowVerticalPlacement || hasVariableAnchors) &&
                                    (bucket.hasIconData() || bucket.hasSdfIconData());
     bool result = false;
+
+    // Line labels and variable anchors are projected here, on the CPU, so this lifts them onto the
+    // terrain the shaders lift point symbols onto: one DEM tile search for the bucket, then an
+    // O(1) sample per anchor and per line vertex, as maplibre-gl-js `getElevation` per vertex.
+    std::optional<TileElevation> tileElevation;
+    if (terrain_ && (alongLine || hasVariableAnchors)) {
+        tileElevation = terrain_->getTileElevation(tile.id);
+    }
+    const TileElevation* elevation = tileElevation ? &*tileElevation : nullptr;
 
     if (alongLine) {
         if (layout.get<IconRotationAlignment>() == AlignmentType::Map) {
@@ -837,9 +853,10 @@ bool Placement::updateBucketDynamicAttributeData(SymbolBucket& bucket,
                                     pitchWithMap,
                                     true /*rotateWithMap*/,
                                     keepUpright,
-                                    tile,
+                                    tile.id,
                                     *bucket.iconSizeBinder,
-                                    state);
+                                    state,
+                                    elevation);
                 result = true;
             }
             if (bucket.hasIconData()) {
@@ -849,9 +866,10 @@ bool Placement::updateBucketDynamicAttributeData(SymbolBucket& bucket,
                                     pitchWithMap,
                                     true /*rotateWithMap*/,
                                     keepUpright,
-                                    tile,
+                                    tile.id,
                                     *bucket.iconSizeBinder,
-                                    state);
+                                    state,
+                                    elevation);
                 result = true;
             }
         }
@@ -865,9 +883,10 @@ bool Placement::updateBucketDynamicAttributeData(SymbolBucket& bucket,
                                 pitchWithMap,
                                 true /*rotateWithMap*/,
                                 keepUpright,
-                                tile,
+                                tile.id,
                                 *bucket.textSizeBinder,
-                                state);
+                                state,
+                                elevation);
             result = true;
         }
     } else if (hasVariableAnchors) {
@@ -903,7 +922,8 @@ bool Placement::updateBucketDynamicAttributeData(SymbolBucket& bucket,
                 hideGlyphs(symbol.glyphOffsets.size(), bucket.text.dynamicAttributeData());
             } else {
                 const Point<float> tileAnchor = symbol.anchorPoint;
-                const auto projectedAnchor = project(tileAnchor, pitchWithMap ? tile.matrix : labelPlaneMatrix);
+                const auto projectedAnchor = project(
+                    tileAnchor, pitchWithMap ? tile.matrix : labelPlaneMatrix, heightAt(elevation, tileAnchor));
                 const float perspectiveRatio = 0.5f +
                                                0.5f * (state.getCameraToCenterDistance() / projectedAnchor.second);
                 float renderTextSize = evaluateSizeForFeature(partiallyEvaluatedSize, symbol) * perspectiveRatio /
@@ -924,7 +944,8 @@ bool Placement::updateBucketDynamicAttributeData(SymbolBucket& bucket,
                 // pixel-based shift calculated above. In the (somewhat weird)
                 // case of pitch-aligned text, we add an equivalent tile-unit
                 // based shift to the anchor before projecting to the label
-                // plane.
+                // plane. That plane is the tile's, so the terrain lifts the text there only in the
+                // shader, by the anchor's height.
                 Point<float> shiftedAnchor;
                 if (pitchWithMap) {
                     shiftedAnchor =

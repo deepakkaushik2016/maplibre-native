@@ -1151,16 +1151,13 @@ const RenderTile* RenderTerrain::findDEMTile(const UnwrappedTileID& tileID) cons
 }
 
 RenderTerrain::TileElevation::TileElevation(
-    std::shared_ptr<const DEMData> dem_, float scale_, float dx_, float dy_, float exaggeration_)
+    std::shared_ptr<const DEMData> dem_, float scale, float dx, float dy, float exaggeration_)
     : dem(std::move(dem_)),
-      scale(scale_),
-      dx(dx_),
-      dy(dy_),
+      texelsPerUnit(static_cast<float>(dem->dim) / scale / util::EXTENT),
+      originX(dx * static_cast<float>(dem->dim) / scale - 0.5f),
+      originY(dy * static_cast<float>(dem->dim) / scale - 0.5f),
+      maxTexel(static_cast<float>(dem->dim) + 1.0f),
       exaggeration(exaggeration_) {}
-
-float RenderTerrain::TileElevation::height(float x, float y) const {
-    return sampleDEM(*dem, {.scale = scale, .dx = dx, .dy = dy}, x, y);
-}
 
 std::optional<RenderTerrain::TileElevation> RenderTerrain::getTileElevation(const UnwrappedTileID& tileID) const {
     const float exaggeration = getExaggeration();

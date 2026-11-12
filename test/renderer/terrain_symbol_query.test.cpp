@@ -89,8 +89,20 @@ double fractionalMeters(bool terrarium) {
 enum class Symbol {
     Icon,
     Text,
-    Circle
+    Circle,
+    // "WWW" placed on a straight line through the POI (`line-center`, so its one label is centred
+    // on the POI), along the line: its glyphs are projected on the CPU, aligned with the viewport.
+    LineText,
+    // The same, pitched with the map: the shader lifts its glyphs by the POI's height.
+    PitchedLineText,
+    // Point text with a variable anchor (`center`, so centred on the POI): projected on the CPU.
+    VariableText
 };
+
+bool isText(Symbol symbol) {
+    return symbol == Symbol::Text || symbol == Symbol::LineText || symbol == Symbol::PitchedLineText ||
+           symbol == Symbol::VariableText;
+}
 
 constexpr int stripesZoom = 14;
 // The first z14 tile at the cliff top under the POI's z13 tile (x = 4323, children 8646 and 8647).
@@ -159,13 +171,26 @@ std::string symbolStyle(const SceneOptions& options) {
     std::string type = "symbol";
     std::string layout;
     std::string paint = "{}";
+    constexpr auto text = R"("text-field": "WWW", "text-font": ["Open Sans Regular"], "text-size": 24,
+                             "text-allow-overlap": true)";
     switch (options.symbol) {
         case Symbol::Icon:
             layout = R"("icon-image": "marker", "icon-allow-overlap": true)";
             break;
         case Symbol::Text:
-            layout = R"("text-field": "WWW", "text-font": ["Open Sans Regular"], "text-size": 24,
-                        "text-allow-overlap": true)";
+            layout = text;
+            paint = R"({"text-color": "#f00"})";
+            break;
+        case Symbol::LineText:
+            layout = std::string(text) + R"(, "symbol-placement": "line-center", "text-pitch-alignment": "viewport")";
+            paint = R"({"text-color": "#f00"})";
+            break;
+        case Symbol::PitchedLineText:
+            layout = std::string(text) + R"(, "symbol-placement": "line-center", "text-pitch-alignment": "map")";
+            paint = R"({"text-color": "#f00"})";
+            break;
+        case Symbol::VariableText:
+            layout = std::string(text) + R"(, "text-variable-anchor": ["center"])";
             paint = R"({"text-color": "#f00"})";
             break;
         case Symbol::Circle:
@@ -173,6 +198,12 @@ std::string symbolStyle(const SceneOptions& options) {
             paint = R"({"circle-color": "#f00", "circle-radius": 8, "circle-pitch-alignment": "viewport"})";
             break;
     }
+    const bool onLine = options.symbol == Symbol::LineText || options.symbol == Symbol::PitchedLineText;
+    const std::string lng = std::to_string(options.poiLng());
+    const std::string geometry = onLine ? R"({"type": "LineString", "coordinates": [[)" +
+                                              std::to_string(options.poiLng() - 0.01) + ", 46.01], [" +
+                                              std::to_string(options.poiLng() + 0.01) + ", 46.01]]}"
+                                        : R"({"type": "Point", "coordinates": [)" + lng + ", 46.01]}";
     return R"STYLE({
   "version": 8,
   "glyphs": "http://example.com/fonts/{fontstack}/{range}.pbf",
@@ -192,8 +223,8 @@ std::string symbolStyle(const SceneOptions& options) {
       "data": {
         "type": "Feature",
         "properties": {"name": "trailhead"},
-        "geometry": {"type": "Point", "coordinates": [)STYLE" +
-           std::to_string(options.poiLng()) + R"STYLE(, 46.01]}
+        "geometry": )STYLE" +
+           geometry + R"STYLE(
       }
     }
   },
@@ -402,7 +433,7 @@ struct TerrainSymbolScene {
             ASSERT_LT(p.x, viewSize);
             ASSERT_LT(p.y, viewSize);
         }
-        if (options.symbol != Symbol::Text) {
+        if (!isText(options.symbol)) {
             ASSERT_EQ(redAround(drawn), 49) << "the icon is not drawn at its elevated projection";
         } else {
             // Text is glyph strokes, not a solid square: count over its middle.
@@ -601,4 +632,45 @@ TEST(TerrainSymbolQuery, IconOverSameZoomDEMHitsWhereDrawn) {
     EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the icon, where it is drawn, misses it";
     EXPECT_EQ(scene.query(scene.seaLevel), 0u)
         << "a tap where the icon would sit at sea level (nothing is drawn there) hits it";
+}
+
+// A line label aligned with the viewport is placed on the CPU: its glyphs must be projected onto
+// the terrain under the line, and its collision circles with them, so a tap on it finds it.
+TEST(TerrainSymbolQuery, LineLabelDrawnAndHitOnTerrain) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .symbol = Symbol::LineText});
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the line label, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(scene.seaLevel), 0u)
+        << "a tap where the line label would sit at sea level (nothing is drawn there) hits it";
+    EXPECT_EQ(scene.queryBox(scene.drawn, 20.0), 1u) << "a box around the drawn line label misses it";
+}
+
+// Pitched with the map, the shader lifts the glyphs by the anchor's height; the collision circles
+// must follow them up.
+TEST(TerrainSymbolQuery, PitchedLineLabelHitOnTerrain) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .symbol = Symbol::PitchedLineText});
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the line label, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(scene.seaLevel), 0u)
+        << "a tap where the line label would sit at sea level (nothing is drawn there) hits it";
+}
+
+// Variable-anchor text is placed on the CPU like a line label, and collides as a box like point text.
+TEST(TerrainSymbolQuery, VariableAnchorTextDrawnAndHitOnTerrain) {
+    TerrainSymbolScene scene({.exaggeration = 1.25, .symbol = Symbol::VariableText});
+    scene.expectDrawnAboveSeaLevel();
+    SCOPED_TRACE(scene.where());
+    EXPECT_EQ(scene.query(scene.drawn), 1u) << "a tap on the text, where it is drawn, misses it";
+    EXPECT_EQ(scene.query(scene.seaLevel), 0u)
+        << "a tap where the text would sit at sea level (nothing is drawn there) hits it";
+    EXPECT_EQ(scene.queryBox(scene.drawn, 20.0), 1u) << "a box around the drawn text misses it";
+}
+
+// Without terrain a line label stays where the 2D map puts it.
+TEST(TerrainSymbolQuery, LineLabelWithoutTerrainAtSeaLevel) {
+    TerrainSymbolScene scene({.exaggeration = std::nullopt, .symbol = Symbol::LineText});
+    ASSERT_GT(scene.redAround(scene.seaLevel, 8), 20) << "the line label is not drawn at its sea-level projection";
+    EXPECT_EQ(scene.query(scene.seaLevel), 1u) << "a tap on the line label misses it";
 }

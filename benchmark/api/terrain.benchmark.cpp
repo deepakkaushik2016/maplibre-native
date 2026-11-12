@@ -60,10 +60,10 @@ double groundMeters(double lng, double lat) {
     return 1400.0 + 800.0 * std::sin(lng * 120.0) * std::cos(lat * 150.0) + 450.0 * std::sin(lng * 47.0 + lat * 61.0);
 }
 
-// A Terrain-RGB tile (Mapbox encoding) of groundMeters, `dim` px square. 512 px tiles put the DEM
-// at the zoom of the vector tiles it lifts, as Mapbox and Mapterhorn serve it; 256 px tiles (as
-// Terrarium is served) put it one zoom deeper.
-std::string demTile(int z, int x, int y, uint32_t dim) {
+// A Terrain-RGB tile (Mapbox encoding) of groundMeters, or all at sea level, `dim` px square.
+// 512 px tiles put the DEM at the zoom of the vector tiles it lifts, as Mapbox and Mapterhorn serve
+// it; 256 px tiles (as Terrarium is served) put it one zoom deeper.
+std::string demTile(int z, int x, int y, uint32_t dim, bool seaLevel) {
     PremultipliedImage image({dim, dim});
     const double tiles = std::pow(2.0, z);
     std::vector<double> lngs(dim);
@@ -74,7 +74,8 @@ std::string demTile(int z, int x, int y, uint32_t dim) {
         const double n = std::numbers::pi * (1.0 - 2.0 * (y + (j + 0.5) / dim) / tiles);
         const double lat = std::atan(std::sinh(n)) * 180.0 / std::numbers::pi;
         for (uint32_t i = 0; i < dim; ++i) {
-            const auto value = static_cast<uint32_t>(std::lround((groundMeters(lngs[i], lat) + 10000.0) * 10.0));
+            const double meters = seaLevel ? 0.0 : groundMeters(lngs[i], lat);
+            const auto value = static_cast<uint32_t>(std::lround((meters + 10000.0) * 10.0));
             uint8_t* px = image.data.get() + (static_cast<size_t>(j) * dim + i) * 4;
             px[0] = static_cast<uint8_t>(value >> 16);
             px[1] = static_cast<uint8_t>((value >> 8) & 0xff);
@@ -85,11 +86,11 @@ std::string demTile(int z, int x, int y, uint32_t dim) {
     return encodePNG(image);
 }
 
-std::shared_ptr<const std::string> cachedDemTile(int z, int x, int y, uint32_t dim) {
-    static std::map<std::tuple<int, int, int, uint32_t>, std::shared_ptr<const std::string>> cache;
-    auto& entry = cache[{z, x, y, dim}];
+std::shared_ptr<const std::string> cachedDemTile(int z, int x, int y, uint32_t dim, bool seaLevel) {
+    static std::map<std::tuple<int, int, int, uint32_t, bool>, std::shared_ptr<const std::string>> cache;
+    auto& entry = cache[{z, x, y, dim, seaLevel}];
     if (!entry) {
-        entry = std::make_shared<const std::string>(demTile(z, x, y, dim));
+        entry = std::make_shared<const std::string>(demTile(z, x, y, dim, seaLevel));
     }
     return entry;
 }
@@ -111,7 +112,7 @@ public:
             const auto& t = *resource.tileData;
             requestedTiles.emplace_back(
                 static_cast<uint8_t>(t.z), static_cast<uint32_t>(t.x), static_cast<uint32_t>(t.y));
-            response.data = cachedDemTile(t.z, t.x, t.y, demTileSize);
+            response.data = cachedDemTile(t.z, t.x, t.y, demTileSize, seaLevelDem);
             if (held && *held == requestedTiles.back()) {
                 heldCallback = std::move(callback);
                 heldResponse = std::move(response);
@@ -136,6 +137,8 @@ public:
 
     /// The DEM tile size served, as the style's DEM source declares it.
     uint32_t demTileSize = 512;
+    /// Serves the DEM all at sea level.
+    bool seaLevelDem = false;
     /// Holds back the response to this DEM tile until release().
     std::optional<CanonicalTileID> held;
     bool isHeld() const { return static_cast<bool>(heldCallback); }
@@ -225,6 +228,11 @@ struct SceneOptions {
     bool terrain = true;
     /// Points per side of the symbol grid (side * side symbols, each an icon and a label).
     int peaksPerSide = 20;
+    /// Labels along the lines instead of the symbol grid: every line labelled every 100 px, once
+    /// pitched with the map (as contour heights) and once aligned with the viewport (as trail names).
+    bool lineLabels = false;
+    /// The DEM all at sea level: the terrain is on and sampled, but lifts nothing.
+    bool seaLevelDem = false;
     MapMode mode = MapMode::Static;
     uint32_t demTileSize = 512;
 };
@@ -239,7 +247,7 @@ std::string terrainStyle(const SceneOptions& options) {
             "minzoom": 11, "maxzoom": 14, "tileSize": )"
         << options.demTileSize << R"(},
     "trails": {"type": "geojson", "data": )"
-        << trailsGeoJSON(30) << R"(},
+        << trailsGeoJSON(options.lineLabels ? 60 : 30) << R"(},
     "peaks": {"type": "geojson", "data": )"
         << peaksGeoJSON(options.peaksPerSide) << R"(}
   },)";
@@ -249,13 +257,29 @@ std::string terrainStyle(const SceneOptions& options) {
     out << R"(
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "#e8e4d8"}},
-    {"id": "trails", "type": "line", "source": "trails", "paint": {"line-color": "#c03020", "line-width": 4}},
+    {"id": "trails", "type": "line", "source": "trails", "paint": {"line-color": "#c03020", "line-width": 4}},)";
+    if (options.lineLabels) {
+        out << R"(
+    {"id": "trail-heights", "type": "symbol", "source": "trails",
+     "layout": {"symbol-placement": "line", "symbol-spacing": 100, "text-field": ["get", "name"],
+                "text-font": ["Open Sans Regular"], "text-size": 12, "text-pitch-alignment": "map"},
+     "paint": {"text-color": "#202020"}},
+    {"id": "trail-names", "type": "symbol", "source": "trails",
+     "layout": {"symbol-placement": "line", "symbol-spacing": 100, "text-field": ["get", "name"],
+                "text-font": ["Open Sans Regular"], "text-size": 12, "text-pitch-alignment": "viewport",
+                "text-offset": [0, 1]},
+     "paint": {"text-color": "#202020"}}
+  ]
+})";
+    } else {
+        out << R"(
     {"id": "peaks", "type": "symbol", "source": "peaks",
      "layout": {"icon-image": "marker", "text-field": ["get", "name"], "text-font": ["Open Sans Regular"],
                 "text-size": 12, "text-offset": [0, 1.2], "text-anchor": "top"},
      "paint": {"text-color": "#202020"}}
   ]
 })";
+    }
     return out.str();
 }
 
@@ -272,7 +296,7 @@ PremultipliedImage marker() {
     return image;
 }
 
-CameraOptions sceneCamera(const LatLng& center = sceneCenter) {
+CameraOptions sceneCamera(const LatLng& center = sceneCenter, bool seaLevelDem = false) {
     // The centre sits on the drawn ground, as gl-js keeps it (and as the clamp does); the same
     // camera is used without terrain so both frames see the same view.
     return CameraOptions()
@@ -280,7 +304,7 @@ CameraOptions sceneCamera(const LatLng& center = sceneCenter) {
         .withZoom(viewZoom)
         .withPitch(viewPitch)
         .withBearing(viewBearing)
-        .withCenterAltitude(groundMeters(center.longitude(), center.latitude()) * exaggeration);
+        .withCenterAltitude(seaLevelDem ? 0.0 : groundMeters(center.longitude(), center.latitude()) * exaggeration);
 }
 
 struct TerrainScene {
@@ -295,12 +319,13 @@ struct TerrainScene {
           map(frontend, fileSource, MapOptions().withMapMode(options.mode).withSize(frontend.getSize())) {
         NetworkStatus::Set(NetworkStatus::Status::Offline);
         fileSource->demTileSize = options.demTileSize;
+        fileSource->seaLevelDem = options.seaLevelDem;
     }
 
     void load() {
         map.getStyle().loadJSON(terrainStyle(options));
         map.getStyle().addImage(std::make_unique<style::Image>("marker", marker(), 1.0f));
-        map.jumpTo(sceneCamera());
+        map.jumpTo(sceneCamera(sceneCenter, options.seaLevelDem));
     }
 
     /// Static mode: one still render, which waits for every resource and parse.
@@ -378,6 +403,23 @@ void Terrain_RenderFrame(::benchmark::State& state) {
 void Terrain_RenderFrameSymbols(::benchmark::State& state) {
     TerrainScene scene(
         {.terrain = state.range(0) != 0, .peaksPerSide = 60, .demTileSize = state.range(0) == 2 ? 256u : 512u});
+    scene.load();
+    scene.renderStill();
+    gfx::RenderingStats stats;
+    for (auto _ : state) {
+        stats = scene.frontend.render(scene.map).stats;
+    }
+    addFrameCounters(state, stats);
+}
+
+// The same frame with dense line labels (60 lines, each labelled every 100 px pitched with the map
+// and again aligned with the viewport): what terrain adds to labels along lines, which collide
+// lifted by the DEM under their anchor and, aligned with the viewport, are projected onto the DEM
+// under their line on the CPU, vertex by vertex. Arg 0: terrain off; 1: on; 2: on over a DEM all
+// at sea level, which lifts nothing, so the same labels are placed with or without the lift: it
+// isolates what projecting onto the DEM costs.
+void Terrain_RenderFrameLineLabels(::benchmark::State& state) {
+    TerrainScene scene({.terrain = state.range(0) != 0, .lineLabels = true, .seaLevelDem = state.range(0) == 2});
     scene.load();
     scene.renderStill();
     gfx::RenderingStats stats;
@@ -653,6 +695,7 @@ void Terrain_TileCoverSteep(::benchmark::State& state) {
 
 BENCHMARK(Terrain_RenderFrame)->Arg(0)->Arg(1)->Unit(::benchmark::kMillisecond)->Iterations(40);
 BENCHMARK(Terrain_RenderFrameSymbols)->Arg(0)->Arg(1)->Arg(2)->Unit(::benchmark::kMillisecond)->Iterations(20);
+BENCHMARK(Terrain_RenderFrameLineLabels)->Arg(0)->Arg(1)->Arg(2)->Unit(::benchmark::kMillisecond)->Iterations(20);
 BENCHMARK(Terrain_QueryTap)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_QueryBox)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);
 BENCHMARK(Terrain_QueryLasso)->Arg(0)->Arg(1)->Unit(::benchmark::kMicrosecond);

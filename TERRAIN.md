@@ -377,6 +377,109 @@ the display; 50 warm-up frames, then the median of 500. Apple M4 Max, `f70d2ae7d
 The budget is 0.5 ms. At pitch 50 and 60 gl-js draws no fog (the shader tests the opacity and takes
 the plain path); at 75 the sky and full fog draw, and the cost is still within the noise (±0.01 ms).
 
+## Labels on the terrain
+
+Symbols are drawn, and collided, where the terrain lifts them, as in maplibre-gl-js 6.16.0
+(`src/symbol/projection.ts`, `src/webgl/draw/draw_symbol.ts`). Point symbols were lifted first
+(placement, `a2727754a86`); labels along lines and variable anchors followed.
+
+### What is drawn where
+
+- **Point symbols**: the shaders lift the anchor by the terrain under it, through the label-plane
+  matrix.
+- **Labels along a line, pitched with the map** (the default along a line): their glyphs are placed
+  on the CPU in the pitched label plane, which is the tile's plane in pixels, so a height does not
+  move them there; the shaders then lift every glyph by the anchor's height, as gl-js does
+  (`z` is the anchor's elevation in `symbol_sdf.vertex.glsl`). `reprojectLineLabels` takes what
+  depends on the camera at the anchor's height: the anchor's camera distance (the perspective ratio,
+  so the font size), whether it is on screen, and the keep-upright test, whose label-plane points go
+  back to the tile and up onto the terrain there (gl-js `projectFromLabelPlaneToClipSpace`).
+- **Labels along a line, aligned with the viewport**: the CPU projects them to the screen, and now
+  projects the anchor and each line vertex at the terrain height under it (gl-js `elevationAt` in
+  `updateLineLabels`), each vertex once per label (gl-js `projectionCache`: `LineLabelProjection` in
+  `symbol_projection.cpp`). The glyphs follow the line's height point by point.
+- **Variable anchors**: the CPU projects the anchor at its height (gl-js
+  `updateVariableAnchorsForBucket`); pitched with the map, the shader lifts the shifted anchor as it
+  lifts a point symbol.
+
+The heights come from `RenderTerrain::getTileElevation`: one DEM tile search per symbol bucket, then
+an O(1) bilinear sample per point, the sampling the shaders' `get_elevation()` does. The CPU work
+runs in `RenderTree::prepare`, only while frames are drawn, so a map at rest costs nothing.
+
+### Collision
+
+Every symbol collides lifted by the terrain under its anchor: placement lifts the tile matrix and,
+for a label along a line, its label-plane matrix by the anchor's height (`elevatedMatrix`), one DEM
+sample per symbol. That is where points, variable anchors and pitched line labels are drawn, so
+their boxes and circles match their glyphs exactly; `queryRenderedFeatures` finds them where they
+are drawn.
+
+A label along a line aligned with the viewport is the one difference from gl-js, which lifts its
+collision circles point by point along the line: here they sit at the anchor's height, so on a
+slope the ends of such a label collide a little off its glyphs (slope times half the label's
+length, in height). Lifting the circles and the first and last glyphs point by point, as gl-js
+does, cost 38 to 49 % more placement CPU in the benchmark below even with the projection cache and
+an inlined DEM sample (some 13,000 samples a frame), against a budget of 15 %; the anchor lift and
+the per-frame projection together cost 3 to 14 % (Cost below). Labels along lines are pitched with
+the map unless a style says otherwise, so this touches only viewport-aligned ones on steep ground.
+
+### Oracle tests
+
+| test | what it grades | expected.png | macOS Metal |
+|---|---|---|---|
+| `symbol-line-placement` | contour labels, a viewport-aligned trail name, and a point label colliding with a contour label, over a 1500 m cone at pitch 60 | gl-js 6.16.0, centre at sea level | 0.00029 (0.0021 before) |
+| `symbol-variable-anchor` | two variable-anchor labels on the cone, one pushed to its second anchor by the other | gl-js 6.16.0, centre at sea level | 0.00011 (0.0067 before) |
+
+These are the first oracles under real relief. Native still renders put the camera's centre at sea
+level while gl-js clamps it to the ground, which is why every earlier oracle used exaggeration 0
+(Sky and fog, Testing). The gl-js copies of these two styles add
+`"operations": [["setCenterClampedToGround", false], ["setCenterElevation", 0], ["wait"]]`, which
+give gl-js native's camera; the draped lines then match to the pixel. The DEM is synthetic
+(`metrics/integration/tiles/terrain-cone`, also rows of `cache-style.db`), and every labelled line
+is a short piece inside one tile at zooms 8 to 15 placed with `line-center`, so the labels do not
+depend on the tile zooms the two engines cover the view with. Their READMEs give each backend's
+difference.
+
+gtests: `SymbolProjection.LineGlyphUsesTerrainHeight` (a glyph of a viewport-aligned line label on
+a 1000 m plateau is placed where a point symbol there is drawn), and `TerrainSymbolQuery.*` for a
+line label aligned with the viewport, one pitched with the map, and a variable anchor (drawn on the
+plateau, and a tap there finds them while a tap on their sea-level projection does not).
+
+### Cost (macOS, uncapped placement CPU)
+
+Benchmark `Terrain_RenderFrameLineLabels` (`benchmark/api/terrain.benchmark.cpp`): a 1000x1000
+still frame at z13, pitch 60, 60 lines each labelled every 100 px twice, pitched with the map and
+aligned with the viewport. Arg 1 is terrain on (exaggeration 1.5, real relief); arg 2 is terrain on
+over a DEM all at sea level, where the same labels are placed with or without the lift, so it
+isolates the cost of the projection. Measured as the thread CPU time of `Placement::placeLayers`
+plus `RenderTree::prepare` (the per-frame line-label and variable-anchor projection), with a
+temporary probe not committed, at `d3b2dd1f0a8` and with this change, the two runs interleaved:
+median of 15 and 18 runs of 20 frames each, in two sessions. Apple M4 Max.
+
+| run | arg | placement before / after | per-frame projection before / after | total |
+|---|---|---|---|---|
+| 1 | 0, terrain off | 0.773 / 0.792 ms | 0.210 / 0.210 ms | +2.0 % |
+| 1 | 1, real relief | 0.820 / 0.883 ms | 0.228 / 0.247 ms | +7.7 % |
+| 1 | 2, DEM at sea level | 0.871 / 0.940 ms | 0.231 / 0.262 ms | +9.2 % |
+| 2 | 0, terrain off | 0.829 / 0.811 ms | 0.223 / 0.211 ms | -2.4 % |
+| 2 | 1, real relief | 0.916 / 0.922 ms | 0.244 / 0.261 ms | +2.6 % |
+| 2 | 2, DEM at sea level | 0.900 / 1.009 ms | 0.235 / 0.283 ms | +13.7 % |
+
+Run 1 measured the change before its last clean-up (comments, formatting, one redundant member),
+run 2 the change as committed. Between the two sessions the same binaries differ by up to 5 %, the
+noise of a shared machine; the worst case, arg 2, stays under the 15 % budget in both.
+
+The budget is 15 % more placement time (spec estimate 5 to 15 %).
+
+### Known differences from gl-js
+
+- **Viewport-aligned line labels collide at their anchor's height** (above).
+- **Line vertices outside the tile** are sampled from the tile's own DEM, into its 2-texel border
+  and then clamped, as the shaders sample them; gl-js resolves them to the neighbouring tile
+  (#7040). A label's vertices rarely lie more than the border outside its tile.
+- **The rendered-feature bounds** (`RenderSymbolLayer`'s `computeBufferBounds`, used for rendered
+  feature statistics, not for queries) are still computed at sea level, for every kind of symbol.
+
 ## Current Status
 
 Implemented:
@@ -1170,8 +1273,8 @@ This known issue is closed.
   specific to terrain. Reproduces on device; gl-js does not show it. Worth fixing
   for both layers together. Not yet investigated.
 - Coordinate picking against the terrain (gl-js coords/depth framebuffers)
-- Elevation for CPU-projected along-line labels in viewport alignment
-  (gl-js applies it in the CPU symbol projection)
+- ~~Elevation for CPU-projected along-line labels in viewport alignment~~ done 2026-11-11:
+  see Labels on the terrain
 - **Fill-extrusion (buildings) are not occluded by terrain** (reported on
   device 2026-07-24): a building behind a hill renders *through* the hill
   instead of being hidden by it. Unlike symbols - 2D billboards that needed the
@@ -1430,6 +1533,9 @@ projection primitives in `collision_index.cpp`. The word "elevation" appears now
        Android anchors quick zoom too (#4712, through `onScaleBegin`). A follow-up.
 3. **Elevated line labels** - thread the query through placement, then gl-js #7040's
    coordinate normalisation on top.
+   - **(done 2026-11-11)** Line labels and variable anchors are drawn and collided on the
+     terrain (Labels on the terrain), on `getTileElevation`, the per-tile query point symbols
+     use. #7040's normalisation is not ported (Known differences there).
 
 Ordering trap for step 2: placement runs at `RenderOrchestrator::update` (~line 561) but
 `renderTerrain->update()` does not run until `updateLayers` (~line 1052), so anything reading

@@ -24,6 +24,7 @@ class Placement;
 class TransformState;
 class BucketPlacementData;
 class RenderTile;
+class RenderTerrain;
 
 class Bucket {
 public:
@@ -73,8 +74,12 @@ public:
     }
     // Places this bucket to the given placement.
     virtual void place(Placement&, const BucketPlacementData&, std::set<uint32_t>&) {}
-    virtual void updateVertices(
-        const Placement&, bool /*updateOpacities*/, const TransformState&, const RenderTile&, std::set<uint32_t>&) {}
+    virtual void updateVertices(const Placement&,
+                                bool /*updateOpacities*/,
+                                const TransformState&,
+                                const RenderTile&,
+                                std::set<uint32_t>&,
+                                const RenderTerrain* /*terrain*/) {}
 
     const util::SimpleIdentity& getID() const { return bucketID; }
 

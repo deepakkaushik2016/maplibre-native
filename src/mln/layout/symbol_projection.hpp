@@ -3,11 +3,11 @@
 #include <mln/util/mat4.hpp>
 #include <mln/gfx/vertex_buffer.hpp>
 #include <mln/renderer/buckets/symbol_bucket.hpp>
+#include <mln/renderer/render_terrain.hpp>
 
 namespace mln {
 
 class TransformState;
-class RenderTile;
 class SymbolSizeBinder;
 class PlacedSymbol;
 namespace style {
@@ -45,18 +45,31 @@ mat4 getLabelPlaneMatrix(
 mat4 getGlCoordMatrix(
     const mat4& posMatrix, bool pitchWithMap, bool rotateWithMap, const TransformState& state, float pixelsToTileUnits);
 
+/// The exaggerated terrain height under a tile's points; null where symbols sit at sea level.
+using TileElevation = RenderTerrain::TileElevation;
+
 using PointAndCameraDistance = std::pair<Point<float>, float>;
 PointAndCameraDistance project(const Point<float>& point, const mat4& matrix);
+/// Projects a tile point `height` metres up, as maplibre-gl-js `projectWithMatrix` with an elevation.
+PointAndCameraDistance project(const Point<float>& point, const mat4& matrix, float height);
 
+/// The terrain height under `point`, or 0 without terrain (`elevation` null).
+inline float heightAt(const TileElevation* elevation, const Point<float>& point) {
+    return elevation ? (*elevation)(point) : 0.0f;
+}
+
+/// Places the glyphs of `placedSymbols`' line labels for the current camera, lifted by the terrain
+/// under the line (`elevation`, null for sea level), as maplibre-gl-js `updateLineLabels`.
 void reprojectLineLabels(SymbolBucket::DynamicAttributeVector&,
                          const std::vector<PlacedSymbol>&,
                          const mat4& posMatrix,
                          bool pitchWithMap,
                          bool rotateWithMap,
                          bool keepUpright,
-                         const RenderTile&,
+                         const UnwrappedTileID& tileID,
                          const SymbolSizeBinder& sizeBinder,
-                         const TransformState&);
+                         const TransformState&,
+                         const TileElevation* elevation);
 
 std::optional<std::pair<PlacedGlyph, PlacedGlyph>> placeFirstAndLastGlyph(float fontScale,
                                                                           float lineOffsetX,

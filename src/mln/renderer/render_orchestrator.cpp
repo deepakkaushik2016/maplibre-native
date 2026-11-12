@@ -98,6 +98,7 @@ public:
                    RenderLayerReferences layersNeedPlacement_,
                    Immutable<Placement> placement_,
                    bool updateSymbolOpacities_,
+                   const RenderTerrain* terrain_,
                    double startTime_)
         : RenderTree(std::move(parameters_), startTime_),
           layerRenderItems(std::move(layerRenderItems_)),
@@ -106,13 +107,14 @@ public:
           patternAtlas(patternAtlas_),
           layersNeedPlacement(std::move(layersNeedPlacement_)),
           placement(std::move(placement_)),
-          updateSymbolOpacities(updateSymbolOpacities_) {}
+          updateSymbolOpacities(updateSymbolOpacities_),
+          terrain(terrain_) {}
 
     void prepare() override {
         MLN_TRACE_FUNC();
 
         for (auto it = layersNeedPlacement.rbegin(); it != layersNeedPlacement.rend(); ++it) {
-            placement->updateLayerBuckets(*it, parameters->transformParams.state, updateSymbolOpacities);
+            placement->updateLayerBuckets(*it, parameters->transformParams.state, updateSymbolOpacities, terrain);
         }
     }
 
@@ -134,6 +136,9 @@ public:
     RenderLayerReferences layersNeedPlacement;
     Immutable<Placement> placement;
     bool updateSymbolOpacities;
+    // The terrain line labels and variable anchors are projected onto in prepare(); null without
+    // terrain. The orchestrator owns it and prepares this tree in the same frame.
+    const RenderTerrain* terrain;
 };
 
 } // namespace
@@ -747,6 +752,7 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
                                             std::move(layersNeedPlacement),
                                             placementController.getPlacement(),
                                             symbolBucketsChanged,
+                                            placementTerrain,
                                             startTime);
 }
 

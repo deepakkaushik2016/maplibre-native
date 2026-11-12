@@ -143,22 +143,6 @@ bool DEMData::backfillBorder(const DEMData& borderTileData, int8_t dx, int8_t dy
     return changed;
 }
 
-float DEMData::get(const int32_t x, const int32_t y) const {
-    const uint8_t* value = image->data.get() + idx(x, y) * 4;
-    // The R, G, B digits count the encoding's steps up from its base: Mapbox Terrain-RGB
-    // 0.1 m steps from -10000 m, Terrarium 1/256 m steps from -32768 m. Counted as an integer
-    // and scaled in double, so a height the encoding holds exactly (a whole metre, say) decodes
-    // exactly, fraction of a metre kept, as maplibre-gl-js DEMData decodes it. The shaders'
-    // single-precision unpack vector (6553.6f is not exact) reads within 2 mm of this.
-    const auto steps = (uint32_t{value[0]} << 16) | (uint32_t{value[1]} << 8) | uint32_t{value[2]};
-    // Reading no-data as -32768 m would drag the tile's elevation range (and the frustum
-    // test built on it) down with it.
-    if (encoding == Tileset::RasterEncoding::Terrarium) {
-        return steps == 0 ? 0.0f : static_cast<float>(steps / 256.0 - 32768.0);
-    }
-    return static_cast<float>(steps * 0.1 - 10000.0);
-}
-
 const std::array<float, 4>& DEMData::getUnpackVector() const {
     // https://www.mapbox.com/help/access-elevation-data/#mapbox-terrain-rgb
     static const std::array<float, 4> unpackMapbox = {{6553.6f, 25.6f, 0.1f, 10000.0f}};
