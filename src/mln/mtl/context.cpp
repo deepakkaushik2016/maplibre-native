@@ -156,7 +156,7 @@ Context::~Context() noexcept {
         clipMaskDepthStencilState.reset();
         clipMaskPipelineState.reset();
         clipMaskUniformsBuffer.reset();
-        stencilStateRenderable = nullptr;
+        stencilStateRenderableID.reset();
 
         for (size_t i = 0; i < globalUniformBuffers.allocatedSize(); i++) {
             globalUniformBuffers.set(i, nullptr);
@@ -476,11 +476,11 @@ bool Context::renderTileClippingMasks(gfx::RenderPass& renderPass,
 
     const auto& renderPassDescriptor = mtlRenderPass.getDescriptor();
     const auto& renderable = renderPassDescriptor.renderable;
-    if (stencilStateRenderable != &renderable) {
+    if (stencilStateRenderableID != renderable.getUniqueID()) {
         // We're on a new renderable, invalidate objects constructed for the previous one.
         clipMaskPipelineState.reset();
         clipMaskDepthStencilState.reset();
-        stencilStateRenderable = &renderable;
+        stencilStateRenderableID = renderable.getUniqueID();
     }
 
     // Create the depth-stencil state, if necessary.

@@ -181,13 +181,15 @@ void Drawable::draw(PaintParameters& parameters) const {
 
     const auto& descriptor = renderPass.getDescriptor();
     const auto& renderable = descriptor.renderable;
-    if (impl->renderPassDescriptor && descriptor != *impl->renderPassDescriptor) {
+    // Compare against the last pass by value. Keeping the last descriptor kept a reference to its
+    // renderable, and a drape target's texture is freed (a mode switch, or a target that left the
+    // cover and lent nothing) while this drawable lives on to draw into another one: comparing
+    // then read the freed renderable.
+    const auto passKey = descriptor.key();
+    if (impl->renderPassKey && *impl->renderPassKey != passKey) {
         impl->pipelineState.reset();
     }
-    impl->renderPassDescriptor.emplace(gfx::RenderPassDescriptor{.renderable = descriptor.renderable,
-                                                                 .clearColor = descriptor.clearColor,
-                                                                 .clearDepth = descriptor.clearDepth,
-                                                                 .clearStencil = descriptor.clearStencil});
+    impl->renderPassKey = passKey;
 
     const auto& shaderMTL = static_cast<const ShaderProgram&>(*shader);
 

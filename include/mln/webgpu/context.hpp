@@ -143,7 +143,8 @@ private:
 
     // Cached clipping resources
     gfx::ShaderProgramBasePtr clipMaskShader;
-    const gfx::Renderable* clipMaskRenderable = nullptr;
+    /// By identity, not address: a freed renderable's address can be reused by one of other formats.
+    std::optional<uint64_t> clipMaskRenderableID;
     std::optional<std::size_t> clipMaskPipelineHash;
     std::vector<BufferResource> clipMaskUniformBuffers;
     std::vector<WGPUBindGroup> clipMaskActiveBindGroups;

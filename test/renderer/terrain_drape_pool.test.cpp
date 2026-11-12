@@ -208,13 +208,13 @@ struct DrapeModeScene {
                    fileSource,
                    MapOptions().withMapMode(MapMode::Static).withSize(frontend.getSize())};
 
-    DrapeModeScene() {
+    explicit DrapeModeScene(const char* style = drapeModeStyle) {
         fileSource->tileResponse = [this](const Resource&) {
             Response res;
             res.data = std::make_shared<std::string>(tile);
             return res;
         };
-        map.getStyle().loadJSON(drapeModeStyle);
+        map.getStyle().loadJSON(style);
         map.jumpTo(CameraOptions().withCenter(LatLng{46.0, 10.0}).withZoom(12.0).withPitch(45.0));
     }
 
@@ -226,6 +226,25 @@ struct DrapeModeScene {
 
     std::vector<mln::Size> targetSizes() { return RendererTestAccess::drapeTargetSizes(*frontend.getRenderer()); }
 };
+
+// The same terrain with a hillshade draped onto it: its drawables render into every drape target.
+const char* const drapedHillshadeStyle = R"STYLE({
+  "version": 8,
+  "sources": {
+    "dem": {
+      "type": "raster-dem",
+      "tiles": ["http://example.com/dem/{z}-{x}-{y}.png"],
+      "encoding": "mapbox",
+      "maxzoom": 10,
+      "tileSize": 256
+    }
+  },
+  "terrain": {"source": "dem", "exaggeration": 1.0},
+  "layers": [
+    {"id": "background", "type": "background", "paint": {"background-color": "white"}},
+    {"id": "hillshade", "type": "hillshade", "source": "dem"}
+  ]
+})STYLE";
 
 // Every drape target has this size; the pool is not empty.
 ::testing::AssertionResult allTargetsAre(const std::vector<mln::Size>& sizes, uint32_t size) {
@@ -267,4 +286,18 @@ TEST_F(TerrainDrapePool, ModeSwitchRebuildsPoolWithoutLeak) {
     scene.render(TerrainLoadMode::Quality);
     EXPECT_TRUE(allTargetsAre(scene.targetSizes(), 1024));
     EXPECT_EQ(texturesAtFirst, scene.render(TerrainLoadMode::Quality));
+}
+
+// A draped drawable outlives the drape targets it drew into: a mode switch drops every target
+// (and frees its texture) between one frame and the next, while the hillshade drawables stay and
+// draw into the new targets. A drawable that kept a reference to the last target it drew into read
+// that freed texture on its next draw (a heap-use-after-free that AddressSanitizer reports here).
+TEST_F(TerrainDrapePool, DrawablesOutliveTheTargetsAModeSwitchFrees) {
+    DrapeModeScene scene(drapedHillshadeStyle);
+    scene.render(TerrainLoadMode::Quality);
+    scene.render(TerrainLoadMode::Quality);
+    scene.render(TerrainLoadMode::Performance);
+    EXPECT_TRUE(allTargetsAre(scene.targetSizes(), 512));
+    scene.render(TerrainLoadMode::Quality);
+    EXPECT_TRUE(allTargetsAre(scene.targetSizes(), 1024));
 }

@@ -294,9 +294,9 @@ bool Context::renderTileClippingMasks(gfx::RenderPass& renderPass,
     }
 
     const auto& renderable = webgpuRenderPass.getDescriptor().renderable;
-    if (clipMaskRenderable != &renderable) {
+    if (clipMaskRenderableID != renderable.getUniqueID()) {
         clipMaskPipelineHash.reset();
-        clipMaskRenderable = &renderable;
+        clipMaskRenderableID = renderable.getUniqueID();
     }
 
     const auto& vertexResource = getTileVertexBuffer();

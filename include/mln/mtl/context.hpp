@@ -214,7 +214,9 @@ private:
     MTLRenderPipelineStatePtr clipMaskPipelineState;
     std::optional<BufferResource> clipMaskUniformsBuffer;
     bool clipMaskUniformsBufferUsed = false;
-    const gfx::Renderable* stencilStateRenderable = nullptr;
+    /// The renderable the clip-mask states were made for, by identity: an address can be reused
+    /// by a renderable of other formats once the first is freed.
+    std::optional<uint64_t> stencilStateRenderableID;
 
     UniformBufferArray globalUniformBuffers;
 

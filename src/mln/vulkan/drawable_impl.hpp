@@ -44,8 +44,6 @@ public:
 
     std::size_t vertexAttrId = 0;
 
-    std::optional<gfx::RenderPassDescriptor> renderPassDescriptor;
-
     std::optional<gfx::DepthMode> depthFor3D;
     std::optional<gfx::StencilMode> stencilFor3D;
 

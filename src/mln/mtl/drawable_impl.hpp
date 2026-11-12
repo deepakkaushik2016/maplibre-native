@@ -59,7 +59,9 @@ public:
 
     MTLRenderPipelineStatePtr pipelineState;
 
-    std::optional<gfx::RenderPassDescriptor> renderPassDescriptor;
+    /// The render pass this drawable last drew in, by value: its renderable may be freed before
+    /// the next draw (see gfx::RenderPassDescriptor::Key).
+    std::optional<gfx::RenderPassDescriptor::Key> renderPassKey;
 
     MTLDepthStencilStatePtr depthStencilState;
     gfx::StencilMode previousStencilMode;

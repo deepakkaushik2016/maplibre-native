@@ -1620,20 +1620,22 @@ The terrain CI script (`scripts/*-terrain-ci.sh`) has no flaky list: its gtest s
 failure, and its known list in `metrics/ignores/` holds known render failures under `terrain/` only.
 A failure of one of these tests needs a rerun before it is called a regression:
 
-- **`TerrainSparseDEM.AStillDrawsHighGroundWithTheCenterOnItOn204`** (in the terrain gtest filter)
-  has segfaulted intermittently, with a stack in the test's own `FrameObserver::onTileAction`. That
-  stack is probably a symptom, not the cause: an AddressSanitizer build of the `TerrainSparseDEM.*`
-  tests (2026-11-12, macOS Metal, `-DMLN_WITH_SANITIZER=address`) finds a **heap-use-after-free in
-  the renderer**, in `TerrainSparseDEM.ZoomingInPastTheDataKeepsTheShapeOn204` (3 of 5 runs). A
-  drape texture that `TexturePool::updateRenderTargets` frees (a spare that no joining tile took, when
-  `spare` goes out of scope) is still read by `mtl::Drawable::draw` under
-  `RenderTarget::renderDrapedLayerGroups` later in the same `Renderer::Impl::render`. So something still points at a leaving
-  drape target's texture after the lending check found nothing holding it. This is an **open
-  defect**, not harness flakiness. The still test itself passed 25 of 25 runs under ASan and 40 of
-  40 without it, and the zoom test 15 of 15 without ASan, so a plain run rarely shows it.
 - **`render-tests/text-field/formatted-line`** and **`render-tests/text-font/{burmese,devanagari,khmer}`**
   differ between runs of one binary. They are outside the terrain CI's `terrain/` filter, so they
   only show in a full render-test run.
+
+`TerrainSparseDEM.AStillDrawsHighGroundWithTheCenterOnItOn204` was on this list: it segfaulted now
+and then, with a stack in the test's own `FrameObserver::onTileAction`. The likely cause was a
+renderer **heap-use-after-free**, which an AddressSanitizer build (macOS Metal,
+`-DMLN_WITH_SANITIZER=address`) found in `TerrainSparseDEM.ZoomingInPastTheDataKeepsTheShapeOn204`.
+It is **fixed**. A Metal drawable kept the descriptor of the last render pass it drew in, and with it
+a reference to that pass's renderable; on its next draw it compared the new pass's renderable
+against it. A drape target freed in between (a spare texture that `TexturePool::updateRenderTargets`
+lent to no joining tile, or every target on a drape-size change) left that reference dangling. The
+drawable, and the clip-mask caches of the Metal and WebGPU contexts, now keep the renderable's
+process-unique `gfx::Renderable::getUniqueID()` instead of a reference or an address. The bug
+predates the mode-dependent drape sizes. `TerrainDrapePool.DrawablesOutliveTheTargetsAModeSwitchFrees`
+reproduces it under ASan on every run without the fix.
 
 ### Which render tests are oracles, and which measure us against ourselves
 

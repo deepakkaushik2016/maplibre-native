@@ -57,8 +57,6 @@ public:
     // Pipeline state (WebGPU equivalent of Metal's pipelineState)
     WGPURenderPipeline pipelineState = nullptr;
 
-    std::optional<gfx::RenderPassDescriptor> renderPassDescriptor;
-
     // WebGPU-specific state (similar to Metal's depthStencilState)
     WGPUDepthStencilState depthStencilState = {};
     gfx::StencilMode previousStencilMode;
