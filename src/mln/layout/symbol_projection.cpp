@@ -172,19 +172,18 @@ bool heightMoves(const mat4& matrix) {
 /**
  * @brief Projects a line label onto its label plane, lifted by the terrain under its line
  *
- * With `cacheVertices`, each of the label's line vertices is projected (and its terrain sampled)
- * once per label, as maplibre-gl-js `projectionCache` does: every glyph walks outward from the
- * anchor over the same vertices. The pitched label plane is the tile's plane scaled to pixels,
+ * Each of the label's line vertices is projected (and its terrain sampled) once per label, as
+ * maplibre-gl-js `projectionCache` does: every glyph walks outward from the anchor over the same
+ * vertices. The pitched label plane is the tile's plane scaled to pixels,
  * which a height does not move, so the terrain is not sampled for it. Call startLabel() before
  * each label.
  */
 class LineLabelProjection {
 public:
     /// `elevation`: the terrain under the labels' tile; null at sea level.
-    LineLabelProjection(const mat4& labelPlaneMatrix, const TileElevation* elevation_, bool cacheVertices_)
+    LineLabelProjection(const mat4& labelPlaneMatrix, const TileElevation* elevation_)
         : matrix(labelPlaneMatrix),
-          elevation(elevation_ && heightMoves(labelPlaneMatrix) ? elevation_ : nullptr),
-          cacheVertices(cacheVertices_) {}
+          elevation(elevation_ && heightMoves(labelPlaneMatrix) ? elevation_ : nullptr) {}
 
     void startLabel(const PlacedSymbol& symbol_) {
         symbol = &symbol_;
@@ -200,9 +199,6 @@ public:
     /// The label-plane position of the label's line vertex `index`.
     PointAndCameraDistance vertex(const int32_t index) {
         assert(symbol);
-        if (!cacheVertices) {
-            return point(convertPoint<float>(symbol->line.at(index)));
-        }
         const auto segment = static_cast<int32_t>(symbol->segment);
         // A glyph walks outward from the anchor's segment one vertex at a time, so the next
         // vertex either side is the one after the last cached.
@@ -221,11 +217,28 @@ public:
 private:
     const mat4& matrix;
     const TileElevation* elevation;
-    const bool cacheVertices;
     const PlacedSymbol* symbol = nullptr;
     // Vertices segment + 1, segment + 2, ... and segment, segment - 1, ..., as far as walked.
     std::vector<PointAndCameraDistance> ahead;
     std::vector<PointAndCameraDistance> behind;
+};
+
+/// A line label's projection onto a label plane at sea level, or one already lifted (placement
+/// lifts it by the anchor's height): the plain projection collision uses, with nothing to cache.
+class FlatLineLabelProjection {
+public:
+    FlatLineLabelProjection(const mat4& labelPlaneMatrix, const PlacedSymbol& symbol_)
+        : matrix(labelPlaneMatrix),
+          symbol(symbol_) {}
+
+    PointAndCameraDistance point(const Point<float>& tilePoint) const { return project(tilePoint, matrix); }
+    PointAndCameraDistance vertex(const int32_t index) const {
+        return point(convertPoint<float>(symbol.line.at(index)));
+    }
+
+private:
+    const mat4& matrix;
+    const PlacedSymbol& symbol;
 };
 
 } // namespace
@@ -303,6 +316,7 @@ Point<float> projectTruncatedLineSegment(const Point<float>& previousTilePoint,
     return previousProjectedPoint + (projectedUnitSegment * (minimumLength / util::mag<float>(projectedUnitSegment)));
 }
 
+template <typename Projection>
 std::optional<PlacedGlyph> placeGlyphAlongLine(const float offsetX,
                                                const float lineOffsetX,
                                                const float lineOffsetY,
@@ -312,7 +326,7 @@ std::optional<PlacedGlyph> placeGlyphAlongLine(const float offsetX,
                                                const uint16_t anchorSegment,
                                                const GeometryCoordinates& line,
                                                const std::vector<float>& tileDistances,
-                                               LineLabelProjection& projection,
+                                               Projection& projection,
                                                const bool returnTileDistance) {
     const float combinedOffsetX = flip ? offsetX - lineOffsetX : offsetX + lineOffsetX;
 
@@ -384,6 +398,7 @@ std::optional<PlacedGlyph> placeGlyphAlongLine(const float offsetX,
                  : std::optional<TileDistance>()}};
 }
 
+template <typename Projection>
 std::optional<std::pair<PlacedGlyph, PlacedGlyph>> placeFirstAndLastGlyph(const float fontScale,
                                                                           const float lineOffsetX,
                                                                           const float lineOffsetY,
@@ -391,7 +406,7 @@ std::optional<std::pair<PlacedGlyph, PlacedGlyph>> placeFirstAndLastGlyph(const 
                                                                           const Point<float>& anchorPoint,
                                                                           const Point<float>& tileAnchorPoint,
                                                                           const PlacedSymbol& symbol,
-                                                                          LineLabelProjection& projection,
+                                                                          Projection& projection,
                                                                           const bool returnTileDistance) {
     if (symbol.glyphOffsets.empty()) {
         assert(false);
@@ -439,8 +454,7 @@ std::optional<std::pair<PlacedGlyph, PlacedGlyph>> placeFirstAndLastGlyph(const 
                                                                           const PlacedSymbol& symbol,
                                                                           const mat4& labelPlaneMatrix,
                                                                           const bool returnTileDistance) {
-    LineLabelProjection projection(labelPlaneMatrix, nullptr, /*cacheVertices*/ false);
-    projection.startLabel(symbol);
+    FlatLineLabelProjection projection(labelPlaneMatrix, symbol);
     return placeFirstAndLastGlyph(fontScale,
                                   lineOffsetX,
                                   lineOffsetY,
@@ -635,7 +649,7 @@ void reprojectLineLabels(SymbolBucket::DynamicAttributeVector& dynamicVertexArra
         matrix::invert(*labelPlaneToTile, labelPlaneMatrix);
     }
 
-    LineLabelProjection projection(labelPlaneMatrix, elevation, /*cacheVertices*/ true);
+    LineLabelProjection projection(labelPlaneMatrix, elevation);
 
     dynamicVertexArray.clear();
 

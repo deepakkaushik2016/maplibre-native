@@ -410,18 +410,35 @@ runs in `RenderTree::prepare`, only while frames are drawn, so a map at rest cos
 
 Every symbol collides lifted by the terrain under its anchor: placement lifts the tile matrix and,
 for a label along a line, its label-plane matrix by the anchor's height (`elevatedMatrix`), one DEM
-sample per symbol. That is where points, variable anchors and pitched line labels are drawn, so
-their boxes and circles match their glyphs exactly; `queryRenderedFeatures` finds them where they
-are drawn.
+sample per symbol. Point symbols and variable anchors are drawn there, so their boxes match them
+exactly, as in gl-js, and `queryRenderedFeatures` finds them where they are drawn.
 
-A label along a line aligned with the viewport is the one difference from gl-js, which lifts its
-collision circles point by point along the line: here they sit at the anchor's height, so on a
-slope the ends of such a label collide a little off its glyphs (slope times half the label's
-length, in height). Lifting the circles and the first and last glyphs point by point, as gl-js
-does, cost 38 to 49 % more placement CPU in the benchmark below even with the projection cache and
-an inlined DEM sample (some 13,000 samples a frame), against a budget of 15 %; the anchor lift and
-the per-frame projection together cost 3 to 14 % (Cost below). Labels along lines are pitched with
-the map unless a style says otherwise, so this touches only viewport-aligned ones on steep ground.
+**Labels along lines differ from gl-js, both kinds.** gl-js lifts a line label's collision path
+point by point, pitched or not (`collision_index.ts` `projectPathToScreenSpace`, then
+`projectPathSpecialProjection` with `elevationAt` at each back-projected tile point). Native
+collides every line label at its anchor's height:
+
+- *Pitched with the map* (the default along a line): both engines draw the glyphs at the anchor's
+  height, so native's circles sit on the glyphs as drawn, while gl-js's follow the ground under
+  them. On a slope the two collide differently towards the ends of a long label: by up to slope
+  times half the label's length, in height, which at pitch 60 can be tens of pixels on steep
+  ground.
+- *Aligned with the viewport*: the glyphs follow the line's height under each vertex (as gl-js),
+  the circles stay at the anchor's height, so on a slope the label's ends collide off its glyphs
+  by the same amount.
+
+The faithful variants were measured with the benchmark below (placement plus per-frame projection,
+against `d3b2dd1f0a8`) and cost too much for the 15 % budget:
+
+| variant | real relief (arg 1) | DEM at sea level (arg 2) |
+|---|---|---|
+| circles and first/last glyphs lifted point by point, vertex cache, inline sample | placement +38 to 49 % | |
+| one DEM sample per circle kept after the density thinning (`placeLineFeature`) | total +22 to 33 % | total +44 to 54 % |
+| anchor height (committed) | total +3 to 12 % | total +9 to 20 % |
+
+Each was measured in more than one session on a shared machine under load (load average 10 to 18),
+interleaved with the parent commit; the ranges are those sessions' medians. The committed numbers
+are detailed under Cost.
 
 ### Oracle tests
 
@@ -454,7 +471,7 @@ over a DEM all at sea level, where the same labels are placed with or without th
 isolates the cost of the projection. Measured as the thread CPU time of `Placement::placeLayers`
 plus `RenderTree::prepare` (the per-frame line-label and variable-anchor projection), with a
 temporary probe not committed, at `d3b2dd1f0a8` and with this change, the two runs interleaved:
-median of 15 and 18 runs of 20 frames each, in two sessions. Apple M4 Max.
+median of 15 to 24 runs of 20 frames each, in three sessions. Apple M4 Max.
 
 | run | arg | placement before / after | per-frame projection before / after | total |
 |---|---|---|---|---|
@@ -464,16 +481,23 @@ median of 15 and 18 runs of 20 frames each, in two sessions. Apple M4 Max.
 | 2 | 0, terrain off | 0.829 / 0.811 ms | 0.223 / 0.211 ms | -2.4 % |
 | 2 | 1, real relief | 0.916 / 0.922 ms | 0.244 / 0.261 ms | +2.6 % |
 | 2 | 2, DEM at sea level | 0.900 / 1.009 ms | 0.235 / 0.283 ms | +13.7 % |
+| 3 | 0, terrain off | 0.832 / 0.829 ms | 0.225 / 0.215 ms | -0.8 % |
+| 3 | 1, real relief | 0.889 / 0.953 ms | 0.239 / 0.279 ms | +9.4 % |
+| 3 | 2, DEM at sea level | 0.904 / 0.979 ms | 0.234 / 0.287 ms | +11.2 % |
 
-Run 1 measured the change before its last clean-up (comments, formatting, one redundant member),
-run 2 the change as committed. Between the two sessions the same binaries differ by up to 5 %, the
-noise of a shared machine; the worst case, arg 2, stays under the 15 % budget in both.
+Runs 1 and 2 measured the first version (run 1 before its last clean-up). Run 3, on a machine under
+heavy load (load average 13 to 18), measured the current code: the collision walk projects line
+vertices directly again, through a template, instead of through the per-label vertex cache that
+only the per-frame projection needs. In the same session the first version measured +12.2 % and
++20.0 % (args 1 and 2), so that change is worth some 9 points in the worst case. Placement itself
+costs +7 to +8 %; the per-frame projection +17 to +23 %, of a smaller time.
 
 The budget is 15 % more placement time (spec estimate 5 to 15 %).
 
 ### Known differences from gl-js
 
-- **Viewport-aligned line labels collide at their anchor's height** (above).
+- **Line labels collide at their anchor's height**, pitched or aligned with the viewport, where
+  gl-js lifts their collision path point by point (Collision, above).
 - **Line vertices outside the tile** are sampled from the tile's own DEM, into its 2-texel border
   and then clamped, as the shaders sample them; gl-js resolves them to the neighbouring tile
   (#7040). A label's vertices rarely lie more than the border outside its tile.
