@@ -57,3 +57,36 @@ TEST(Renderable, ANewResourceIsANewUniqueID) {
     EXPECT_NE(renderable.getUniqueID(), withResource);
     EXPECT_NE(renderable.getUniqueID(), atFirst);
 }
+
+// A ring of texture slots parks one resource while it draws into another. The resource handed back
+// is the one that was in place, and the renderable now draws somewhere new: it gets a new id, also
+// when an earlier resource comes back, so nothing cached against the earlier id is taken for it.
+TEST(Renderable, ExchangingAResourceReturnsTheOldOneAndIsANewUniqueID) {
+    TestRenderable renderable({64, 64});
+    auto first = std::make_unique<TestResource>();
+    auto* const firstAddress = first.get();
+    renderable.setResource(std::move(first));
+    const auto withFirst = renderable.getUniqueID();
+
+    auto second = std::make_unique<TestResource>();
+    auto* const secondAddress = second.get();
+    auto parked = renderable.exchangeResource(std::move(second));
+    EXPECT_EQ(parked.get(), firstAddress);
+    EXPECT_EQ(&renderable.getResource<TestResource>(), secondAddress);
+    const auto withSecond = renderable.getUniqueID();
+    EXPECT_NE(withSecond, withFirst);
+
+    // The first resource comes back: the same resource, but a new id all the same.
+    auto parkedSecond = renderable.exchangeResource(std::move(parked));
+    EXPECT_EQ(parkedSecond.get(), secondAddress);
+    EXPECT_EQ(&renderable.getResource<TestResource>(), firstAddress);
+    EXPECT_NE(renderable.getUniqueID(), withFirst);
+    EXPECT_NE(renderable.getUniqueID(), withSecond);
+
+    // Exchanging for nothing takes the resource out and still renews the id.
+    const auto beforeTakingOut = renderable.getUniqueID();
+    auto takenOut = renderable.exchangeResource(nullptr);
+    EXPECT_EQ(takenOut.get(), firstAddress);
+    EXPECT_FALSE(renderable.hasResource());
+    EXPECT_NE(renderable.getUniqueID(), beforeTakingOut);
+}

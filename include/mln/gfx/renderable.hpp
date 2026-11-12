@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <utility>
 
 namespace mln {
 namespace gfx {
@@ -42,7 +43,7 @@ public:
     /// address it is never reused, so a cache that outlives the renderable (a drawable remembering
     /// the last render pass it drew in, while the drape target it drew into is freed) can tell a new
     /// renderable from a freed one without holding or dereferencing it. The resource is private and
-    /// only setResource changes it, so every new (or dropped) resource is a new id.
+    /// only setResource and exchangeResource change it, so every new (or dropped) resource is a new id.
     uint64_t getUniqueID() const noexcept { return uniqueID; }
 
     template <typename T>
@@ -57,6 +58,16 @@ public:
     void setResource(std::unique_ptr<RenderableResource> resource_) {
         resource = std::move(resource_);
         uniqueID = nextUniqueID();
+    }
+
+    /// Puts `resource_` (which may be null) in place of the resource, gives the renderable a new
+    /// unique id as setResource does, and hands back the resource it replaced, which may be null.
+    /// For a renderable that keeps several resources and draws into one at a time (a ring of
+    /// texture slots), so the others stay built while it draws elsewhere.
+    [[nodiscard]] std::unique_ptr<RenderableResource> exchangeResource(std::unique_ptr<RenderableResource> resource_) {
+        auto previous = std::exchange(resource, std::move(resource_));
+        uniqueID = nextUniqueID();
+        return previous;
     }
 
     virtual void wait() {}
