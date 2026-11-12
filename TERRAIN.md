@@ -349,7 +349,9 @@ in a pitched view. All three fail without the fog (differences 0.051, 0.077 and 
 
 - **Symbols and circles are not fogged**, as in gl-js 6.16.0, which fogs only the terrain. The
   outdoor-styles plan asked for symbols and circles to fade at their anchor; that would be an
-  invention, so native follows gl-js (`terrain/fog-symbols`).
+  invention, so native follows gl-js (`terrain/fog-symbols`). Lifting labels onto the terrain
+  ("Labels on the terrain") puts more of them in the fogged distance, so crisp labels over fogged
+  ground are expected there, not a defect.
 - **Terrain past gl-js's far plane.** Native's projection reaches further than gl-js's far plane, so
   at high pitch native draws terrain where gl-js shows the sky's gradient, just below the horizon
   line. There the fog depth is above 1, and the shader holds the fog factor at 1 (fully fogged, in
@@ -1611,6 +1613,27 @@ terrain during placement sees the previous frame's state - the same first-frame 
 - Runtime styling API for terrain (`setTerrain`) on iOS/macOS (Android has it)
 
 ## Testing
+
+### Known flaky and nondeterministic tests
+
+The terrain CI script (`scripts/*-terrain-ci.sh`) has no flaky list: its gtest stage allows no
+failure, and its known list in `metrics/ignores/` holds known render failures under `terrain/` only.
+A failure of one of these tests needs a rerun before it is called a regression:
+
+- **`TerrainSparseDEM.AStillDrawsHighGroundWithTheCenterOnItOn204`** (in the terrain gtest filter)
+  has segfaulted intermittently, with a stack in the test's own `FrameObserver::onTileAction`. That
+  stack is probably a symptom, not the cause: an AddressSanitizer build of the `TerrainSparseDEM.*`
+  tests (2026-11-12, macOS Metal, `-DMLN_WITH_SANITIZER=address`) finds a **heap-use-after-free in
+  the renderer**, in `TerrainSparseDEM.ZoomingInPastTheDataKeepsTheShapeOn204` (3 of 5 runs). A
+  drape texture that `TexturePool::updateRenderTargets` frees (a spare that no joining tile took, when
+  `spare` goes out of scope) is still read by `mtl::Drawable::draw` under
+  `RenderTarget::renderDrapedLayerGroups` later in the same `Renderer::Impl::render`. So something still points at a leaving
+  drape target's texture after the lending check found nothing holding it. This is an **open
+  defect**, not harness flakiness. The still test itself passed 25 of 25 runs under ASan and 40 of
+  40 without it, and the zoom test 15 of 15 without ASan, so a plain run rarely shows it.
+- **`render-tests/text-field/formatted-line`** and **`render-tests/text-font/{burmese,devanagari,khmer}`**
+  differ between runs of one binary. They are outside the terrain CI's `terrain/` filter, so they
+  only show in a full render-test run.
 
 ### Which render tests are oracles, and which measure us against ourselves
 
