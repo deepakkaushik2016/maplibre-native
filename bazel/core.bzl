@@ -159,6 +159,7 @@ MLN_CORE_SOURCE = [
     "src/mln/gfx/offscreen_texture.hpp",
     "src/mln/gfx/polyline_generator.cpp",
     "src/mln/gfx/render_pass.hpp",
+    "src/mln/gfx/renderable.cpp",
     "src/mln/gfx/renderer_backend.cpp",
     "src/mln/gfx/rendering_stats.cpp",
     "src/mln/gfx/shader_registry.cpp",

@@ -154,7 +154,7 @@ public:
     }
     ~TwoSlotBackend() override {
         gfx::BackendScope guard{*this, gfx::BackendScope::ScopeType::Implicit};
-        resource.reset();
+        setResource(nullptr);
         getThreadPool().runRenderJobs(true /* closeQueue */);
         context.reset();
     }

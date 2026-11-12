@@ -66,7 +66,7 @@ HeadlessBackend::HeadlessBackend(const Size size_,
 HeadlessBackend::~HeadlessBackend() {
     gfx::BackendScope guard{*this, gfx::BackendScope::ScopeType::Implicit};
     // Explicitly reset the renderable resource
-    resource.reset();
+    setResource(nullptr);
     // Explicitly reset the context
     context.reset();
 }
@@ -85,9 +85,9 @@ gfx::Renderable& HeadlessBackend::getDefaultRenderable() {
 }
 
 void HeadlessBackend::ensureResource() {
-    if (!resource) {
-        resource = std::make_unique<HeadlessRenderableResource>(
-            *this, static_cast<mtl::Context&>(getContext()), getSize());
+    if (!hasResource()) {
+        setResource(
+            std::make_unique<HeadlessRenderableResource>(*this, static_cast<mtl::Context&>(getContext()), getSize()));
     }
 }
 

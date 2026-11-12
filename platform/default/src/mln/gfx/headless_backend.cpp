@@ -10,7 +10,7 @@ HeadlessBackend::HeadlessBackend(Size size_)
 
 void HeadlessBackend::setSize(Size size_) {
     setRenderableSize(size_);
-    resource.reset();
+    setResource(nullptr);
 }
 
 } // namespace gfx

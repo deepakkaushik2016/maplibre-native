@@ -57,7 +57,7 @@ HeadlessBackend::~HeadlessBackend() {
         impl->activateContext();
     }
     // Explicitly reset the renderable resource
-    resource.reset();
+    setResource(nullptr);
     // Explicitly reset the context so that it is destructed and cleaned up
     // before we destruct the impl object.
     context.reset();
@@ -96,9 +96,9 @@ void HeadlessBackend::deactivate() {
 gfx::Renderable& HeadlessBackend::getDefaultRenderable() {
     MLN_TRACE_FUNC();
 
-    if (!resource) {
-        resource = std::make_unique<HeadlessRenderableResource>(
-            *this, static_cast<gl::Context&>(getContext()), getSize());
+    if (!hasResource()) {
+        setResource(
+            std::make_unique<HeadlessRenderableResource>(*this, static_cast<gl::Context&>(getContext()), getSize()));
     }
     return *this;
 }

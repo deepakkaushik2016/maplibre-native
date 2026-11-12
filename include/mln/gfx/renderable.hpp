@@ -2,7 +2,6 @@
 
 #include <mln/util/size.hpp>
 
-#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -42,7 +41,8 @@ public:
     /// Identifies this renderable, with its current resource, for the life of the process. Unlike an
     /// address it is never reused, so a cache that outlives the renderable (a drawable remembering
     /// the last render pass it drew in, while the drape target it drew into is freed) can tell a new
-    /// renderable from a freed one without holding or dereferencing it. A new resource is a new id.
+    /// renderable from a freed one without holding or dereferencing it. The resource is private and
+    /// only setResource changes it, so every new (or dropped) resource is a new id.
     uint64_t getUniqueID() const noexcept { return uniqueID; }
 
     template <typename T>
@@ -53,6 +53,7 @@ public:
 
     bool hasResource() const { return resource != nullptr; }
 
+    /// Replaces (or, with nullptr, drops) the resource, and gives the renderable a new unique id.
     void setResource(std::unique_ptr<RenderableResource> resource_) {
         resource = std::move(resource_);
         uniqueID = nextUniqueID();
@@ -60,21 +61,17 @@ public:
 
     virtual void wait() {}
 
-    bool operator!=(const Renderable& other) const { return resource.get() != other.resource.get(); }
-
-private:
-    static uint64_t nextUniqueID() noexcept {
-        static std::atomic<uint64_t> next{1};
-        return next.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    Size size;
-    uint64_t uniqueID = nextUniqueID();
-
 protected:
     void setRenderableSize(const Size& size_) noexcept { size = size_; }
 
+private:
+    /// Out of line, so the process has one counter even where symbols are hidden across shared
+    /// libraries.
+    static uint64_t nextUniqueID() noexcept;
+
+    Size size;
     std::unique_ptr<RenderableResource> resource;
+    uint64_t uniqueID = nextUniqueID();
 };
 
 } // namespace gfx

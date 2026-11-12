@@ -43,7 +43,7 @@ HeadlessBackend::~HeadlessBackend() {
     gfx::BackendScope guard{*this, gfx::BackendScope::ScopeType::Implicit};
 
     // Explicitly reset the renderable resource
-    resource.reset();
+    setResource(nullptr);
     // Explicitly reset the context so that it is destructed and cleaned up
     // before we destruct the impl object.
     getThreadPool().runRenderJobs(true /* closeQueue */);
@@ -66,18 +66,18 @@ void HeadlessBackend::deactivate() {
 }
 
 gfx::Renderable& HeadlessBackend::getDefaultRenderable() {
-    if (!resource) {
-        resource = std::make_unique<HeadlessRenderableResource>(*this);
+    if (!hasResource()) {
+        setResource(std::make_unique<HeadlessRenderableResource>(*this));
     }
     return *this;
 }
 
 PremultipliedImage HeadlessBackend::readStillImage() {
-    if (!resource) {
-        resource = std::make_unique<HeadlessRenderableResource>(*this);
+    if (!hasResource()) {
+        setResource(std::make_unique<HeadlessRenderableResource>(*this));
     }
 
-    auto& resourceImpl = static_cast<HeadlessRenderableResource&>(*resource);
+    auto& resourceImpl = getResource<HeadlessRenderableResource>();
 
     auto image = resourceImpl.readImage();
     assert(image);

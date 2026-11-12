@@ -17,11 +17,6 @@ public:
     std::optional<float> clearDepth;
     std::optional<int32_t> clearStencil;
 
-    bool operator!=(const RenderPassDescriptor& other) const {
-        return other.clearColor != clearColor || other.clearDepth != clearDepth || other.clearStencil != clearStencil ||
-               other.renderable != renderable;
-    }
-
     /// What may be kept of a render pass after it ends: the renderable's identity rather than a
     /// reference to it, which dangles once the renderable is freed (a drape target's texture is
     /// freed while the drawables that drew into it live on).
