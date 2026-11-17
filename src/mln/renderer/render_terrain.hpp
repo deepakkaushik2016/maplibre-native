@@ -164,7 +164,11 @@ public:
     /// Tiles a source may cover per tile of the mesh-tile cap (TileParameters::coverTileLimit).
     static constexpr size_t sourceTilesPerMeshTile = 4;
 
-    /// Resolve the DEM render source from the orchestrator if not yet bound.
+    /// Resolve the DEM render source from the orchestrator, on every call: the
+    /// orchestrator may have replaced it since, under the same terrain (an update that
+    /// drops the source, or moves it among the others, destroys it; clearData drops
+    /// every source). When it resolves to another source, or to none, everything
+    /// derived from the old one is dropped (releaseDEMSource).
     /// Renderer::Impl::render calls this before building the frame's drape-target
     /// pool from computeMeshCover: the source is otherwise first bound inside
     /// update(), which runs after the pool is built, so the FIRST frame after a
@@ -173,6 +177,14 @@ public:
     /// rendering hid this (frame 2 recovers); single-frame still renders - the
     /// render tests - stayed blank.
     void prepareSource(class RenderOrchestrator& orchestrator);
+
+    /// Forget the DEM source and drop everything derived from it: the DEM textures,
+    /// the stitched DEMs and the tile drawables bound to them. The orchestrator calls
+    /// it before it destroys the source, so that no lookup between then and the next
+    /// prepareSource (a query, or a frame that never reaches it) reads a freed
+    /// source, and so that a new source allocated at the old address is still seen
+    /// as new.
+    void releaseDEMSource();
 
     /// Cache the mesh cover Renderer::Impl computed for this frame, so update()
     /// meshes exactly the tile set the drape-target pool was built from.
@@ -645,8 +657,11 @@ private:
     // terrain render distance while Balanced/Performance trade it for frame time. See
     // computeMeshCover.
 
-    // Cached DEM source
+    // The DEM source, as prepareSource last resolved it; null once releaseDEMSource has
+    // run. Owned by the orchestrator, which calls releaseDEMSource before it destroys it.
     RenderSource* demSource = nullptr;
+    // Drops the state derived from demSource; see releaseDEMSource.
+    void dropDEMState();
     /// Mesh cover for the current frame, set by Renderer::Impl before the drape
     /// target pool is built; consumed (and cleared) by update()
     std::optional<std::set<UnwrappedTileID>> frameMeshCover;

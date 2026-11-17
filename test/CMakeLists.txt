@@ -37,6 +37,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_query.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_screen_query.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_replace.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/renderer/terrain_dem_source_lifetime.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_symbol_query.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_drape_resolution.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/terrain_occlusion.test.cpp

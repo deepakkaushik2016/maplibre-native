@@ -7,7 +7,9 @@
 #include <mln/style/observer.hpp>
 #include <mln/style/layers/line_layer_impl.hpp>
 #include <mln/style/source_impl.hpp>
+#include <mln/style/sources/raster_dem_source.hpp>
 #include <mln/style/sources/vector_source.hpp>
+#include <mln/style/terrain.hpp>
 #include <mln/style/layer.hpp>
 #include <mln/style/layers/line_layer.hpp>
 #include <mln/style/rapidjson_conversion.hpp>
@@ -333,6 +335,43 @@ TEST(Style, RemoveSourceInUse) {
 #endif
 
     EXPECT_EQ(log.count(logMessage), 1u);
+}
+
+TEST(Style, RemoveSourceInUseByTerrain) {
+    util::RunLoop loop;
+
+    FixtureLog log;
+
+    auto fileSource = std::make_shared<StubFileSource>();
+    Style::Impl style{fileSource, 1.0, {Scheduler::GetBackground(), {}}};
+
+    style.loadJSON(util::read_file("test/fixtures/resources/style-unused-sources.json"));
+    style.addSource(std::make_unique<RasterDEMSource>("dem", "mptiler://tiles/terrain", 256));
+    style.setTerrain(std::make_unique<Terrain>("dem", 1.5f));
+
+    // No layer uses the source, but the terrain does: as in maplibre-gl-js, it stays
+    ASSERT_EQ(nullptr, style.removeSource("dem"));
+    ASSERT_NE(nullptr, style.getSource("dem"));
+
+    const FixtureLogObserver::LogMessage logMessage{
+        EventSeverity::Warning,
+        Event::General,
+        int64_t(-1),
+        "Source 'dem' is in use, cannot remove",
+    };
+
+#if defined(WIN32)
+    Sleep(1000);
+#endif
+
+    EXPECT_EQ(log.count(logMessage), 1u);
+
+    // Without the terrain, it goes
+    style.setTerrain(nullptr);
+    auto removed = style.removeSource("dem");
+    ASSERT_NE(nullptr, removed);
+    EXPECT_EQ("dem", removed->getID());
+    EXPECT_EQ(nullptr, style.getSource("dem"));
 }
 
 TEST(Style, LoadJSONCancelsPendingLoadURL) {

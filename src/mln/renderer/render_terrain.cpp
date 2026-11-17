@@ -613,14 +613,60 @@ void RenderTerrain::dropDrawablesOutside(const std::set<UnwrappedTileID>& cover)
 }
 
 void RenderTerrain::prepareSource(RenderOrchestrator& orchestrator) {
-    // Find the DEM source if we haven't already (see header: must happen before
-    // the frame's drape-target pool is built, or the first frame renders no terrain)
-    if (!demSource && !impl->sourceID.empty()) {
-        demSource = orchestrator.getRenderSource(impl->sourceID);
-        if (!demSource) {
-            Log::Warning(Event::Render, "Terrain could not find DEM source: " + impl->sourceID);
-        }
+    // Resolve the DEM source on every call, not only until it is first found (see header: it
+    // must also happen before the frame's drape-target pool is built, or the first frame renders
+    // no terrain). The orchestrator keeps this RenderTerrain across style updates that destroy
+    // and recreate its source, so a pointer resolved once can outlive the source it points to.
+    // One map lookup a frame.
+    RenderSource* const resolved = impl->sourceID.empty() ? nullptr : orchestrator.getRenderSource(impl->sourceID);
+    if (resolved != demSource) {
+        releaseDEMSource();
+        demSource = resolved;
     }
+    if (!demSource && !impl->sourceID.empty()) {
+        Log::Warning(Event::Render, "Terrain could not find DEM source: " + impl->sourceID);
+    }
+}
+
+void RenderTerrain::releaseDEMSource() {
+    if (!demSource) {
+        return;
+    }
+    demSource = nullptr;
+    dropDEMState();
+}
+
+void RenderTerrain::dropDEMState() {
+    // The drawables sample DEM textures of the old source's tiles, and tilesWithDrawables and
+    // settledWithoutDEM would keep them (a tier-2 binding is never rebuilt; a tile settled
+    // without a DEM is skipped while the source's noDEMGeneration, which a new source restarts,
+    // matches). update() rebuilds every mesh tile from the new source, on the placeholder until
+    // its DEM tiles load.
+    if (layerGroup) {
+        layerGroup->clearDrawables();
+    }
+    if (depthLayerGroup) {
+        depthLayerGroup->clearDrawables();
+    }
+    depthDirty = true;
+    tilesWithDrawables.clear();
+    drawableDemCoords.clear();
+    settledWithoutDEM.clear();
+    demTextures.clear();
+    stitchedDEMs.clear();
+    // The DEM cover is empty now; its generation moves, so whatever was resolved against the old
+    // cover is resolved again.
+    demCoverCount = 0;
+    demCoverHash = 0;
+    ++demCoverGeneration;
+#if MLN_RENDER_BACKEND_OPENGL
+    drawableDemTile.clear();
+    demArrayLayer.clear();
+    demArrayFreeLayers.clear();
+    demArrayNextLayer = 0;
+    depthInstances.clear();
+    depthInstanceSignature = 0;
+#endif
 }
 
 void RenderTerrain::update(RenderOrchestrator& orchestrator,

@@ -275,12 +275,15 @@ void Style::Impl::addSource(std::unique_ptr<Source> source) {
 }
 
 std::unique_ptr<Source> Style::Impl::removeSource(const std::string& id) {
-    // Check if source is in use
+    // Check if source is in use, by a layer or by the terrain. As in maplibre-gl-js, the terrain
+    // holds on to its DEM source: removed, it would be left with none.
+    bool inUse = terrain && terrain->getSource() == id;
     for (const auto& layer : layers) {
-        if (layer->getSourceID() == id) {
-            Log::Warning(Event::General, "Source '" + id + "' is in use, cannot remove");
-            return nullptr;
-        }
+        inUse = inUse || layer->getSourceID() == id;
+    }
+    if (inUse) {
+        Log::Warning(Event::General, "Source '" + id + "' is in use, cannot remove");
+        return nullptr;
     }
 
     std::unique_ptr<Source> source = sources.remove(id);

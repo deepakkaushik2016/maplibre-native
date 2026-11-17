@@ -316,11 +316,10 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     // drew last frame: those depend on the cover, so the cover would feed back into itself
     // and, with a still camera, alternate between two tile sets for good. This way it
     // changes only when DEM data arrives, and the cover settles.
+    //
+    // The provider itself is made below, once the sources have been diffed: made here, it held
+    // a DEM source that the diff could destroy before the source update loop reads it.
     const bool terrainEnabled = renderTerrain && renderTerrain->isEnabled();
-    const DEMElevationProvider elevationProvider{
-        terrainEnabled ? getRenderSource(renderTerrain->getSourceID()) : nullptr,
-        terrainEnabled ? renderTerrain->getExaggeration() : 1.0};
-    tileParameters.elevationProvider = terrainEnabled ? &elevationProvider : nullptr;
     // With the view pitched the finest tiles belong under the camera, where the screen is densest,
     // not at the map centre far ahead of it: the point the mesh-tile cap measures from. Every
     // source takes it, so they ask for what the mesh covers.
@@ -480,8 +479,13 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     const SourceDifference sourceDiff = diffSources(sourceImpls, updateParameters->sources);
     sourceImpls = updateParameters->sources;
 
-    // Remove render layers for removed sources.
+    // Remove render layers for removed sources. The terrain, which may stay, lets go of its DEM
+    // source first: the source may be gone, or be made again below (the diff reads a move among
+    // the other sources as a removal and an addition).
     for (const auto& entry : sourceDiff.removed) {
+        if (renderTerrain && entry.first == renderTerrain->getSourceID()) {
+            renderTerrain->releaseDEMSource();
+        }
         renderSources.erase(entry.first);
     }
 
@@ -496,6 +500,12 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     }
     transformState = updateParameters->transformState;
     const bool tiltedView = transformState.getPitch() != 0.0f;
+
+    // The terrain-aware cover's elevation (see above), from the DEM source as it is after the diff.
+    const DEMElevationProvider elevationProvider{
+        terrainEnabled ? getRenderSource(renderTerrain->getSourceID()) : nullptr,
+        terrainEnabled ? renderTerrain->getExaggeration() : 1.0};
+    tileParameters.elevationProvider = terrainEnabled ? &elevationProvider : nullptr;
 
     // Create parameters for the render tree.
     auto renderTreeParameters = std::make_unique<RenderTreeParameters>(updateParameters->transformState,
@@ -1231,6 +1241,10 @@ void RenderOrchestrator::clearData() {
 
     debugLayerGroups.clear();
 
+    // The terrain outlives this (the style still has it), but not the sources.
+    if (renderTerrain) {
+        renderTerrain->releaseDEMSource();
+    }
     renderSources.clear();
     renderLayers.clear();
 
